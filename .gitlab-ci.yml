@@ -26,7 +26,11 @@ workflow:
 
 validate:
   stage: validate
-  image: koalaman/shellcheck:stable
+  # The alpine variant ships a shell (the scratch shellcheck image sets shellcheck
+  # as its entrypoint, which collides with GitLab's script runner).
+  image:
+    name: koalaman/shellcheck-alpine:stable
+    entrypoint: [""]
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
