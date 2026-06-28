@@ -37,25 +37,27 @@ validate:
     - shellcheck build/*.sh
 
 # One job per licence variant; the FFmpeg version comes from the tag (strip the
-# build-revision suffix, e.g. n8.1.2-1 -> n8.1.2).
+# build-revision suffix, e.g. n8.1.2-1 -> n8.1.2). The job runs *in* the wasi-sdk
+# image and invokes the build scripts directly — same as build/Dockerfile, but no
+# Docker-in-Docker (so it runs on an ordinary container runner).
 .build:
   stage: build
-  image: docker:27
-  services:
-    - docker:27-dind
-  tags: [saas-linux-large-amd64]
+  image: ghcr.io/webassembly/wasi-sdk:wasi-sdk-30
+  tags: [saas-linux-medium-amd64]
   rules:
     # Only FFmpeg-version tags (e.g. n8.1.2-1) build artifacts; repo-meta tags
     # like 0.1.0 do not trigger an FFmpeg build.
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
   timeout: 2h
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends git make pkg-config gzip ca-certificates && rm -rf /var/lib/apt/lists/*
   script:
-    - FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
+    - export FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
     - echo "Building ${VARIANT} for FFmpeg ${FFMPEG_VERSION}"
-    - docker build -f build/Dockerfile
-        --build-arg FFMPEG_VERSION="$FFMPEG_VERSION"
-        --build-arg VARIANT="$VARIANT"
-        --target artifact -o dist .
+    - sh build/deps.sh
+    - sh build/libav.sh
+    - mkdir -p dist
+    - OUT="dist/ffmpeg-wasi-${VARIANT}.wasm" sh build/driver.sh
     - cp "dist/ffmpeg-wasi-${VARIANT}.wasm" "ffmpeg-wasi-${VARIANT}.wasm"
     - gzip -k -9 "ffmpeg-wasi-${VARIANT}.wasm"
   artifacts:
