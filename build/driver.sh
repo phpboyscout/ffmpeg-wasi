@@ -2,7 +2,8 @@
 # build/driver.sh — compile + link the libav-direct engine to a .wasm module.
 #   OUT=/dist/ffmpeg-wasi-lgpl.wasm sh build/driver.sh
 set -eu
-HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+HERE="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck disable=SC1091  # sourced at build time
 . "$HERE/toolchain.sh"
 
 : "${FFMPEG_SRC:=/ffmpeg}"

@@ -2,7 +2,8 @@
 # build/libav.sh — configure + build FFmpeg's libav* libraries for wasm32-wasi.
 #   FFMPEG_VERSION=n8.1.2 VARIANT=lgpl sh build/libav.sh
 set -eu
-HERE_LIBAV="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+HERE_LIBAV="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck disable=SC1091  # sourced at build time
 . "$HERE_LIBAV/toolchain.sh"
 
 : "${FFMPEG_VERSION:?set FFMPEG_VERSION, e.g. n8.1.2}"
@@ -29,6 +30,7 @@ ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,aac,mp3,opus,vorbis,flac,pcm_s1
 # Use clang as the linker (--ld=clang), not raw wasm-ld: clang understands
 # --target/--sysroot and links a WASI command (crt1/_start) automatically, so
 # configure's link probe just works. (The engine link in driver.sh is also clang.)
+# shellcheck disable=SC2086  # $ENABLE/$GPL_FLAGS are deliberately split into args
 LDFLAGS="--target=wasm32-wasip1 --sysroot=$WASI_SYSROOT $SJLJ -L$PREFIX/lib $WASI_EMULATED_LIBS" \
 ./configure \
   --cc="$CC" --cxx="$CXX" --ld="$CC" --nm="$NM" --ar="$AR" --ranlib="$RANLIB" --strip="$STRIP" \

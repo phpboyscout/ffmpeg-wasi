@@ -16,6 +16,7 @@ stages:
   - validate
   - build
   - release
+  - pages
 
 workflow:
   rules:
@@ -40,7 +41,9 @@ validate:
     - docker:27-dind
   tags: [saas-linux-large-amd64]
   rules:
-    - if: '$CI_COMMIT_TAG'
+    # Only FFmpeg-version tags (e.g. n8.1.2-1) build artifacts; repo-meta tags
+    # like 0.1.0 do not trigger an FFmpeg build.
+    - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
   timeout: 2h
   script:
     - FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
@@ -70,16 +73,16 @@ release:
   stage: release
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   rules:
-    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
   needs:
     - build:lgpl
     - build:gpl
   script:
-    - FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
-    - sha256sum ffmpeg-wasi-*.wasm* | tee checksums.txt
-    # Provenance: what went into these artifacts.
     - |
-      cat > provenance.json <<EOF
+      FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
+      sha256sum ffmpeg-wasi-*.wasm* | tee checksums.txt
+      # Provenance: exactly what went into these artifacts.
+      cat > provenance.json <<PROV
       {
         "ffmpeg_version": "${FFMPEG_VERSION}",
         "build_tag": "${CI_COMMIT_TAG}",
@@ -90,12 +93,9 @@ release:
         },
         "tooling_license": "MIT"
       }
-      EOF
-    # Upload the artifacts + checksums + provenance to the generic package
-    # registry, then attach them as release asset links (filled in as the
-    # pipeline is hardened).
-    - echo "TODO: upload assets to the package registry and link below"
-    - |
+      PROV
+      # TODO: upload the artifacts/checksums/provenance to the package registry
+      # and attach them as release asset links as the pipeline is hardened.
       release-cli create \
         --name "ffmpeg-wasi ${CI_COMMIT_TAG}" \
         --tag-name "${CI_COMMIT_TAG}" \
