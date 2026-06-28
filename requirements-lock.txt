@@ -1,0 +1,37 @@
+# Lock file for the Python documentation toolchain (zensical + transitives).
+#
+# Install with pipx:
+#   pipx install "zensical==0.0.33" \
+#     --pip-args="--require-hashes -r requirements-lock.txt"
+#
+# Regenerating this file (required when bumping zensical OR when changing
+# the CI Python minor version — PyYAML ships per-platform/per-python
+# wheels with distinct hashes):
+#
+#   python -m venv /tmp/venv
+#   /tmp/venv/bin/pip install --dry-run --report /tmp/report.json \
+#     zensical==<version>
+#   /tmp/venv/bin/python -c "
+#   import json
+#   r = json.load(open('/tmp/report.json'))
+#   for d in r['install']:
+#       name = d['metadata']['name']
+#       ver = d['metadata']['version']
+#       h = d['download_info']['archive_info']['hashes']['sha256']
+#       print(f'{name}=={ver} \\\\\\n    --hash=sha256:{h}')
+#   " | sort
+
+click==8.3.3 \
+    --hash=sha256:a2bf429bb3033c89fa4936ffb35d5cb471e3719e1f3c8a7c3fff0b8314305613
+deepmerge==2.0 \
+    --hash=sha256:6de9ce507115cff0bed95ff0ce9ecc31088ef50cbdf09bc90a09349a318b3d00
+Markdown==3.10.2 \
+    --hash=sha256:e91464b71ae3ee7afd3017d9f358ef0baf158fd9a298db92f1d4761133824c36
+Pygments==2.20.0 \
+    --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
+pymdown-extensions==10.21.3 \
+    --hash=sha256:d7a5d08014fc571e80ca21dd6f854e31f94c489800350564d55d15b3c41e76b6
+PyYAML==6.0.3 \
+    --hash=sha256:c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5
+zensical==0.0.33 \
+    --hash=sha256:7dff0f4afda7b8586bc4ab2a5684bce5b282232dd4e0cad3be4c73fedd264425

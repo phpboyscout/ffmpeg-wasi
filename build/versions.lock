@@ -1,0 +1,8 @@
+# Pinned inputs for a reproducible build. Bumping FFMPEG_VERSION tracks upstream
+# (the project's release tag is <FFMPEG_VERSION>-<build rev>).
+FFMPEG_VERSION=n8.1.2
+WASI_SDK_IMAGE=ghcr.io/webassembly/wasi-sdk:wasi-sdk-30
+# external dependency pins (added in build/deps.sh as variants grow):
+# X264_COMMIT=...        # GPL variant
+# OPENH264_VERSION=...   # LGPL H.264 encode
+# ZLIB_VERSION=...

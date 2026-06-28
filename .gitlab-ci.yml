@@ -1,0 +1,102 @@
+# ffmpeg-wasi — custom release pipeline.
+#
+#   merge_request → validate (shellcheck the build scripts; fast)
+#   tag nX.Y.Z-N  → build both variants → checksum + provenance → GitLab release
+#
+# Releases are cut by tagging `<FFMPEG_VERSION>-<build-rev>` (e.g. n8.1.2-1); the
+# FFmpeg version is derived from the tag. The build is heavy (compiles FFmpeg);
+# it runs only on tags and needs a Docker-capable runner with adequate
+# CPU/disk/timeout.
+
+include:
+  # Docs site → GitLab Pages (zensical), consistent with the other phpboyscout projects.
+  - component: gitlab.com/phpboyscout/cicd/zensical-pages@v0.18.1
+
+stages:
+  - validate
+  - build
+  - release
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+validate:
+  stage: validate
+  image: koalaman/shellcheck:stable
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - shellcheck build/*.sh
+
+# One job per licence variant; the FFmpeg version comes from the tag (strip the
+# build-revision suffix, e.g. n8.1.2-1 -> n8.1.2).
+.build:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  tags: [saas-linux-large-amd64]
+  rules:
+    - if: '$CI_COMMIT_TAG'
+  timeout: 2h
+  script:
+    - FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
+    - echo "Building ${VARIANT} for FFmpeg ${FFMPEG_VERSION}"
+    - docker build -f build/Dockerfile
+        --build-arg FFMPEG_VERSION="$FFMPEG_VERSION"
+        --build-arg VARIANT="$VARIANT"
+        --target artifact -o dist .
+    - cp "dist/ffmpeg-wasi-${VARIANT}.wasm" "ffmpeg-wasi-${VARIANT}.wasm"
+    - gzip -k -9 "ffmpeg-wasi-${VARIANT}.wasm"
+  artifacts:
+    paths:
+      - "ffmpeg-wasi-*.wasm*"
+    expire_in: 1 week
+
+build:lgpl:
+  extends: .build
+  variables:
+    VARIANT: lgpl
+
+build:gpl:
+  extends: .build
+  variables:
+    VARIANT: gpl
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: '$CI_COMMIT_TAG'
+  needs:
+    - build:lgpl
+    - build:gpl
+  script:
+    - FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
+    - sha256sum ffmpeg-wasi-*.wasm* | tee checksums.txt
+    # Provenance: what went into these artifacts.
+    - |
+      cat > provenance.json <<EOF
+      {
+        "ffmpeg_version": "${FFMPEG_VERSION}",
+        "build_tag": "${CI_COMMIT_TAG}",
+        "commit": "${CI_COMMIT_SHA}",
+        "variants": {
+          "lgpl": { "file": "ffmpeg-wasi-lgpl.wasm", "license": "LGPL-2.1-or-later" },
+          "gpl":  { "file": "ffmpeg-wasi-gpl.wasm",  "license": "GPL-2.0-or-later" }
+        },
+        "tooling_license": "MIT"
+      }
+      EOF
+    # Upload the artifacts + checksums + provenance to the generic package
+    # registry, then attach them as release asset links (filled in as the
+    # pipeline is hardened).
+    - echo "TODO: upload assets to the package registry and link below"
+    - |
+      release-cli create \
+        --name "ffmpeg-wasi ${CI_COMMIT_TAG}" \
+        --tag-name "${CI_COMMIT_TAG}" \
+        --description "FFmpeg ${FFMPEG_VERSION} for WASI — LGPL (default) + GPL (libx264) variants. Verify against checksums.txt; see provenance.json."

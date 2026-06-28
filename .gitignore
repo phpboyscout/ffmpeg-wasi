@@ -1,0 +1,14 @@
+# Build output
+/dist/
+*.wasm
+*.wasm.gz
+/build/.cache/
+
+# docs site
+/site/
+
+# editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

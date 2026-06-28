@@ -1,0 +1,50 @@
+[project]
+site_name = "ffmpeg-wasi"
+site_description = "Current FFmpeg as a sandboxed WASI module — libav-direct, pure-Go-runnable, CGO-free."
+site_author = "Matt Cockayne"
+site_url = "https://ffmpeg-wasi.phpboyscout.uk"
+repo_url = "https://gitlab.com/phpboyscout/ffmpeg-wasi"
+repo_name = "ffmpeg-wasi"
+copyright = "Copyright &copy; 2026 Matt Cockayne"
+
+[project.theme]
+language = "en"
+features = [
+    "content.code.annotate",
+    "content.code.copy",
+    "content.tabs.link",
+    "navigation.footer",
+    "navigation.indexes",
+    "navigation.instant",
+    "navigation.sections",
+    "navigation.tabs",
+    "navigation.tabs.sticky",
+    "navigation.top",
+    "navigation.tracking",
+    "search.highlight",
+    "toc.follow",
+]
+
+[project.theme.font]
+text = "Inter"
+code = "Jetbrains Mono"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/gitlab"
+link = "https://gitlab.com/phpboyscout/ffmpeg-wasi"
+
+[[project.extra.social]]
+icon = "fontawesome/solid/globe"
+link = "https://phpboyscout.uk"
