@@ -4,11 +4,12 @@ FROM ghcr.io/webassembly/wasi-sdk:wasi-sdk-30 AS build
 ARG FFMPEG_VERSION=n8.1.2
 ARG VARIANT=lgpl
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git make ca-certificates && rm -rf /var/lib/apt/lists/*
+        git make pkg-config ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
-# Copy only what the libav* build needs and build it first, so iterating on the
-# engine (driver.sh / src/) reuses the cached FFmpeg build instead of rebuilding.
-COPY build/toolchain.sh build/libav.sh build/wasi-compat.h /work/build/
+# Build external codec dependencies (per variant) and libav* first — cached
+# across engine edits, so iterating on the driver reuses both.
+COPY build/toolchain.sh build/deps.sh build/libav.sh build/wasi-compat.h /work/build/
+RUN VARIANT="$VARIANT" sh build/deps.sh
 RUN FFMPEG_VERSION="$FFMPEG_VERSION" VARIANT="$VARIANT" sh build/libav.sh
 COPY build/ /work/build/
 COPY src/ /work/src/

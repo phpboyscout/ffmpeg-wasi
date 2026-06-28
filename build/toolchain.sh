@@ -33,4 +33,8 @@ export CXXFLAGS="$CFLAGS"
 
 # wasi-libc ships these as opt-in emulated shims FFmpeg's portable paths expect.
 export WASI_EMULATED_LIBS="-lwasi-emulated-mman -lwasi-emulated-process-clocks -lwasi-emulated-signal"
+
+# pkg-config resolves only our cross-built dependencies in $PREFIX (LIBDIR pins it
+# there so it never picks up host libraries).
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"

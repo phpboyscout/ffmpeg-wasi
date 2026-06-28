@@ -14,9 +14,10 @@ git clone https://github.com/FFmpeg/FFmpeg --depth=1 --branch "$FFMPEG_VERSION" 
 cd "$FFMPEG_SRC"
 
 # The only GPL trigger in our set is libx264 (the GPL variant). The LGPL variant
-# enables no GPL components, so libav* stays LGPL.
+# enables no GPL components, so libav* stays LGPL. With --disable-everything the
+# encoder must be enabled explicitly, not just the library.
 GPL_FLAGS=""
-[ "$VARIANT" = "gpl" ] && GPL_FLAGS="--enable-gpl --enable-libx264"
+[ "$VARIANT" = "gpl" ] && GPL_FLAGS="--enable-gpl --enable-libx264 --enable-encoder=libx264"
 
 # A general, dep-free native baseline (Phase A). External deps (zlib, openh264,
 # x264, …) extend this in build/deps.sh.

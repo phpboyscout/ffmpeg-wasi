@@ -2,7 +2,7 @@
 # (the project's release tag is <FFMPEG_VERSION>-<build rev>).
 FFMPEG_VERSION=n8.1.2
 WASI_SDK_IMAGE=ghcr.io/webassembly/wasi-sdk:wasi-sdk-30
-# external dependency pins (added in build/deps.sh as variants grow):
-# X264_COMMIT=...        # GPL variant
-# OPENH264_VERSION=...   # LGPL H.264 encode
-# ZLIB_VERSION=...
+# external codec dependencies (build/deps.sh):
+X264_BRANCH=stable       # GPL variant H.264 encode (x264 has no release tags; pin a commit for releases)
+# OPENH264_VERSION=...   # LGPL variant H.264 encode (planned)
+# ZLIB_VERSION=...       # PNG/zlib (planned)

@@ -36,6 +36,18 @@ static int report(void) {
     printf("ffmpeg: %s\n", av_version_info());
     printf("libavcodec %u  libavformat %u  libavfilter %u\n",
            avcodec_version(), avformat_version(), avfilter_version());
+
+    printf("encoders:\n");
+    const char *enc[] = {"libx264", "mjpeg", "aac", "flac", "pcm_s16le", NULL};
+    for (int i = 0; enc[i]; i++) {
+        printf("  %-10s %s\n", enc[i], avcodec_find_encoder_by_name(enc[i]) ? "yes" : "no");
+    }
+
+    printf("decoders:\n");
+    const char *dec[] = {"h264", "hevc", "vp9", "aac", "mp3", "opus", "flac", NULL};
+    for (int i = 0; dec[i]; i++) {
+        printf("  %-10s %s\n", dec[i], avcodec_find_decoder_by_name(dec[i]) ? "yes" : "no");
+    }
     return 0;
 }
 
