@@ -57,11 +57,15 @@ You'll see the engine's capability report — the FFmpeg version and the availab
 codecs/muxers/filters — confirming it links and runs:
 
 ```
-ffmpeg-wasi engine (Phase A)
+ffmpeg-wasi engine
 ffmpeg: n8.1.2
 libavcodec 4070502  libavformat 4066406  libavfilter 724582
-codecs:
-  h264       encode:no  decode:yes
+encoders:
+  libx264    yes        # gpl variant only (no on lgpl)
+  aac        yes
+  ...
+decoders:
+  h264       yes
   ...
 ```
 

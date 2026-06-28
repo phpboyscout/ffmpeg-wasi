@@ -50,18 +50,16 @@ go run ./tools/run dist/ffmpeg-wasi-lgpl.wasm
 You'll see the engine report itself:
 
 ```
-ffmpeg-wasi engine (Phase A)
+ffmpeg-wasi engine
 ffmpeg: n8.1.2
 libavcodec 4070502  libavformat 4066406  libavfilter 724582
-codecs:
-  h264       encode:no  decode:yes
-  aac        encode:yes decode:yes
+encoders:
+  libx264    yes        # gpl variant only (no on lgpl)
+  aac        yes
   ...
-muxers:
-  mp4        yes
-  ...
-filters:
-  scale      yes
+decoders:
+  h264       yes
+  aac        yes
   ...
 ```
 
@@ -81,9 +79,10 @@ does this for you and bridges the filesystem so you can run media jobs entirely 
 
 - Understand the design → [Why libav-direct](../explanation/why-libav-direct.md)
 - Pick a release artifact instead of building → [Choose & verify a variant](../how-to/choose-a-variant.md)
-- The operations the engine will accept → [The job-spec vocabulary](../reference/job-spec.md)
+- The operations the engine accepts → [The job-spec vocabulary](../reference/job-spec.md)
 
-!!! note "Transcoding"
-    The capability report is today's Phase-A engine. The full decode→filter→encode→mux job
-    (a real in-memory transcode) lands with the Phase-B engine; this tutorial gains that step
-    then.
+!!! tip "Transcoding works today"
+    `--report` is just the smoke test. The engine also runs `probe` and the full
+    `filter_complex` `process` op — real decode→filter→encode→mux. From Go, drive it with
+    [afmpeg](https://gitlab.com/phpboyscout/afmpeg)'s `RunJob` over an in-memory filesystem;
+    the job shapes are in [the job-spec reference](../reference/job-spec.md).

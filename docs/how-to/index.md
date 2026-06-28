@@ -14,7 +14,8 @@ Goal-oriented recipes for specific problems.
 - **[Choose & verify a variant](choose-a-variant.md)** — pick the right artifact and check its
   checksum.
 
-Coming with the Phase-B engine:
+From Go (via [afmpeg](https://gitlab.com/phpboyscout/afmpeg)):
 
-- **Consume the module from Go** with afmpeg (`WithModuleURL` + `WithSHA256`).
-- **Run a transcode** entirely in memory.
+- **Consume a released module** — `WithModuleURL(<release asset>, WithSHA256(…))`.
+- **Run a transcode** entirely in memory — build a `Command` and `RunJob`; see
+  [the job-spec vocabulary](../reference/job-spec.md) for the `process`/`probe` shapes.

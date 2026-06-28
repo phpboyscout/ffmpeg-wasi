@@ -25,5 +25,8 @@ libraries directly and going under the FFmpeg-7.0 CLI threading wall that stops 
 
 </div>
 
-> **Status: early.** The build pipeline and engine are being stood up. The design lives in
-> afmpeg [spec 0007](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
+> **Status: released.** The first release — [`n8.1.2-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n8.1.2-1) —
+> ships current FFmpeg (n8.1.2) as **lgpl** and **gpl** WASI modules. The engine **transcodes**
+> (decode → filter → encode → mux) over a virtual filesystem: `probe` and the full
+> `filter_complex` `process` op both work today. Design: afmpeg
+> [spec 0007](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).

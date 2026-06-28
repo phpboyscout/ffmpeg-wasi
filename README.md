@@ -57,11 +57,14 @@ module over an in-memory filesystem:
 
 ```go
 rt, _ := afmpeg.New(ctx, afmpeg.WithModuleURL(
-    "https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/.../ffmpeg-wasi-lgpl.wasm",
-    afmpeg.WithSHA256("…"),
+    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n8.1.2-1/ffmpeg-wasi-lgpl.wasm",
+    afmpeg.WithSHA256("0f338dac4ed1be3819aaf26f1cdeef119e817b43103f1460ca19354ea56bacc9"),
 ))
 // ... run a media job entirely in memory ...
 ```
+
+(That's the LGPL module from [`n8.1.2-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n8.1.2-1).
+Swap `lgpl` → `gpl` for libx264 H.264 encode; every release lists each asset's URL + SHA-256.)
 
 ## Licensing — clean, and yours to choose
 

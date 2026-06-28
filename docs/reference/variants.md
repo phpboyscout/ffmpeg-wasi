@@ -40,7 +40,9 @@ build's true set is authoritative in its provenance manifest.
 
 ## Release artifacts
 
-Each release (`nX.Y.Z-N`) publishes:
+Releases are published [here](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases); the
+first is [`n8.1.2-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n8.1.2-1). Each
+release (`nX.Y.Z-N`) publishes:
 
 | Asset | What |
 |---|---|
