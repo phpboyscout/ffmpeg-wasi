@@ -1,20 +1,24 @@
-// ffmpeg-wasi — the "process" operation: a single-input → single-output
-// transcode, driving libav directly (decode → filter → encode → mux).
+// ffmpeg-wasi — the "process" operation: transcode/filter/mux driving libav
+// directly, over the mounted WASI filesystem.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Matt Cockayne
 //
-// Scope (this increment): one input, one output, transcoding the video and/or
-// audio stream the output requests a codec for. Each stream runs through a small
-// filter graph (buffersrc → optional user filter → format-convert → buffersink),
-// so the user `filter` field is a simple per-stream chain (e.g. "scale=1280:-2",
-// "volume=0.5"). The full multi-pad filter_complex and multi-output muxing are
-// later increments. Paths resolve against the mounted WASI filesystem.
+// v2: the full filter_complex. N inputs feed one filter graph (parsed by
+// avfilter_graph_parse2) whose labelled outputs are each encoded and muxed into
+// a single output file. The `filter` field is the complete ffmpeg filtergraph
+// string with pad labels ([0:v], [1:a], …, [vout], [aout]); each output pad is
+// encoded with the output's video_codec (video pads) or audio_codec (audio
+// pads). With no `filter`, a passthrough graph is generated for input 0's
+// streams. (Single output file; the `map` field is accepted but every graph
+// output pad is muxed.)
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <libavutil/avutil.h>
+#include <libavutil/avstring.h>
 #include <libavutil/opt.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -24,324 +28,405 @@
 
 #include "process.h"
 
-// A single stream's transcode pipeline.
-typedef struct {
-    int active;
-    enum AVMediaType type;
-    int in_index;            // input stream index
-    AVCodecContext *dec;
-    AVCodecContext *enc;
-    AVFilterGraph  *graph;
-    AVFilterContext *src;    // buffer / abuffer
-    AVFilterContext *sink;   // buffersink / abuffersink
-    AVStream *out_stream;
-} Xcode;
+#define MAX_INPUTS 32
+#define MAX_GIN 32
+#define MAX_GOUT 8
 
-static void xcode_free(Xcode *x) {
-    if (x->graph) avfilter_graph_free(&x->graph);
-    if (x->dec) avcodec_free_context(&x->dec);
-    if (x->enc) avcodec_free_context(&x->enc);
-    x->active = 0;
+// One graph input: a decoded input stream feeding a buffersrc.
+typedef struct {
+    int in_idx;
+    int st_idx;
+    AVCodecContext *dec;
+    AVFilterContext *src;
+} GIn;
+
+// One graph output: a buffersink encoded into an output stream.
+typedef struct {
+    enum AVMediaType type;
+    AVFilterContext *sink;
+    AVCodecContext *enc;
+    AVStream *ost;
+} GOut;
+
+typedef struct {
+    AVFormatContext *in[MAX_INPUTS];
+    int n_in;
+    int eof[MAX_INPUTS];
+    AVFilterGraph *graph;
+    GIn gin[MAX_GIN];
+    int n_gin;
+    GOut gout[MAX_GOUT];
+    int n_gout;
+    AVFormatContext *ofmt;
+    AVDictionary *enc_opts;
+} Ctx;
+
+// parse_input_pad reads a "N:v" / "N:a" graph input label into an input index +
+// media type.
+static int parse_input_pad(const char *name, int *in_idx, enum AVMediaType *type) {
+    char t = 0;
+    if (sscanf(name, "%d:%c", in_idx, &t) != 2) return -1;
+    if (t == 'v' || t == 'V') *type = AVMEDIA_TYPE_VIDEO;
+    else if (t == 'a' || t == 'A') *type = AVMEDIA_TYPE_AUDIO;
+    else return -1;
+    return 0;
 }
 
-// build_graph wires buffersrc → (filter_spec) → buffersink, constraining the
-// sink to a format the encoder accepts (libavfilter auto-inserts scale/aformat).
-static int build_graph(Xcode *x, const AVCodec *enc_codec, const char *filter_spec) {
-    char args[512];
-    int ret = 0;
-    const AVFilter *bufsrc, *bufsink;
-    AVFilterInOut *outputs = avfilter_inout_alloc();
-    AVFilterInOut *inputs = avfilter_inout_alloc();
-    x->graph = avfilter_graph_alloc();
-    if (!outputs || !inputs || !x->graph) { ret = AVERROR(ENOMEM); goto done; }
+// add_buffersrc opens the decoder for one input pad and wires a buffersrc into
+// the graph at the pad it feeds.
+static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int in_idx) {
+    if (in_idx < 0 || in_idx >= c->n_in) {
+        fprintf(stderr, "ffmpeg-wasi: process: filter references input %d, only %d given\n", in_idx, c->n_in);
+        return AVERROR(EINVAL);
+    }
+    const AVCodec *dec_codec = NULL;
+    int st = av_find_best_stream(c->in[in_idx], type, -1, -1, &dec_codec, 0);
+    if (st < 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: input %d has no %s stream\n", in_idx, av_get_media_type_string(type));
+        return st;
+    }
 
-    if (x->type == AVMEDIA_TYPE_VIDEO) {
+    GIn *g = &c->gin[c->n_gin];
+    g->in_idx = in_idx;
+    g->st_idx = st;
+    g->dec = avcodec_alloc_context3(dec_codec);
+    if (!g->dec) return AVERROR(ENOMEM);
+    avcodec_parameters_to_context(g->dec, c->in[in_idx]->streams[st]->codecpar);
+    g->dec->pkt_timebase = c->in[in_idx]->streams[st]->time_base;
+    int ret = avcodec_open2(g->dec, dec_codec, NULL);
+    if (ret < 0) return ret;
+
+    char args[512];
+    const AVFilter *bufsrc;
+    if (type == AVMEDIA_TYPE_VIDEO) {
         bufsrc = avfilter_get_by_name("buffer");
-        bufsink = avfilter_get_by_name("buffersink");
+        AVRational fr = c->in[in_idx]->streams[st]->avg_frame_rate;
+        if (!fr.num) fr = c->in[in_idx]->streams[st]->r_frame_rate;
         snprintf(args, sizeof(args),
-                 "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
-                 x->dec->width, x->dec->height, x->dec->pix_fmt,
-                 x->dec->pkt_timebase.num, x->dec->pkt_timebase.den,
-                 x->dec->sample_aspect_ratio.num, x->dec->sample_aspect_ratio.den ? x->dec->sample_aspect_ratio.den : 1);
+                 "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d:frame_rate=%d/%d",
+                 g->dec->width, g->dec->height, g->dec->pix_fmt,
+                 g->dec->pkt_timebase.num, g->dec->pkt_timebase.den,
+                 g->dec->sample_aspect_ratio.num,
+                 g->dec->sample_aspect_ratio.den ? g->dec->sample_aspect_ratio.den : 1,
+                 fr.num, fr.den ? fr.den : 1);
     } else {
         bufsrc = avfilter_get_by_name("abuffer");
-        bufsink = avfilter_get_by_name("abuffersink");
-        // Give the source a concrete channel layout (the input may carry an
-        // unspecified one, e.g. mono WAV "1 channels", which encoders reject).
         AVChannelLayout chl;
-        if (x->dec->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC)
-            av_channel_layout_default(&chl, x->dec->ch_layout.nb_channels);
+        if (g->dec->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC)
+            av_channel_layout_default(&chl, g->dec->ch_layout.nb_channels);
         else
-            av_channel_layout_copy(&chl, &x->dec->ch_layout);
-        char layout[64];
-        av_channel_layout_describe(&chl, layout, sizeof(layout));
+            av_channel_layout_copy(&chl, &g->dec->ch_layout);
+        char lay[64];
+        av_channel_layout_describe(&chl, lay, sizeof(lay));
         av_channel_layout_uninit(&chl);
         snprintf(args, sizeof(args),
                  "time_base=1/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
-                 x->dec->sample_rate, x->dec->sample_rate,
-                 av_get_sample_fmt_name(x->dec->sample_fmt), layout);
+                 g->dec->sample_rate, g->dec->sample_rate,
+                 av_get_sample_fmt_name(g->dec->sample_fmt), lay);
     }
 
-    ret = avfilter_graph_create_filter(&x->src, bufsrc, "in", args, NULL, x->graph);
-    if (ret < 0) goto done;
-
-    // The sink's format constraints must be set BEFORE it is initialised, so
-    // allocate it, constrain it to a format the encoder supports (libavfilter
-    // then auto-inserts the scale/aformat conversion), then init.
-    x->sink = avfilter_graph_alloc_filter(x->graph, bufsink, "out");
-    if (!x->sink) { ret = AVERROR(ENOMEM); goto done; }
-    if (x->type == AVMEDIA_TYPE_VIDEO && enc_codec->pix_fmts) {
-        enum AVPixelFormat pf[] = {enc_codec->pix_fmts[0], AV_PIX_FMT_NONE};
-        ret = av_opt_set_bin(x->sink, "pix_fmts", (const uint8_t *)pf,
-                             sizeof(pf[0]) * 2, AV_OPT_SEARCH_CHILDREN);
-    } else if (x->type == AVMEDIA_TYPE_AUDIO && enc_codec->sample_fmts) {
-        enum AVSampleFormat sf[] = {enc_codec->sample_fmts[0], AV_SAMPLE_FMT_NONE};
-        ret = av_opt_set_bin(x->sink, "sample_fmts", (const uint8_t *)sf,
-                             sizeof(sf[0]) * 2, AV_OPT_SEARCH_CHILDREN);
-    }
-    if (ret < 0) goto done;
-    ret = avfilter_init_str(x->sink, NULL);
-    if (ret < 0) goto done;
-
-    outputs->name = av_strdup("in");
-    outputs->filter_ctx = x->src;
-    outputs->pad_idx = 0;
-    outputs->next = NULL;
-    inputs->name = av_strdup("out");
-    inputs->filter_ctx = x->sink;
-    inputs->pad_idx = 0;
-    inputs->next = NULL;
-
-    ret = avfilter_graph_parse_ptr(x->graph, filter_spec, &inputs, &outputs, NULL);
-    if (ret < 0) goto done;
-    ret = avfilter_graph_config(x->graph, NULL);
-
-done:
-    avfilter_inout_free(&inputs);
-    avfilter_inout_free(&outputs);
-    return ret;
+    char nm[32];
+    snprintf(nm, sizeof(nm), "src%d", c->n_gin);
+    ret = avfilter_graph_create_filter(&g->src, bufsrc, nm, args, NULL, c->graph);
+    if (ret < 0) return ret;
+    ret = avfilter_link(g->src, 0, pad->filter_ctx, pad->pad_idx);
+    if (ret < 0) return ret;
+    c->n_gin++;
+    return 0;
 }
 
-// setup_xcode sets up the decode→filter→encode pipeline for one media type, and
-// adds the output stream. Returns 1 if set up, 0 if not applicable, <0 on error.
-static int setup_xcode(Xcode *x, AVFormatContext *ifmt, AVFormatContext *ofmt,
-                       enum AVMediaType type, const char *enc_name,
-                       const char *filter_spec, AVDictionary **enc_opts) {
-    int ret;
-    const AVCodec *dec_codec = NULL;
-    int idx = av_find_best_stream(ifmt, type, -1, -1, &dec_codec, 0);
-    if (idx < 0) {
-        fprintf(stderr, "ffmpeg-wasi: process: no %s stream in input\n",
+// add_buffersink wires a buffersink onto one graph output pad, constrained to a
+// format the chosen encoder supports.
+static int add_buffersink(Ctx *c, AVFilterInOut *pad, const char *vcodec, const char *acodec) {
+    enum AVMediaType type = avfilter_pad_get_type(pad->filter_ctx->output_pads, pad->pad_idx);
+    const char *enc_name = type == AVMEDIA_TYPE_VIDEO ? vcodec : acodec;
+    if (!enc_name) {
+        fprintf(stderr, "ffmpeg-wasi: process: graph output is %s but no codec was given for it\n",
                 av_get_media_type_string(type));
-        return 0;
+        return AVERROR(EINVAL);
     }
-
     const AVCodec *enc_codec = avcodec_find_encoder_by_name(enc_name);
     if (!enc_codec) {
         fprintf(stderr, "ffmpeg-wasi: process: unknown encoder %s\n", enc_name);
         return AVERROR(EINVAL);
     }
 
-    x->type = type;
-    x->in_index = idx;
-    x->dec = avcodec_alloc_context3(dec_codec);
-    if (!x->dec) return AVERROR(ENOMEM);
-    avcodec_parameters_to_context(x->dec, ifmt->streams[idx]->codecpar);
-    x->dec->pkt_timebase = ifmt->streams[idx]->time_base;
-    ret = avcodec_open2(x->dec, dec_codec, NULL);
-    if (ret < 0) { fprintf(stderr, "ffmpeg-wasi: open decoder failed\n"); return ret; }
+    GOut *go = &c->gout[c->n_gout];
+    go->type = type;
+    const AVFilter *bufsink = avfilter_get_by_name(type == AVMEDIA_TYPE_VIDEO ? "buffersink" : "abuffersink");
+    char nm[32];
+    snprintf(nm, sizeof(nm), "sink%d", c->n_gout);
+    go->sink = avfilter_graph_alloc_filter(c->graph, bufsink, nm);
+    if (!go->sink) return AVERROR(ENOMEM);
 
-    ret = build_graph(x, enc_codec, filter_spec && *filter_spec ? filter_spec :
-                      (type == AVMEDIA_TYPE_VIDEO ? "null" : "anull"));
-    if (ret < 0) { fprintf(stderr, "ffmpeg-wasi: build filter graph failed\n"); return ret; }
-
-    // Configure the encoder from the negotiated sink format.
-    x->enc = avcodec_alloc_context3(enc_codec);
-    if (!x->enc) return AVERROR(ENOMEM);
-    if (type == AVMEDIA_TYPE_VIDEO) {
-        x->enc->width = av_buffersink_get_w(x->sink);
-        x->enc->height = av_buffersink_get_h(x->sink);
-        x->enc->pix_fmt = av_buffersink_get_format(x->sink);
-        x->enc->sample_aspect_ratio = av_buffersink_get_sample_aspect_ratio(x->sink);
-        x->enc->time_base = av_buffersink_get_time_base(x->sink);
-        AVRational fr = av_buffersink_get_frame_rate(x->sink);
-        x->enc->framerate = fr.num ? fr : (AVRational){25, 1};
-        if (!x->enc->time_base.num) x->enc->time_base = av_inv_q(x->enc->framerate);
-    } else {
-        x->enc->sample_fmt = av_buffersink_get_format(x->sink);
-        x->enc->sample_rate = av_buffersink_get_sample_rate(x->sink);
-        av_buffersink_get_ch_layout(x->sink, &x->enc->ch_layout);
-        x->enc->time_base = (AVRational){1, x->enc->sample_rate};
+    int ret = 0;
+    if (type == AVMEDIA_TYPE_VIDEO && enc_codec->pix_fmts) {
+        enum AVPixelFormat pf[] = {enc_codec->pix_fmts[0], AV_PIX_FMT_NONE};
+        ret = av_opt_set_bin(go->sink, "pix_fmts", (const uint8_t *)pf, sizeof(pf[0]) * 2, AV_OPT_SEARCH_CHILDREN);
+    } else if (type == AVMEDIA_TYPE_AUDIO && enc_codec->sample_fmts) {
+        enum AVSampleFormat sf[] = {enc_codec->sample_fmts[0], AV_SAMPLE_FMT_NONE};
+        ret = av_opt_set_bin(go->sink, "sample_fmts", (const uint8_t *)sf, sizeof(sf[0]) * 2, AV_OPT_SEARCH_CHILDREN);
     }
-    if (ofmt->oformat->flags & AVFMT_GLOBALHEADER)
-        x->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-
-    ret = avcodec_open2(x->enc, enc_codec, enc_opts);
-    if (ret < 0) { fprintf(stderr, "ffmpeg-wasi: open encoder %s failed\n", enc_name); return ret; }
-
-    // AAC and friends need a fixed frame size from the audio sink.
-    if (type == AVMEDIA_TYPE_AUDIO && !(enc_codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
-        && x->enc->frame_size > 0)
-        av_buffersink_set_frame_size(x->sink, x->enc->frame_size);
-
-    x->out_stream = avformat_new_stream(ofmt, NULL);
-    if (!x->out_stream) return AVERROR(ENOMEM);
-    avcodec_parameters_from_context(x->out_stream->codecpar, x->enc);
-    x->out_stream->time_base = x->enc->time_base;
-    x->active = 1;
-    return 1;
+    if (ret < 0) return ret;
+    ret = avfilter_init_str(go->sink, NULL);
+    if (ret < 0) return ret;
+    ret = avfilter_link(pad->filter_ctx, pad->pad_idx, go->sink, 0);
+    if (ret < 0) return ret;
+    c->n_gout++;
+    return 0;
 }
 
-// encode_write drains the encoder and writes packets to the muxer.
-static int encode_write(Xcode *x, AVFormatContext *ofmt, AVFrame *frame) {
-    int ret = avcodec_send_frame(x->enc, frame);
+// open_encoder configures and opens the encoder for one graph output from the
+// negotiated buffersink format, and adds the output stream.
+static int open_encoder(Ctx *c, GOut *go, const char *enc_name) {
+    const AVCodec *enc_codec = avcodec_find_encoder_by_name(enc_name);
+    go->enc = avcodec_alloc_context3(enc_codec);
+    if (!go->enc) return AVERROR(ENOMEM);
+
+    if (go->type == AVMEDIA_TYPE_VIDEO) {
+        go->enc->width = av_buffersink_get_w(go->sink);
+        go->enc->height = av_buffersink_get_h(go->sink);
+        go->enc->pix_fmt = av_buffersink_get_format(go->sink);
+        go->enc->sample_aspect_ratio = av_buffersink_get_sample_aspect_ratio(go->sink);
+        go->enc->time_base = av_buffersink_get_time_base(go->sink);
+        AVRational fr = av_buffersink_get_frame_rate(go->sink);
+        go->enc->framerate = fr.num ? fr : (AVRational){25, 1};
+        if (!go->enc->time_base.num) go->enc->time_base = av_inv_q(go->enc->framerate);
+    } else {
+        go->enc->sample_fmt = av_buffersink_get_format(go->sink);
+        go->enc->sample_rate = av_buffersink_get_sample_rate(go->sink);
+        av_buffersink_get_ch_layout(go->sink, &go->enc->ch_layout);
+        go->enc->time_base = (AVRational){1, go->enc->sample_rate};
+    }
+    if (c->ofmt->oformat->flags & AVFMT_GLOBALHEADER)
+        go->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+
+    AVDictionary *opts = NULL;
+    av_dict_copy(&opts, c->enc_opts, 0);
+    int ret = avcodec_open2(go->enc, enc_codec, &opts);
+    av_dict_free(&opts);
+    if (ret < 0) { fprintf(stderr, "ffmpeg-wasi: process: open encoder %s failed\n", enc_name); return ret; }
+
+    if (go->type == AVMEDIA_TYPE_AUDIO && !(enc_codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
+        && go->enc->frame_size > 0)
+        av_buffersink_set_frame_size(go->sink, go->enc->frame_size);
+
+    go->ost = avformat_new_stream(c->ofmt, NULL);
+    if (!go->ost) return AVERROR(ENOMEM);
+    avcodec_parameters_from_context(go->ost->codecpar, go->enc);
+    go->ost->time_base = go->enc->time_base;
+    return 0;
+}
+
+static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
+    int ret = avcodec_send_frame(go->enc, frame);
     if (ret < 0) return ret;
     AVPacket *pkt = av_packet_alloc();
     while (ret >= 0) {
-        ret = avcodec_receive_packet(x->enc, pkt);
+        ret = avcodec_receive_packet(go->enc, pkt);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) { ret = 0; break; }
         if (ret < 0) break;
-        av_packet_rescale_ts(pkt, x->enc->time_base, x->out_stream->time_base);
-        pkt->stream_index = x->out_stream->index;
-        ret = av_interleaved_write_frame(ofmt, pkt);
+        av_packet_rescale_ts(pkt, go->enc->time_base, go->ost->time_base);
+        pkt->stream_index = go->ost->index;
+        ret = av_interleaved_write_frame(c->ofmt, pkt);
         av_packet_unref(pkt);
     }
     av_packet_free(&pkt);
     return ret;
 }
 
-// filter_encode pushes a decoded frame through the graph and encodes the output.
-static int filter_encode(Xcode *x, AVFormatContext *ofmt, AVFrame *dec_frame) {
-    int ret = av_buffersrc_add_frame_flags(x->src, dec_frame, AV_BUFFERSRC_FLAG_KEEP_REF);
-    if (ret < 0) return ret;
-    AVFrame *filt = av_frame_alloc();
-    while (1) {
-        ret = av_buffersink_get_frame(x->sink, filt);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) { ret = 0; break; }
-        if (ret < 0) break;
-        filt->pts = filt->best_effort_timestamp;
-        ret = encode_write(x, ofmt, filt);
-        av_frame_unref(filt);
-        if (ret < 0) break;
+// pull_sinks drains every buffersink and encodes whatever frames are ready.
+static int pull_sinks(Ctx *c) {
+    AVFrame *f = av_frame_alloc();
+    int ret = 0;
+    for (int i = 0; i < c->n_gout; i++) {
+        while (1) {
+            ret = av_buffersink_get_frame(c->gout[i].sink, f);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) { ret = 0; break; }
+            if (ret < 0) goto done;
+            // The buffersink already sets frame->pts in the sink's timebase
+            // (which is the encoder's), so feed it as-is — overriding it (e.g.
+            // with best_effort_timestamp, a decoder concept) breaks filters like
+            // xfade that synthesise their own timestamps.
+            ret = drain_encoder(c, &c->gout[i], f);
+            av_frame_unref(f);
+            if (ret < 0) goto done;
+        }
     }
-    av_frame_free(&filt);
+done:
+    av_frame_free(&f);
     return ret;
+}
+
+// feed routes one input packet to every graph input fed by that (input, stream).
+static int feed(Ctx *c, int in_idx, AVPacket *pkt, AVFrame *frame) {
+    int ret = 0;
+    for (int i = 0; i < c->n_gin; i++) {
+        GIn *g = &c->gin[i];
+        if (g->in_idx != in_idx || g->st_idx != pkt->stream_index) continue;
+        ret = avcodec_send_packet(g->dec, pkt);
+        if (ret < 0) return ret;
+        while ((ret = avcodec_receive_frame(g->dec, frame)) >= 0) {
+            ret = av_buffersrc_add_frame_flags(g->src, frame, AV_BUFFERSRC_FLAG_KEEP_REF);
+            av_frame_unref(frame);
+            if (ret < 0) return ret;
+        }
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) ret = 0;
+        if (ret < 0) return ret;
+    }
+    return pull_sinks(c);
+}
+
+// build_default_graph generates a passthrough graph + bracketed output labels for
+// input 0's streams when the spec gives no filter.
+static void build_default_graph(Ctx *c, const char *vcodec, const char *acodec, char *out, size_t n) {
+    out[0] = 0;
+    int has_v = av_find_best_stream(c->in[0], AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0) >= 0;
+    int has_a = av_find_best_stream(c->in[0], AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0) >= 0;
+    char tmp[256] = "";
+    if (vcodec && has_v) av_strlcatf(tmp, sizeof(tmp), "[0:v]null[v];");
+    if (acodec && has_a) av_strlcatf(tmp, sizeof(tmp), "[0:a]anull[a];");
+    size_t len = strlen(tmp);
+    if (len && tmp[len - 1] == ';') tmp[len - 1] = 0;  // trim trailing ';'
+    av_strlcpy(out, tmp, n);
 }
 
 int op_process(const cJSON *spec) {
     const cJSON *inputs = cJSON_GetObjectItemCaseSensitive(spec, "inputs");
     const cJSON *outputs = cJSON_GetObjectItemCaseSensitive(spec, "outputs");
-    const cJSON *filter = cJSON_GetObjectItemCaseSensitive(spec, "filter");
     if (!cJSON_IsArray(inputs) || cJSON_GetArraySize(inputs) < 1 ||
         !cJSON_IsArray(outputs) || cJSON_GetArraySize(outputs) < 1) {
         fprintf(stderr, "ffmpeg-wasi: process: need at least one input and one output\n");
         return 2;
     }
-    const char *in_path = cJSON_GetStringValue(
-        cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(inputs, 0), "path"));
-    const cJSON *out = cJSON_GetArrayItem(outputs, 0);
-    const char *out_path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(out, "path"));
-    const char *vcodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(out, "video_codec"));
-    const char *acodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(out, "audio_codec"));
-    const char *filter_spec = cJSON_GetStringValue(filter);
-    if (!in_path || !out_path || (!vcodec && !acodec)) {
-        fprintf(stderr, "ffmpeg-wasi: process: need input.path, output.path, and a video/audio codec\n");
+    const cJSON *out0 = cJSON_GetArrayItem(outputs, 0);
+    const char *out_path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(out0, "path"));
+    const char *vcodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(out0, "video_codec"));
+    const char *acodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(out0, "audio_codec"));
+    const char *filter = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "filter"));
+    if (!out_path || (!vcodec && !acodec)) {
+        fprintf(stderr, "ffmpeg-wasi: process: need output.path and a video and/or audio codec\n");
         return 2;
     }
 
+    Ctx c = {0};
+    int rc = 0;
+
     // Encoder options from output.options (strings).
-    AVDictionary *enc_opts = NULL;
-    const cJSON *opts = cJSON_GetObjectItemCaseSensitive(out, "options");
+    const cJSON *opts = cJSON_GetObjectItemCaseSensitive(out0, "options");
     const cJSON *o = NULL;
     cJSON_ArrayForEach(o, opts) {
-        if (cJSON_IsString(o)) av_dict_set(&enc_opts, o->string, o->valuestring, 0);
+        if (cJSON_IsString(o)) av_dict_set(&c.enc_opts, o->string, o->valuestring, 0);
     }
 
-    int rc = 0;
-    AVFormatContext *ifmt = NULL, *ofmt = NULL;
-    Xcode xs[2] = {0};
-
-    if ((rc = avformat_open_input(&ifmt, in_path, NULL, NULL)) < 0) {
-        fprintf(stderr, "ffmpeg-wasi: process: cannot open input %s\n", in_path); goto end;
-    }
-    if ((rc = avformat_find_stream_info(ifmt, NULL)) < 0) goto end;
-
-    avformat_alloc_output_context2(&ofmt, NULL, NULL, out_path);
-    if (!ofmt) { fprintf(stderr, "ffmpeg-wasi: process: cannot guess output format for %s\n", out_path); rc = -1; goto end; }
-
-    if (vcodec) {
-        rc = setup_xcode(&xs[0], ifmt, ofmt, AVMEDIA_TYPE_VIDEO, vcodec, filter_spec, &enc_opts);
-        if (rc < 0) goto end;
-    }
-    if (acodec) {
-        rc = setup_xcode(&xs[1], ifmt, ofmt, AVMEDIA_TYPE_AUDIO, acodec, filter_spec, &enc_opts);
-        if (rc < 0) goto end;
-    }
-    if (!xs[0].active && !xs[1].active) {
-        fprintf(stderr, "ffmpeg-wasi: process: nothing to transcode\n"); rc = -1; goto end;
+    // Open every input.
+    const cJSON *in = NULL;
+    cJSON_ArrayForEach(in, inputs) {
+        if (c.n_in >= MAX_INPUTS) { rc = AVERROR(EINVAL); goto end; }
+        const char *p = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(in, "path"));
+        if ((rc = avformat_open_input(&c.in[c.n_in], p, NULL, NULL)) < 0) {
+            fprintf(stderr, "ffmpeg-wasi: process: cannot open input %s\n", p ? p : "(null)"); goto end;
+        }
+        if ((rc = avformat_find_stream_info(c.in[c.n_in], NULL)) < 0) goto end;
+        c.n_in++;
     }
 
-    if (!(ofmt->oformat->flags & AVFMT_NOFILE)) {
-        if ((rc = avio_open(&ofmt->pb, out_path, AVIO_FLAG_WRITE)) < 0) {
+    avformat_alloc_output_context2(&c.ofmt, NULL, NULL, out_path);
+    if (!c.ofmt) { fprintf(stderr, "ffmpeg-wasi: process: cannot guess output format for %s\n", out_path); rc = -1; goto end; }
+
+    // The filter graph: the spec's filter, or a generated passthrough.
+    char autograph[512];
+    const char *graph_str = filter;
+    if (!graph_str || !*graph_str) {
+        build_default_graph(&c, vcodec, acodec, autograph, sizeof(autograph));
+        graph_str = autograph;
+    }
+
+    c.graph = avfilter_graph_alloc();
+    AVFilterInOut *gin = NULL, *gout = NULL;
+    if ((rc = avfilter_graph_parse2(c.graph, graph_str, &gin, &gout)) < 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: bad filtergraph %s\n", graph_str); goto end;
+    }
+    // Wire a buffersrc onto each graph input pad.
+    for (AVFilterInOut *p = gin; p; p = p->next) {
+        int in_idx; enum AVMediaType type;
+        if (parse_input_pad(p->name, &in_idx, &type) < 0) {
+            fprintf(stderr, "ffmpeg-wasi: process: cannot map graph input pad %s (expected N:v / N:a)\n", p->name);
+            rc = AVERROR(EINVAL); avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
+        }
+        if ((rc = add_buffersrc(&c, p, type, in_idx)) < 0) {
+            avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
+        }
+    }
+    // Wire a buffersink onto each graph output pad.
+    for (AVFilterInOut *p = gout; p; p = p->next) {
+        if ((rc = add_buffersink(&c, p, vcodec, acodec)) < 0) {
+            avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
+        }
+    }
+    avfilter_inout_free(&gin);
+    avfilter_inout_free(&gout);
+
+    if ((rc = avfilter_graph_config(c.graph, NULL)) < 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: filtergraph config failed\n"); goto end;
+    }
+
+    // Encoders + output streams from the negotiated sink formats.
+    for (int i = 0; i < c.n_gout; i++) {
+        if ((rc = open_encoder(&c, &c.gout[i], c.gout[i].type == AVMEDIA_TYPE_VIDEO ? vcodec : acodec)) < 0) goto end;
+    }
+
+    if (!(c.ofmt->oformat->flags & AVFMT_NOFILE)) {
+        if ((rc = avio_open(&c.ofmt->pb, out_path, AVIO_FLAG_WRITE)) < 0) {
             fprintf(stderr, "ffmpeg-wasi: process: cannot open output %s\n", out_path); goto end;
         }
     }
-    if ((rc = avformat_write_header(ofmt, NULL)) < 0) { fprintf(stderr, "ffmpeg-wasi: write header failed\n"); goto end; }
+    if ((rc = avformat_write_header(c.ofmt, NULL)) < 0) { fprintf(stderr, "ffmpeg-wasi: write header failed\n"); goto end; }
 
-    // Transcode loop.
+    // Multi-input transcode loop: round-robin read, feed, drain.
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
-    while (av_read_frame(ifmt, pkt) >= 0) {
-        Xcode *x = NULL;
-        if (xs[0].active && pkt->stream_index == xs[0].in_index) x = &xs[0];
-        else if (xs[1].active && pkt->stream_index == xs[1].in_index) x = &xs[1];
-        if (x) {
-            if ((rc = avcodec_send_packet(x->dec, pkt)) >= 0) {
-                while ((rc = avcodec_receive_frame(x->dec, frame)) >= 0) {
-                    rc = filter_encode(x, ofmt, frame);
-                    av_frame_unref(frame);
-                    if (rc < 0) break;
+    int remaining = c.n_in;
+    while (remaining > 0 && rc >= 0) {
+        for (int i = 0; i < c.n_in && rc >= 0; i++) {
+            if (c.eof[i]) continue;
+            int r = av_read_frame(c.in[i], pkt);
+            if (r < 0) {
+                c.eof[i] = 1;
+                remaining--;
+                // Flush this input's decoders and close its buffersrcs.
+                for (int gi = 0; gi < c.n_gin; gi++) {
+                    if (c.gin[gi].in_idx != i) continue;
+                    avcodec_send_packet(c.gin[gi].dec, NULL);
+                    while (avcodec_receive_frame(c.gin[gi].dec, frame) >= 0) {
+                        av_buffersrc_add_frame_flags(c.gin[gi].src, frame, AV_BUFFERSRC_FLAG_KEEP_REF);
+                        av_frame_unref(frame);
+                    }
+                    av_buffersrc_add_frame_flags(c.gin[gi].src, NULL, 0);
                 }
-                if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) rc = 0;
+                rc = pull_sinks(&c);
+                continue;
             }
+            rc = feed(&c, i, pkt, frame);
+            av_packet_unref(pkt);
         }
-        av_packet_unref(pkt);
-        if (rc < 0) break;
     }
+    // Final graph drain + encoder flush.
+    if (rc >= 0) rc = pull_sinks(&c);
+    for (int i = 0; i < c.n_gout && rc >= 0; i++) rc = drain_encoder(&c, &c.gout[i], NULL);
 
-    // Flush decoders → filters → encoders.
-    for (int i = 0; i < 2 && rc >= 0; i++) {
-        if (!xs[i].active) continue;
-        avcodec_send_packet(xs[i].dec, NULL);
-        while (avcodec_receive_frame(xs[i].dec, frame) >= 0) {
-            filter_encode(&xs[i], ofmt, frame);
-            av_frame_unref(frame);
-        }
-        av_buffersrc_add_frame_flags(xs[i].src, NULL, 0);  // flush graph
-        AVFrame *filt = av_frame_alloc();
-        while (av_buffersink_get_frame(xs[i].sink, filt) >= 0) {
-            filt->pts = filt->best_effort_timestamp;
-            encode_write(&xs[i], ofmt, filt);
-            av_frame_unref(filt);
-        }
-        av_frame_free(&filt);
-        encode_write(&xs[i], ofmt, NULL);  // flush encoder
-    }
-
-    av_write_trailer(ofmt);
     av_packet_free(&pkt);
     av_frame_free(&frame);
+    if (rc >= 0) av_write_trailer(c.ofmt);
 
-    // Report what was written.
-    {
+    if (rc >= 0) {
         cJSON *res = cJSON_CreateObject();
         cJSON_AddStringToObject(res, "output", out_path);
         cJSON *streams = cJSON_AddArrayToObject(res, "streams");
-        for (int i = 0; i < 2; i++) {
-            if (!xs[i].active) continue;
+        for (int i = 0; i < c.n_gout; i++) {
             cJSON *s = cJSON_CreateObject();
-            cJSON_AddStringToObject(s, "type", av_get_media_type_string(xs[i].type));
-            cJSON_AddStringToObject(s, "codec", xs[i].enc->codec->name);
+            cJSON_AddStringToObject(s, "type", av_get_media_type_string(c.gout[i].type));
+            cJSON_AddStringToObject(s, "codec", c.gout[i].enc->codec->name);
             cJSON_AddItemToArray(streams, s);
         }
         char *j = cJSON_PrintUnformatted(res);
@@ -355,11 +440,12 @@ end:
         av_strerror(rc, buf, sizeof(buf));
         fprintf(stderr, "ffmpeg-wasi: process: %s\n", buf);
     }
-    if (ofmt && ofmt->pb && !(ofmt->oformat->flags & AVFMT_NOFILE)) avio_closep(&ofmt->pb);
-    if (ofmt) avformat_free_context(ofmt);
-    if (ifmt) avformat_close_input(&ifmt);
-    xcode_free(&xs[0]);
-    xcode_free(&xs[1]);
-    av_dict_free(&enc_opts);
+    if (c.ofmt && c.ofmt->pb && !(c.ofmt->oformat->flags & AVFMT_NOFILE)) avio_closep(&c.ofmt->pb);
+    for (int i = 0; i < c.n_gin; i++) avcodec_free_context(&c.gin[i].dec);
+    for (int i = 0; i < c.n_gout; i++) avcodec_free_context(&c.gout[i].enc);
+    if (c.graph) avfilter_graph_free(&c.graph);
+    if (c.ofmt) avformat_free_context(c.ofmt);
+    for (int i = 0; i < c.n_in; i++) avformat_close_input(&c.in[i]);
+    av_dict_free(&c.enc_opts);
     return rc < 0 ? 1 : 0;
 }

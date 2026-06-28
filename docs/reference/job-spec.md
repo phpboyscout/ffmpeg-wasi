@@ -15,10 +15,12 @@ is the **compatibility contract** between ffmpeg-wasi and [afmpeg](https://gitla
 it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
 !!! note "Status"
-    **`probe` and `process` both run today.** `process` currently does **single input →
-    single output**, transcoding the video and/or audio stream through an optional per-stream
-    `filter`. The full multi-pad `filter_complex` and multi-output muxing are later
-    increments. Shapes follow afmpeg [spec 0007 §4](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
+    **`probe` and `process` both run today.** `process` supports **multiple inputs and the
+    full `filter_complex`** — pad labels (`[0:v]`, `[1:a]`, … → `[vout]`, `[aout]`) parsed by
+    `avfilter_graph_parse2`, each output pad encoded (video pads with `video_codec`, audio
+    pads with `audio_codec`) into one output file. With no `filter`, a passthrough graph is
+    generated for input 0. Multiple output *files* are a later increment. Shapes follow afmpeg
+    [spec 0007 §4](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
 
 ## Operations
 
@@ -42,20 +44,30 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 | Field | Meaning |
 |---|---|
 | `inputs[]` | Each input's path (resolved against the mounted filesystem) + demuxer options. |
-| `filter` | A filter chain applied per stream (today, single input/output) — e.g. `scale=160:120`, `volume=0.5`. Optional. |
+| `filter` | The full ffmpeg `filter_complex` string — `[0:v]scale=…[vout];[1:a]…[aout]`. Optional (passthrough graph for input 0 if omitted). |
 | `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). The output container is chosen from the path extension. |
 | `outputs[].options` | String key/values passed to the encoder (e.g. `{"crf":"28"}`). |
 
 Working examples (verified end-to-end):
 
 ```jsonc
-// audio: WAV (pcm) → AAC in MP4
+// audio: WAV (pcm) → AAC in MP4 (no filter → passthrough graph)
 {"op":"process","inputs":[{"path":"tone.wav"}],
  "outputs":[{"path":"out.mp4","audio_codec":"aac"}]}
 
 // video: H.264 → scaled → H.264 (GPL variant, libx264)
-{"op":"process","inputs":[{"path":"in.mp4"}],"filter":"scale=160:120",
+{"op":"process","inputs":[{"path":"in.mp4"}],"filter":"[0:v]scale=160:120[vout]",
  "outputs":[{"path":"out.mp4","video_codec":"libx264","options":{"crf":"28"}}]}
+
+// multi-input: combine a video + an audio file into one mp4
+{"op":"process","inputs":[{"path":"clip.mp4"},{"path":"music.mp3"}],
+ "filter":"[0:v]scale=1280:-2[vout];[1:a]anull[aout]",
+ "outputs":[{"path":"out.mp4","video_codec":"libx264","audio_codec":"aac"}]}
+
+// crossfade-concat two clips
+{"op":"process","inputs":[{"path":"a.mp4"},{"path":"b.mp4"}],
+ "filter":"[0:v][1:v]xfade=transition=fade:duration=0.4:offset=2[vout]",
+ "outputs":[{"path":"out.mp4","video_codec":"libx264"}]}
 ```
 
 On success the engine prints what it wrote, e.g. `{"output":"out.mp4","streams":[{"type":"video","codec":"libx264"}]}`.

@@ -25,7 +25,7 @@ ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,aac,mp3,opus,vorbis,flac,pcm_s1
 --enable-encoder=mjpeg,aac,flac,pcm_s16le \
 --enable-demuxer=mov,matroska,webm,mp3,wav,ogg,aac,flac,image2 \
 --enable-muxer=mp4,mov,matroska,webm,mp3,wav,image2 \
---enable-filter=null,anull,scale,crop,pad,format,fps,setsar,transpose,overlay,concat,xfade,amix,adelay,volume,afade,aresample,aformat,alimiter \
+--enable-filter=null,anull,scale,crop,pad,format,fps,settb,asettb,setsar,setpts,asetpts,trim,atrim,loop,transpose,overlay,concat,xfade,amix,adelay,volume,afade,aresample,aformat,alimiter \
 --enable-protocol=file,pipe"
 
 # Use clang as the linker (--ld=clang), not raw wasm-ld: clang understands
