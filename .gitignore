@@ -12,3 +12,6 @@
 *.swp
 .idea/
 .vscode/
+
+# stray go build output
+/run

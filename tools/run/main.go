@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 
@@ -38,14 +39,17 @@ func longjmp(ctx context.Context, _ api.Module, stack []uint64) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: run <module.wasm> [args...]")
+	mount := flag.String("mount", "", "host directory to mount at the guest root / (read-write)")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: run [--mount <dir>] <module.wasm> [args...]")
 		os.Exit(2)
 	}
 
 	ctx := context.Background()
 
-	wasm, err := os.ReadFile(os.Args[1])
+	wasm, err := os.ReadFile(args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -74,8 +78,11 @@ func main() {
 
 	cctx := experimental.WithSnapshotter(context.WithValue(ctx, storeKey{}, &sjlj{snaps: map[uint32]experimental.Snapshot{}}))
 	cfg := wazero.NewModuleConfig().WithName("").
-		WithArgs(append([]string{"ffmpeg-wasi"}, os.Args[2:]...)...).
+		WithArgs(append([]string{"ffmpeg-wasi"}, args[1:]...)...).
 		WithStdout(os.Stdout).WithStderr(os.Stderr)
+	if *mount != "" {
+		cfg = cfg.WithFSConfig(wazero.NewFSConfig().WithDirMount(*mount, "/"))
+	}
 
 	if _, err := rt.InstantiateModule(cctx, compiled, cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "run:", err)

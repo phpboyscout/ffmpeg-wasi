@@ -14,10 +14,10 @@ that is *exactly* as capable as the engine, with no leaky partial-CLI illusion. 
 is the **compatibility contract** between ffmpeg-wasi and [afmpeg](https://gitlab.com/phpboyscout/afmpeg);
 it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
-!!! warning "Provisional"
-    The job-spec lands with the Phase-B engine. The shape below is the design from afmpeg
-    [spec 0007 §4](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md);
-    field names may settle during implementation.
+!!! note "Status"
+    **`probe` is implemented and runs today.** `process` is the next increment. The shapes
+    below follow afmpeg [spec 0007 §4](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md);
+    the `process` fields may still settle during implementation.
 
 ## Operations
 
@@ -50,8 +50,14 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 { "op": "probe", "inputs": [ { "path": "in/clip.mp4" } ] }
 ```
 
-Reports container/stream metadata (duration, codecs, dimensions, bit rates) as JSON on
-stdout. No outputs are written.
+Reports container/stream metadata (format, duration, per-stream codec/type and
+dimensions/sample rate) as JSON on stdout. No outputs are written. For example, probing a
+WAV yields:
+
+```json
+{"inputs":[{"path":"tone.wav","format":"wav","duration_sec":0.5,
+  "streams":[{"index":0,"type":"audio","codec":"pcm_s16le","sample_rate":8000,"channels":1}]}]}
+```
 
 ## The `filter` field is ffmpeg's filtergraph syntax
 
