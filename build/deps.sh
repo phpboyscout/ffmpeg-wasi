@@ -9,8 +9,21 @@ HERE_DEPS="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 
 : "${VARIANT:=lgpl}"
 : "${X264_BRANCH:=stable}"          # x264 has no release tags; pin a commit for releases
+: "${ZLIB_VERSION:=v1.3.1}"
 
 mkdir -p "$PREFIX"
+
+# build_zlib cross-compiles zlib (permissive) to wasm32-wasi, static. FFmpeg's
+# native PNG codec needs it, so both variants get it.
+build_zlib() {
+  git clone https://github.com/madler/zlib.git --depth=1 --branch "$ZLIB_VERSION" /zlib
+  cd /zlib
+  # zlib's configure uses CC/CFLAGS/AR from toolchain.sh; clang cross-links its tests.
+  ./configure --prefix="$PREFIX" --eprefix="$PREFIX" --static \
+    || { echo "zlib configure failed"; cat configure.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+  echo "zlib built → $PREFIX"
+}
 
 # build_x264 cross-compiles libx264 (GPL) to wasm32-wasi, static, no asm/cli.
 build_x264() {
@@ -32,6 +45,8 @@ build_x264() {
   make -j"$(nproc)" install-lib-static
   echo "libx264 built → $PREFIX"
 }
+
+build_zlib   # both variants (PNG)
 
 case "$VARIANT" in
   gpl)  build_x264 ;;

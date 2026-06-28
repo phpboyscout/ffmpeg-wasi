@@ -4,5 +4,5 @@ FFMPEG_VERSION=n8.1.2
 WASI_SDK_IMAGE=ghcr.io/webassembly/wasi-sdk:wasi-sdk-30
 # external codec dependencies (build/deps.sh):
 X264_BRANCH=stable       # GPL variant H.264 encode (x264 has no release tags; pin a commit for releases)
+ZLIB_VERSION=v1.3.1      # zlib for FFmpeg's native PNG codec (both variants)
 # OPENH264_VERSION=...   # LGPL variant H.264 encode (planned)
-# ZLIB_VERSION=...       # PNG/zlib (planned)

@@ -21,8 +21,8 @@ GPL_FLAGS=""
 
 # A general, dep-free native baseline (Phase A). External deps (zlib, openh264,
 # x264, …) extend this in build/deps.sh.
-ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,aac,mp3,opus,vorbis,flac,pcm_s16le \
---enable-encoder=mjpeg,aac,flac,pcm_s16le \
+ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,flac,pcm_s16le \
+--enable-encoder=mjpeg,png,aac,flac,pcm_s16le \
 --enable-demuxer=mov,matroska,webm,mp3,wav,ogg,aac,flac,image2 \
 --enable-muxer=mp4,mov,matroska,webm,mp3,wav,image2 \
 --enable-filter=null,anull,scale,crop,pad,format,fps,settb,asettb,setsar,setpts,asetpts,trim,atrim,loop,transpose,overlay,concat,xfade,amix,adelay,volume,afade,aresample,aformat,alimiter \
@@ -41,6 +41,7 @@ LDFLAGS="--target=wasm32-wasip1 --sysroot=$WASI_SYSROOT $SJLJ -L$PREFIX/lib $WAS
   --disable-programs --disable-doc --disable-debug --disable-network \
   --disable-pthreads --disable-w32threads --disable-os2threads \
   --disable-runtime-cpudetect --disable-asm --disable-x86asm \
+  --enable-zlib \
   --disable-everything $ENABLE $GPL_FLAGS \
   || { echo "configure failed"; tail -40 ffbuild/config.log; exit 1; }
 
