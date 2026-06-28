@@ -15,9 +15,10 @@ is the **compatibility contract** between ffmpeg-wasi and [afmpeg](https://gitla
 it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
 !!! note "Status"
-    **`probe` is implemented and runs today.** `process` is the next increment. The shapes
-    below follow afmpeg [spec 0007 §4](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md);
-    the `process` fields may still settle during implementation.
+    **`probe` and `process` both run today.** `process` currently does **single input →
+    single output**, transcoding the video and/or audio stream through an optional per-stream
+    `filter`. The full multi-pad `filter_complex` and multi-output muxing are later
+    increments. Shapes follow afmpeg [spec 0007 §4](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
 
 ## Operations
 
@@ -41,8 +42,23 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 | Field | Meaning |
 |---|---|
 | `inputs[]` | Each input's path (resolved against the mounted filesystem) + demuxer options. |
-| `filter` | An ffmpeg **filtergraph string**, parsed by libav (`avfilter_graph_parse2`). |
-| `outputs[]` | Each output's path, the graph pads/streams to `map`, codecs, and muxer/encoder options. |
+| `filter` | A filter chain applied per stream (today, single input/output) — e.g. `scale=160:120`, `volume=0.5`. Optional. |
+| `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). The output container is chosen from the path extension. |
+| `outputs[].options` | String key/values passed to the encoder (e.g. `{"crf":"28"}`). |
+
+Working examples (verified end-to-end):
+
+```jsonc
+// audio: WAV (pcm) → AAC in MP4
+{"op":"process","inputs":[{"path":"tone.wav"}],
+ "outputs":[{"path":"out.mp4","audio_codec":"aac"}]}
+
+// video: H.264 → scaled → H.264 (GPL variant, libx264)
+{"op":"process","inputs":[{"path":"in.mp4"}],"filter":"scale=160:120",
+ "outputs":[{"path":"out.mp4","video_codec":"libx264","options":{"crf":"28"}}]}
+```
+
+On success the engine prints what it wrote, e.g. `{"output":"out.mp4","streams":[{"type":"video","codec":"libx264"}]}`.
 
 ### `probe` — report stream information
 

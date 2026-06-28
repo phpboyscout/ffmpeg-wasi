@@ -30,10 +30,11 @@ Every other "FFmpeg in WebAssembly" project hits the same two walls. We went und
 The result: the **reference server-side FFmpeg for WebAssembly** — current, sandboxed,
 pure-Go-embeddable.
 
-> **Status: Phase A.** The clean-room build is green: current FFmpeg (n8.1.2) compiles to
-> `wasm32-wasi` and runs under wazero today (try
-> [Build & run](docs/tutorials/build-and-run.md)). Next is the Phase-B engine — the job-spec
-> processing loop for real in-memory transcodes. Design:
+> **Status: it transcodes.** Current FFmpeg (n8.1.2) compiles to `wasm32-wasi` and runs
+> under wazero, and the engine does **real in-memory transcodes** — verified end-to-end:
+> WAV → AAC, and H.264 → scaled → H.264 (libx264, GPL variant). Both `probe` and `process`
+> (single input → single output) work today; the full multi-pad `filter_complex` and
+> multi-output muxing are next. Design:
 > [spec 0007](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
 
 ## What you get

@@ -28,6 +28,7 @@
 #include <libavfilter/avfilter.h>
 
 #include "third_party/cJSON/cJSON.h"
+#include "process.h"
 
 // ---- capability report (build smoke test) -------------------------------
 
@@ -147,8 +148,7 @@ int main(int argc, char **argv) {
     if (op && strcmp(op, "probe") == 0) {
         rc = op_probe(spec);
     } else if (op && strcmp(op, "process") == 0) {
-        fprintf(stderr, "ffmpeg-wasi: op \"process\" not yet implemented\n");
-        rc = 3;
+        rc = op_process(spec);
     } else {
         fprintf(stderr, "ffmpeg-wasi: unknown op %s\n", op ? op : "(none)");
         rc = 2;
