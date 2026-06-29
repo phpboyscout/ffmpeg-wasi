@@ -44,11 +44,12 @@ building**:
 
 | Variant | Licence | H.264 encode | For |
 |---|---|---|---|
-| **`ffmpeg-wasi-lgpl.wasm`** | LGPL-2.1+ | openh264 (or none) | the default — proprietary-compatible |
+| **`ffmpeg-wasi-lgpl.wasm`** | LGPL-2.1+ | openh264 (BSD) | the default — proprietary-compatible |
 | **`ffmpeg-wasi-gpl.wasm`** | GPL-2.0+ | libx264 (best quality) | when you want x264 and accept GPL |
 
 Plus a checksum and a provenance manifest (the exact FFmpeg + dependency + toolchain
-versions). Pin by URL + SHA-256.
+versions). Pin by URL + SHA-256. Both variants encode H.264; the self-compiled openh264 in the
+LGPL variant carries an AVC **patent** caveat — see [licensing](docs/explanation/licensing.md#h264-encode-and-the-avc-patent-pool).
 
 ## Quick start (consuming it from Go)
 
@@ -64,7 +65,8 @@ rt, _ := afmpeg.New(ctx, afmpeg.WithModuleURL(
 ```
 
 (That's the LGPL module from [`n8.1.2-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n8.1.2-1).
-Swap `lgpl` → `gpl` for libx264 H.264 encode; every release lists each asset's URL + SHA-256.)
+The LGPL module encodes H.264 via openh264; swap `lgpl` → `gpl` for libx264 instead. Every release
+lists each asset's URL + SHA-256.)
 
 ## Licensing — clean, and yours to choose
 
@@ -74,7 +76,7 @@ Swap `lgpl` → `gpl` for libx264 H.264 encode; every release lists each asset's
 - **The released `.wasm` artifacts** carry the licence their contents demand: the **LGPL**
   variant (default libav\*) and the **GPL** variant (with libx264). Shipping both in one
   release is mere aggregation — neither affects the other, nor this MIT source.
-- Corresponding source for every release is the pinned upstream FFmpeg/x264 plus this
+- Corresponding source for every release is the pinned upstream FFmpeg/x264/openh264 plus this
   public repository — anyone can rebuild or relink.
 
 FFmpeg is a trademark of its respective owners; this project builds and redistributes

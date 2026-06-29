@@ -8,7 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /work
 # Build external codec dependencies (per variant) and libav* first — cached
 # across engine edits, so iterating on the driver reuses both.
-COPY build/toolchain.sh build/deps.sh build/libav.sh build/wasi-compat.h /work/build/
+COPY build/toolchain.sh build/deps.sh build/libav.sh build/wasi-compat.h \
+     build/openh264-wasi.patch build/openh264-threads.c /work/build/
 RUN VARIANT="$VARIANT" sh build/deps.sh
 RUN FFMPEG_VERSION="$FFMPEG_VERSION" VARIANT="$VARIANT" sh build/libav.sh
 COPY build/ /work/build/

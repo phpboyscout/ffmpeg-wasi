@@ -26,13 +26,15 @@ for a in "$PREFIX"/lib/lib*.a; do
 done
 
 # clang links a WASI command (crt1/_start) itself for wasm32-wasip1 + main();
-# no wasm-ld-only flags here.
+# no wasm-ld-only flags here. -lc++/-lc++abi resolve openh264's C++ runtime (it is
+# the one C++ dependency; the engine and libav* are C), linked after the codec libs.
 # shellcheck disable=SC2086  # $ENGINE_SRC/$DEP_LIBS/$WASI_EMULATED_LIBS are deliberately split
 $CC $CFLAGS -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
   -L"$FFMPEG_SRC/libavformat" -L"$FFMPEG_SRC/libavcodec" -L"$FFMPEG_SRC/libavfilter" \
   -L"$FFMPEG_SRC/libavutil" -L"$FFMPEG_SRC/libswresample" -L"$FFMPEG_SRC/libswscale" \
   -lavformat -lavcodec -lavfilter -lavutil -lswresample -lswscale \
   -L"$PREFIX/lib" $DEP_LIBS \
+  -lc++ -lc++abi \
   $WASI_EMULATED_LIBS
 ls -la "$OUT"
 echo "engine linked → $OUT"

@@ -97,9 +97,10 @@ release:
         "build_tag": "${CI_COMMIT_TAG}",
         "commit": "${CI_COMMIT_SHA}",
         "variants": {
-          "lgpl": { "file": "ffmpeg-wasi-lgpl.wasm", "license": "LGPL-2.1-or-later" },
-          "gpl":  { "file": "ffmpeg-wasi-gpl.wasm",  "license": "GPL-2.0-or-later" }
+          "lgpl": { "file": "ffmpeg-wasi-lgpl.wasm", "license": "LGPL-2.1-or-later", "h264_encode": "openh264" },
+          "gpl":  { "file": "ffmpeg-wasi-gpl.wasm",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264" }
         },
+        "h264_patent_note": "Both variants encode H.264 from self-compiled sources (openh264/libx264), outside Cisco's binary patent grant; shipped under the AVC pool's royalty-free volume tier. See docs/explanation/licensing.md.",
         "tooling_license": "MIT"
       }
       PROV
@@ -116,7 +117,7 @@ release:
       release-cli create \
         --name "ffmpeg-wasi ${CI_COMMIT_TAG}" \
         --tag-name "${CI_COMMIT_TAG}" \
-        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI — **lgpl** (default; H.264 decode, no libx264 encode) and **gpl** (adds libx264 H.264 encode). Pin a module by its URL + SHA-256 from \`checksums.txt\`; see \`provenance.json\` for exactly what went in." \
+        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI — **lgpl** (default; H.264 encode via openh264) and **gpl** (libx264 H.264 encode). Both encode H.264; the self-compiled openh264 carries an AVC patent caveat (see the licensing docs). Pin a module by its URL + SHA-256 from \`checksums.txt\`; see \`provenance.json\` for exactly what went in." \
         --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-gpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-gpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm.gz\",\"link_type\":\"package\"}" \

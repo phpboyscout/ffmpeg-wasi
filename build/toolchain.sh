@@ -26,13 +26,13 @@ export SJLJ
 
 export CFLAGS="--target=wasm32-wasip1 --sysroot=$WASI_SYSROOT -Oz -g0 \
 $WASM_FEATURES $SJLJ -I$WASI_SYSROOT/include/wasm32-wasip1 -I$PREFIX/include \
--D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_SIGNAL \
+-D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_GETPID \
 -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-function-pointer-types \
 -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-function-pointer-types"
 export CXXFLAGS="$CFLAGS"
 
 # wasi-libc ships these as opt-in emulated shims FFmpeg's portable paths expect.
-export WASI_EMULATED_LIBS="-lwasi-emulated-mman -lwasi-emulated-process-clocks -lwasi-emulated-signal"
+export WASI_EMULATED_LIBS="-lwasi-emulated-mman -lwasi-emulated-process-clocks -lwasi-emulated-signal -lwasi-emulated-getpid"
 
 # pkg-config resolves only our cross-built dependencies in $PREFIX (LIBDIR pins it
 # there so it never picks up host libraries).

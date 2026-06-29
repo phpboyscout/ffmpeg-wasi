@@ -14,12 +14,13 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 |---|---|---|
 | **Licence** | LGPL-2.1-or-later | GPL-2.0-or-later |
 | **`--enable-gpl`** | no | yes |
-| **H.264 encode** | openh264 (or none) | libx264 (best quality) |
+| **H.264 encode** | openh264 (BSD) | libx264 (best quality) |
 | **Use when** | you want proprietary compatibility | you want x264 and accept GPL |
 
 Both ship in every release — [pick the one that fits](../how-to/choose-a-variant.md) and skip
 building. See [the licensing model](../explanation/licensing.md) for why shipping both is
-clean.
+clean. Both encode H.264; the LGPL variant's self-compiled openh264 carries an AVC **patent**
+caveat — [licensing](../explanation/licensing.md#h264-encode-and-the-avc-patent-pool).
 
 ## The media baseline
 

@@ -38,8 +38,11 @@ entirely by *what we enable*:
 
 | Variant | Built with | Artifact licence |
 |---|---|---|
-| **LGPL** (default) | stock `libav*`, no `--enable-gpl` | LGPL-2.1-or-later |
+| **LGPL** (default) | stock `libav*`, no `--enable-gpl`, + openh264 (BSD) for H.264 encode | LGPL-2.1-or-later |
 | **GPL** (opt-in) | `--enable-gpl` + libx264 | GPL-2.0-or-later |
+
+openh264's BSD-2-Clause source is LGPL-compatible and needs no `--enable-gpl`, so it does not move
+the LGPL floor — but it does carry an AVC **patent** caveat, covered [below](#h264-encode-and-the-avc-patent-pool).
 
 **LGPL is the floor.** We cannot relicense `libav*` below it — it's the FFmpeg project's
 code, not ours. But LGPL is proprietary-compatible (you may use it in closed software,
@@ -50,6 +53,35 @@ subject to its relink provision), which is what matters for adoption.
 [afmpeg](https://gitlab.com/phpboyscout/afmpeg), or whatever loads the module, just downloads
 a `.wasm`. The LGPL/GPL obligation attaches to *that artifact* and whoever distributes it —
 never to the consuming source. afmpeg stays permissive throughout.
+
+## H.264 encode and the AVC patent pool
+
+Both variants can encode H.264 — the **LGPL** variant via [openh264](https://github.com/cisco/openh264)
+(BSD-2-Clause source), the **GPL** variant via libx264. Those are the *copyright* licences. The
+**patent** position is identical for both, and it is worth stating plainly.
+
+!!! danger "Self-compiled openh264 is outside Cisco's patent grant"
+    H.264/AVC is covered by a patent pool administered by **[Via LA](https://www.via-la.com/licensing-2/avc-h-264/)**
+    (formerly MPEG LA). Cisco's well-known *royalty-free* grant for openh264 covers **only the binary
+    modules Cisco itself builds and distributes** — it does **not** travel with the source. ffmpeg-wasi
+    compiles openh264 from source, so our `.wasm` is **not** under Cisco's umbrella. The GPL variant's
+    libx264 is no different: GPL is a copyright licence and never conveys patent rights.
+
+    We ship H.264 encode regardless, on a deliberate and bounded basis:
+
+    - **Volume.** The AVC licence is royalty-free beneath the pool's annual unit threshold (the first
+      100,000 units/year). Our expected distribution sits well within it — and that headroom is the
+      *only* reason shipping a self-compiled AVC encoder is tenable here.
+    - **Comply on demand.** If Via LA or any AVC rights-holder asks us to stop distributing the
+      encoder, **we will pull it** — promptly, from both variants — rather than contest it.
+    - **Sunset.** The obligation is winding down. The last U.S. AVC essential patent in the pool
+      (US 7,826,532) **expires 2027-11-29**; after that the standard is royalty-free in the U.S. and
+      this caveat lapses. Other jurisdictions track a similar horizon.
+
+    This states the project's intent; it is not legal advice, and a formal review precedes any tagged
+    release. For the authoritative, maintained patent roster see Via LA's
+    [AVC/H.264 patent list](https://www.via-la.com/licensing-2/avc-h-264/) (the "Attachment 1" PDF,
+    updated periodically) rather than any copy we could let go stale here.
 
 ## Why shipping both variants is clean
 
@@ -63,7 +95,7 @@ the LGPL artifact, the MIT tooling, or your code. They simply coexist.
 - **Per-asset labelling** — each artifact states its licence; the provenance manifest records
   variant + licence.
 - **Corresponding source** — for every released binary, the source is the *pinned upstream
-  FFmpeg/x264* plus *this public repository* (our scripts + engine). Anyone can rebuild.
+  FFmpeg/x264/openh264* plus *this public repository* (our scripts + engine). Anyone can rebuild.
 - **LGPL relink** — because the build is public and the FFmpeg version pinned, a user can
   relink the LGPL artifact against a modified `libav*`.
 

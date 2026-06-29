@@ -21,12 +21,19 @@ graph TD
 ```
 
 - **`ffmpeg-wasi-lgpl.wasm`** — the default. LGPL-2.1+, proprietary-compatible. H.264 encode
-  via openh264 (or omitted); everything else in the [baseline](../reference/variants.md).
+  via openh264 (BSD); everything else in the [baseline](../reference/variants.md).
 - **`ffmpeg-wasi-gpl.wasm`** — LGPL plus `--enable-gpl` + libx264 for best-in-class H.264
   encoding. The artifact is GPL-2.0+.
 
 When in doubt, start with **LGPL**. See [the licensing model](../explanation/licensing.md) for
 the full picture (and why shipping both together is clean).
+
+!!! warning "H.264 and AVC patents"
+    Both variants encode H.264, and both are self-compiled — so neither rides under Cisco's
+    openh264 binary patent grant. We ship encode under the AVC pool's royalty-free volume tier and
+    will pull it on request; the obligation sunsets when the last AVC essential patent expires
+    (2027-11-29 in the U.S.). Full detail in
+    [the licensing model](../explanation/licensing.md#h264-encode-and-the-avc-patent-pool).
 
 ## Verify the checksum
 

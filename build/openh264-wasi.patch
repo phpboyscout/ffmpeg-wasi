@@ -1,0 +1,83 @@
+diff --git a/codec/api/wels/codec_api.h b/codec/api/wels/codec_api.h
+index a1326c8..1b85577 100644
+--- a/codec/api/wels/codec_api.h
++++ b/codec/api/wels/codec_api.h
+@@ -320,7 +320,7 @@ class ISVCEncoder {
+   * @param  bIDR true: force encoder to encode frame as IDR frame;false, return 1 and nothing to do
+   * @return 0 - success; otherwise - failed;
+   */
+-  virtual int EXTAPI ForceIntraFrame (bool bIDR, int iLayerId = -1) = 0;
++  virtual int EXTAPI ForceIntraFrame (bool bIDR) = 0;
+ 
+   /**
+   * @brief   Set option for encoder, detail option type, please refer to enumurate ENCODER_OPTION.
+diff --git a/codec/common/src/WelsThreadLib.cpp b/codec/common/src/WelsThreadLib.cpp
+index 4e44f24..59e669a 100644
+--- a/codec/common/src/WelsThreadLib.cpp
++++ b/codec/common/src/WelsThreadLib.cpp
+@@ -50,7 +50,7 @@
+ #include <unistd.h>
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/threading.h>
+-#elif !defined(__Fuchsia__)
++#elif !defined(__Fuchsia__) && !defined(__wasi__)
+ #include <sys/sysctl.h>
+ #endif
+ #ifdef __APPLE__
+@@ -236,7 +236,7 @@ WELS_THREAD_ERROR_CODE    WelsThreadCreate (WELS_THREAD_HANDLE* thread,  LPWELS_
+   err = pthread_attr_init (&at);
+   if (err)
+     return err;
+-#if !defined(__ANDROID__) && !defined(__Fuchsia__)
++#if !defined(__ANDROID__) && !defined(__Fuchsia__) && !defined(__wasi__)
+   err = pthread_attr_setscope (&at, PTHREAD_SCOPE_SYSTEM);
+   if (err)
+     return err;
+@@ -519,6 +519,11 @@ WELS_THREAD_ERROR_CODE    WelsQueryLogicalProcessInfo (WelsLogicalProcessInfo* p
+ 
+   pInfo->ProcessorCount = sysconf(_SC_NPROCESSORS_ONLN);
+   return WELS_THREAD_ERROR_OK;
++
++#elif defined(__wasi__)
++
++  pInfo->ProcessorCount = 1;   // WASI: single-threaded, no CPU enumeration
++  return WELS_THREAD_ERROR_OK;
+ #else
+ 
+   size_t len = sizeof (pInfo->ProcessorCount);
+diff --git a/codec/encoder/plus/inc/welsEncoderExt.h b/codec/encoder/plus/inc/welsEncoderExt.h
+index b281f8f..f9486ad 100644
+--- a/codec/encoder/plus/inc/welsEncoderExt.h
++++ b/codec/encoder/plus/inc/welsEncoderExt.h
+@@ -85,7 +85,7 @@ class CWelsH264SVCEncoder : public ISVCEncoder {
+   /*
+    * return: 0 - success; otherwise - failed;
+    */
+-  virtual int EXTAPI ForceIntraFrame (bool bIDR,int32_t iLayerId = -1);
++  virtual int EXTAPI ForceIntraFrame (bool bIDR);
+ 
+   /************************************************************************
+    * InDataFormat, IDRInterval, SVC Encode Param, Frame Rate, Bitrate,..
+diff --git a/codec/encoder/plus/src/welsEncoderExt.cpp b/codec/encoder/plus/src/welsEncoderExt.cpp
+index 7c85f23..f000240 100644
+--- a/codec/encoder/plus/src/welsEncoderExt.cpp
++++ b/codec/encoder/plus/src/welsEncoderExt.cpp
+@@ -484,13 +484,16 @@ int CWelsH264SVCEncoder::EncodeParameterSets (SFrameBSInfo* pBsInfo) {
+ /*
+  *  Force key frame
+  */
+-int CWelsH264SVCEncoder::ForceIntraFrame (bool bIDR, int iLayerId) {
++int CWelsH264SVCEncoder::ForceIntraFrame (bool bIDR) {
+   if (bIDR) {
+     if (! (m_pEncContext && m_bInitialFlag)) {
+       return 1;
+     }
+ 
+-    ForceCodingIDR (m_pEncContext, iLayerId);
++    // iLayerId hardcoded to -1 (all layers): the C ISVCEncoderVtbl that FFmpeg
++    // calls through is 2-arg, and a 3-arg C++ method trips wasm's strict
++    // indirect-call type check. -1 is upstream's default for this entry point.
++    ForceCodingIDR (m_pEncContext, -1);
+   } else {
+     WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_INFO,
+              "CWelsH264SVCEncoder::ForceIntraFrame(),nothing to do as bIDR set to false");

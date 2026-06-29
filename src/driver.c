@@ -39,9 +39,9 @@ static int report(void) {
            avcodec_version(), avformat_version(), avfilter_version());
 
     printf("encoders:\n");
-    const char *enc[] = {"libx264", "mjpeg", "aac", "flac", "pcm_s16le", NULL};
+    const char *enc[] = {"libopenh264", "libx264", "mjpeg", "aac", "flac", "pcm_s16le", NULL};
     for (int i = 0; enc[i]; i++) {
-        printf("  %-10s %s\n", enc[i], avcodec_find_encoder_by_name(enc[i]) ? "yes" : "no");
+        printf("  %-11s %s\n", enc[i], avcodec_find_encoder_by_name(enc[i]) ? "yes" : "no");
     }
 
     printf("decoders:\n");

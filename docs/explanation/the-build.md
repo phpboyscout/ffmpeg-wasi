@@ -56,6 +56,31 @@ This shim layer is small and explicit — and it's exactly the kind of porting w
 "owning a current FFmpeg build" means. It grows as new codecs/protocols pull in new corners
 of POSIX.
 
+## The openh264 dependency
+
+Both variants encode H.264 via [openh264](https://github.com/cisco/openh264) (the GPL variant
+additionally offers libx264). openh264 is C++ with a GNU-make build that doesn't know about wasm,
+so `build/deps.sh` cross-compiles it with a few deliberate overrides — `OS=linux` (steers the
+Makefile only; the C preprocessor never sees `__linux__` for wasm), `ARCH=generic USE_ASM=No`
+(portable C path), `USE_STACK_PROTECTOR=No`, and `-fno-exceptions -fno-rtti`. Three small wasm
+adaptations make it build and run, all in `build/openh264-wasi.patch`:
+
+- **No `<sys/sysctl.h>` / `SCHED_FIFO`** — wasip1 lacks both; the patch teaches `WelsThreadLib`
+  the `__wasi__` case (CPU count is simply 1).
+- **Single-threaded pthread/sem shim** (`build/openh264-threads.c`) — wasip1 has no thread
+  spawning. The encoder runs single-threaded (libav\* is `--disable-pthreads`, so FFmpeg requests
+  one thread), so the mutex/sem operations are no-op successes and `pthread_create` is never
+  reached. The shim is archived **into** `libopenh264.a` so it satisfies both FFmpeg's configure
+  probe and the final link.
+- **A 2-argument `ForceIntraFrame`** — openh264's C vtable (which FFmpeg calls through) declares
+  `ForceIntraFrame(self, bool)`, but its C++ method is `(bool, int iLayerId = -1)`. On native ABIs
+  the arity slip is harmless; wasm's strict indirect-call typing traps on it, so the patch drops
+  the parameter (hardcoding the upstream `-1` default).
+
+openh264's C++ runtime is pulled in at the engine link with `-lc++ -lc++abi`. The codec's
+*patent* posture (self-compiled → outside Cisco's grant) is a [licensing](licensing.md#h264-encode-and-the-avc-patent-pool)
+matter, not a build one.
+
 ## The artifact
 
 `build/driver.sh` links `src/driver.c` + the compat shims against the `libav*` archives into
