@@ -16,3 +16,5 @@ Understanding-oriented discussion.
   both is clean.
 - **[The build](the-build.md)** — wasi-sdk, the single-threaded `libav*` config,
   setjmp/longjmp lowering, and the POSIX/WASI compat shims.
+- **[Release signing](signing.md)** — the KMS key only the tag pipeline can wield, the detached
+  signature over `checksums.txt`, what it defends, and where the public key lives.
