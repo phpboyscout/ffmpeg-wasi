@@ -49,8 +49,13 @@ release (`nX.Y.Z-N`) publishes:
 |---|---|
 | `ffmpeg-wasi-lgpl.wasm` / `.gz` | the LGPL module (and gzipped) |
 | `ffmpeg-wasi-gpl.wasm` / `.gz` | the GPL module (and gzipped) |
-| `checksums.txt` | SHA-256 of every artifact — [verify before use](../how-to/choose-a-variant.md) |
+| `checksums.txt` | SHA-256 of every artifact (incl. `provenance.json`) — [verify before use](../how-to/choose-a-variant.md) |
+| `checksums.txt.sig` | a **detached signature** over `checksums.txt` — RSASSA-PSS-SHA256 from a release-signing key held in AWS KMS, signable only by this project's tag pipeline (GitLab OIDC). A JSON envelope naming the key-id; [afmpeg](https://gitlab.com/phpboyscout/afmpeg) verifies it offline against a pinned key |
 | `provenance.json` | exact FFmpeg/dependency/toolchain versions, configure line, per-asset licence |
+
+Because the signature covers `checksums.txt`, and `checksums.txt` covers every other
+asset (including `provenance.json`), one signature certifies the whole release. The private
+key never leaves KMS and no human can wield it — only the tagged-release CI job can sign.
 
 ## Versioning
 
