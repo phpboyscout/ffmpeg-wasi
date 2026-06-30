@@ -77,14 +77,13 @@ build:gpl:
     VARIANT: gpl
 
 # Sign the release manifest. Tag-gated; uses GitLab OIDC to assume the
-# ffmpeg-wasi signer role and `aws kms sign` checksums.txt (afmpeg spec 0010).
-# The signer role's trust policy (phpboyscout/infra) pins it to this project's
-# `n*` tag pipelines, so even a leaked AWS_ROLE_ARN is unusable elsewhere.
+# ffmpeg-wasi signer role, then `gtb` mints the OpenPGP public key from the KMS
+# key and signs checksums.txt with a detached OpenPGP signature (afmpeg spec
+# 0010, via gitlab.com/phpboyscout/signing). The signer role's trust policy
+# (phpboyscout/infra) pins it to this project's `n*` tag pipelines.
 sign:
   stage: sign
-  image:
-    name: amazon/aws-cli:latest
-    entrypoint: [""]
+  image: golang:1.26
   tags: [saas-linux-medium-amd64]
   rules:
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
@@ -101,20 +100,34 @@ sign:
     AWS_REGION: eu-west-2
     AWS_ROLE_ARN: arn:aws:iam::049815585546:role/ffmpeg-wasi-release-signing-v1-signer
     AWS_ROLE_SESSION_NAME: ffmpeg-wasi-release-${CI_COMMIT_TAG}
-    # Must be a job variable, not a before_script export — GitLab runs each
-    # script line in its own shell, so exports do not persist (the AWS CLI
-    # credential chain reads this path + AWS_ROLE_ARN to assume the role).
+    # A job variable, not a before_script export — GitLab runs each script line
+    # in its own shell, so exports don't persist (gtb's aws-kms backend reads
+    # this path + AWS_ROLE_ARN to assume the role via web-identity).
     AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/oidc-token
     SIGNING_KEY_ALIAS: alias/ffmpeg-wasi-release-signing-v1
+    # The OpenPGP UID + creation time are FIXED so every mint reproduces the same
+    # key fingerprint (710881C1DDAEABD138E53004A2166E59EB6060E1) — the one afmpeg
+    # pins. Changing any of these rotates the key.
+    SIGNING_KEY_NAME: ffmpeg-wasi Release Signing
+    SIGNING_KEY_EMAIL: ffmpeg-wasi-release@phpboyscout.uk
+    SIGNING_KEY_CREATED: "2026-06-30T00:00:00Z"
+    GTB_VERSION: v0.27.2
+    GOPRIVATE: gitlab.com/phpboyscout/*
   before_script:
+    # Install gtb from the private module registry (CI-token git auth), then
+    # stage the OIDC token for the AWS SDK credential chain.
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+    - go install "gitlab.com/phpboyscout/go-tool-base/cmd/gtb@${GTB_VERSION}"
     - echo "$AWS_WEB_IDENTITY_TOKEN" > "$AWS_WEB_IDENTITY_TOKEN_FILE"
   script:
+    - export PATH="$(go env GOPATH)/bin:$PATH"
     - sh build/sign-release.sh
   artifacts:
     paths:
       - checksums.txt
       - provenance.json
       - checksums.txt.sig
+      - release.asc # the OpenPGP public key, for the operator to publish via WKD (0011)
     expire_in: 1 week
 
 release:
@@ -148,7 +161,7 @@ release:
       release-cli create \
         --name "ffmpeg-wasi ${CI_COMMIT_TAG}" \
         --tag-name "${CI_COMMIT_TAG}" \
-        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI — **lgpl** (default; H.264 encode via openh264) and **gpl** (libx264 H.264 encode). Both encode H.264; the self-compiled openh264 carries an AVC patent caveat (see the licensing docs). The manifest is signed: \`checksums.txt.sig\` is a detached KMS RSASSA-PSS signature over \`checksums.txt\` (afmpeg verifies it against a pinned key). Pin a module by its URL + SHA-256 from \`checksums.txt\`; see \`provenance.json\` for exactly what went in." \
+        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI — **lgpl** (default; H.264 encode via openh264) and **gpl** (libx264 H.264 encode). Both encode H.264; the self-compiled openh264 carries an AVC patent caveat (see the licensing docs). The manifest is signed: \`checksums.txt.sig\` is a detached OpenPGP signature over \`checksums.txt\` from a KMS-held key (afmpeg verifies it via the org signing module against a pinned key). Pin a module by its URL + SHA-256 from \`checksums.txt\`; see \`provenance.json\` for exactly what went in." \
         --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-gpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-gpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm.gz\",\"link_type\":\"package\"}" \

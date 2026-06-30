@@ -20,21 +20,19 @@ signature covers `checksums.txt`, and `checksums.txt` covers everything else, **
 certifies the whole release**: verify the signature, then check any asset against its line in
 `checksums.txt`.
 
-`checksums.txt.sig` is a small JSON envelope:
-
-```json
-{ "key_id": "1698ceea…", "algorithm": "RSASSA_PSS_SHA_256", "signature": "<base64>" }
-```
-
-The `signature` is a raw RSASSA-PSS (SHA-256) signature; `key_id` names which key signed.
+`checksums.txt.sig` is an **ASCII-armored OpenPGP detached signature** — the same format the
+rest of the org uses (go-tool-base's `gtb update`), so any OpenPGP tool (`gpg --verify`, or
+[afmpeg](https://gitlab.com/phpboyscout/afmpeg) via the `gitlab.com/phpboyscout/signing` module)
+can verify it. The signature self-identifies the signing key by its fingerprint.
 
 ## How it is signed — only the tag pipeline can
 
 The signing key is an **asymmetric AWS KMS key** (RSA-4096, `SIGN_VERIFY`). Its **private half
-never leaves KMS** — there is no key file, and no human ever holds it. Signing happens only in
-the tag-gated `sign` CI job, which assumes an IAM role via **GitLab OIDC**; that role's trust
-policy is pinned to *this project's* release tags
-(`project_path:phpboyscout/ffmpeg-wasi:ref_type:tag:ref:n*`). So:
+never leaves KMS** — there is no key file, and no human ever holds it. The tag-gated `sign` CI
+job assumes an IAM role via **GitLab OIDC**, then runs **`gtb`** (the org signing CLI): `gtb keys
+mint` derives the OpenPGP public key from the KMS key, and `gtb sign` produces the detached
+signature — KMS performs every private-key operation. The role's trust policy is pinned to *this
+project's* release tags (`project_path:phpboyscout/ffmpeg-wasi:ref_type:tag:ref:n*`). So:
 
 - a leaked credential cannot sign — there is no static credential;
 - the infra apply pipeline cannot sign — it can manage the key resource but has no `kms:Sign`;
@@ -44,18 +42,19 @@ The key is provisioned in [phpboyscout/infra](https://gitlab.com/phpboyscout/inf
 (`src/main.signing-kms.tf`) and is **dedicated to ffmpeg-wasi** — not shared with any other
 project, so no other project's pipeline can ever produce an ffmpeg-wasi signature.
 
-## The public key
+## The keys
 
-The verifying key's **key-id** — the hex SHA-256 of its SubjectPublicKeyInfo DER, which is what
-`checksums.txt.sig` names — is:
+Two OpenPGP keys back the chain (the go-tool-base model):
 
-```
-1698ceea3728c7e5cc89288675e643c1e9b6110ae88575aeaa15148eb9630a76
-```
+- the **signing key** (`ffmpeg-wasi-release@phpboyscout.uk`), minted from the KMS key — OpenPGP
+  fingerprint `710881C1DDAEABD138E53004A2166E59EB6060E1`. Signs every release.
+- the **shared org rotation-authority key** (`release@phpboyscout.uk`,
+  `2B26658409047ED08B56CEBDCF5B8DBB5D9F19C2`) — an offline break-glass key that certifies the
+  signing key and authorises rotation. One per org, never used in normal operation.
 
-The primary consumer, [afmpeg](https://gitlab.com/phpboyscout/afmpeg), **embeds and pins this
-key**, so its `WithModuleRelease` verifies releases automatically — the trust root ships *inside*
-the verifying binary, which is stronger than any key fetched at runtime.
+The primary consumer, [afmpeg](https://gitlab.com/phpboyscout/afmpeg), **embeds and pins both**,
+so its `WithModuleRelease` verifies releases automatically — the trust root ships *inside* the
+verifying binary, which is stronger than any key fetched at runtime.
 
 Deliberately, the public key is **not** published in this repository: a key you fetch from the
 same platform that hosts the releases is not an independent anchor — a compromise of that
@@ -70,13 +69,15 @@ subject of afmpeg spec
 The signature defends against a swapped or tampered artifact: leaked credentials, a compromised
 apply runner, and non-release pipelines all **cannot** produce a valid signature.
 
-It does **not**, on its own, defend against a **compromised GitLab account that can push a
-tag** — that triggers the legitimate release pipeline, which would sign a malicious build with
-the real key. Closing that "poisoned well" needs a second, independent attestation rooted in a
-control plane GitLab cannot touch (the `phpboyscout.uk` domain); that is a committed fast-follow,
-tracked as afmpeg spec
-[0011](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0011-wkd-attestation.md).
-Stating the gap plainly is part of the posture.
+It does **not** defend against a **compromised GitLab account that can push a tag** — that
+triggers the legitimate release pipeline, which would sign a malicious build with the real key.
+**No signing scheme closes that "poisoned well"** — it is the domain of GitLab account hardening
+(protected tags, 2FA, required approvals) and reproducible builds, out of scope here. What the
+**WKD second anchor** (afmpeg spec
+[0011](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0011-wkd-attestation.md))
+*does* add is **key/registry-substitution defense**: afmpeg cross-checks its embedded key against
+a copy served from the `phpboyscout.uk` domain (a control plane independent of GitLab), so an
+attacker would have to compromise *both*. Stating the limit plainly is part of the posture.
 
 ## Rotation
 
@@ -87,5 +88,5 @@ dropped promptly.
 
 ## The tooling is MIT
 
-`build/sign-release.sh` only *orchestrates* — it shells `aws kms sign`. Like the rest of `build/`
-it is MIT, and it links nothing: the signature is over text, the key is in KMS.
+`build/sign-release.sh` only *orchestrates* — it shells `gtb keys mint` / `gtb sign`. Like the
+rest of `build/` it is MIT, and it links nothing: the signature is over text, the key is in KMS.

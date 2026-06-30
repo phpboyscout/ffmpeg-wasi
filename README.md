@@ -47,8 +47,8 @@ building**:
 | **`ffmpeg-wasi-lgpl.wasm`** | LGPL-2.1+ | openh264 (BSD) | the default — proprietary-compatible |
 | **`ffmpeg-wasi-gpl.wasm`** | GPL-2.0+ | libx264 (best quality) | when you want x264 and accept GPL |
 
-Plus a checksum manifest (`checksums.txt`), a **detached KMS signature** over it
-(`checksums.txt.sig` — signable only by this project's tag pipeline via GitLab OIDC, verified
+Plus a checksum manifest (`checksums.txt`), a **detached OpenPGP signature** over it
+(`checksums.txt.sig` — KMS-held key, signable only by this project's tag pipeline via GitLab OIDC, verified
 offline by afmpeg), and a provenance manifest (the exact FFmpeg + dependency + toolchain
 versions). Pin by URL + SHA-256. Both variants encode H.264; the self-compiled openh264 in the
 LGPL variant carries an AVC **patent** caveat — see [licensing](docs/explanation/licensing.md#h264-encode-and-the-avc-patent-pool).
