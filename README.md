@@ -32,9 +32,9 @@ pure-Go-embeddable.
 
 > **Status: it transcodes.** Current FFmpeg (n8.1.2) compiles to `wasm32-wasi` and runs
 > under wazero, and the engine does **real in-memory transcodes** — verified end-to-end:
-> WAV → AAC, and H.264 → scaled → H.264 (libx264, GPL variant). Both `probe` and `process`
-> (single input → single output) work today; the full multi-pad `filter_complex` and
-> multi-output muxing are next. Design:
+> WAV → AAC, and H.264 → scaled → H.264 (libx264, GPL variant). `probe` and `process` both
+> work, including the full **multi-input `filter_complex`** (N inputs → one graph) and
+> **multi-output muxing** (each graph pad routed by `map` to its own output file). Design:
 > [spec 0007](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
 
 ## What you get

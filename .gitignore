@@ -15,3 +15,4 @@
 
 # stray go build output
 /run
+dist-test  # local build output

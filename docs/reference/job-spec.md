@@ -15,11 +15,12 @@ is the **compatibility contract** between ffmpeg-wasi and [afmpeg](https://gitla
 it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
 !!! note "Status"
-    **`probe` and `process` both run today.** `process` supports **multiple inputs and the
-    full `filter_complex`** — pad labels (`[0:v]`, `[1:a]`, … → `[vout]`, `[aout]`) parsed by
-    `avfilter_graph_parse2`, each output pad encoded (video pads with `video_codec`, audio
-    pads with `audio_codec`) into one output file. With no `filter`, a passthrough graph is
-    generated for input 0. Multiple output *files* are a later increment. Shapes follow afmpeg
+    **`probe` and `process` both run today.** `process` supports **multiple inputs, the full
+    `filter_complex`, and multiple output files** — pad labels (`[0:v]`, `[1:a]`, … →
+    `[vout]`, `[aout]`) parsed by `avfilter_graph_parse2`; each graph output pad is routed by
+    `map` to the `outputs[]` entry that names it, encoded (video pads with `video_codec`,
+    audio pads with `audio_codec`) and muxed into that file. With no `filter`, a passthrough
+    graph is generated for input 0. Shapes follow afmpeg
     [spec 0007 §4](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
 
 ## Operations
@@ -45,6 +46,8 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 |---|---|
 | `inputs[]` | Each input's path (resolved against the mounted filesystem) + demuxer options. |
 | `filter` | The full ffmpeg `filter_complex` string — `[0:v]scale=…[vout];[1:a]…[aout]`. Optional (passthrough graph for input 0 if omitted). |
+| `outputs[]` | One **output file** each. With a single output, `map` may be omitted (every graph pad is muxed into it); with **multiple outputs, each must set `map`** to claim its pads. |
+| `outputs[].map` | The graph output pad labels (e.g. `["[loud]"]`) routed to this file. |
 | `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). The output container is chosen from the path extension. |
 | `outputs[].options` | String key/values passed to the encoder (e.g. `{"crf":"28"}`). |
 
@@ -68,9 +71,16 @@ Working examples (verified end-to-end):
 {"op":"process","inputs":[{"path":"a.mp4"},{"path":"b.mp4"}],
  "filter":"[0:v][1:v]xfade=transition=fade:duration=0.4:offset=2[vout]",
  "outputs":[{"path":"out.mp4","video_codec":"libx264"}]}
+
+// multi-output: split one source (asplit) into two files via `map`
+{"op":"process","inputs":[{"path":"tone.wav"}],
+ "filter":"[0:a]asplit=2[a1][a2];[a1]volume=0.9[loud];[a2]volume=0.1[quiet]",
+ "outputs":[{"path":"loud.mp4","map":["[loud]"],"audio_codec":"aac"},
+            {"path":"quiet.mp4","map":["[quiet]"],"audio_codec":"aac"}]}
 ```
 
-On success the engine prints what it wrote, e.g. `{"output":"out.mp4","streams":[{"type":"video","codec":"libx264"}]}`.
+On success the engine prints what it wrote, one entry per output file, e.g.
+`{"outputs":[{"path":"loud.mp4","streams":[{"type":"audio","codec":"aac"}]},{"path":"quiet.mp4","streams":[{"type":"audio","codec":"aac"}]}]}`.
 
 ### `probe` — report stream information
 
