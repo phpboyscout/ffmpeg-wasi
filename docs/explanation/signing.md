@@ -50,11 +50,14 @@ Two OpenPGP keys back the chain (the go-tool-base model):
   fingerprint `710881C1DDAEABD138E53004A2166E59EB6060E1`. Signs every release.
 - the **shared org rotation-authority key** (`release@phpboyscout.uk`,
   `2B26658409047ED08B56CEBDCF5B8DBB5D9F19C2`) — an offline break-glass key that certifies the
-  signing key and authorises rotation. One per org, never used in normal operation.
+  signing key and authorises rotation. One per org, never used in normal operation, and never a
+  release signer.
 
-The primary consumer, [afmpeg](https://gitlab.com/phpboyscout/afmpeg), **embeds and pins both**,
-so its `WithModuleRelease` verifies releases automatically — the trust root ships *inside* the
-verifying binary, which is stronger than any key fetched at runtime.
+The primary consumer, [afmpeg](https://gitlab.com/phpboyscout/afmpeg), **embeds and pins the
+signing key** (and cross-checks it against WKD), so its `WithModuleRelease` verifies releases
+automatically — the trust root ships *inside* the verifying binary, which is stronger than any key
+fetched at runtime. The rotation-authority key stays offline org infrastructure: it backs key
+rotation, not afmpeg's runtime trust set (afmpeg pins the signing key directly).
 
 Deliberately, the public key is **not** published in this repository: a key you fetch from the
 same platform that hosts the releases is not an independent anchor — a compromise of that
