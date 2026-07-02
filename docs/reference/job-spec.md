@@ -44,6 +44,7 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
 | Field | Meaning |
 |---|---|
+| `version` | The job-spec **vocabulary version** the spec is written in (integer; absent == 0, the pre-gate baseline). The engine rejects a spec whose `version` exceeds what it supports — see [Versioning](#versioning). |
 | `inputs[]` | Each input's path (resolved against the mounted filesystem) + demuxer options. |
 | `filter` | The full ffmpeg `filter_complex` string — `[0:v]scale=…[vout];[1:a]…[aout]`. Optional (passthrough graph for input 0 if omitted). |
 | `outputs[]` | One **output file** each. With a single output, `map` may be omitted (every graph pad is muxed into it); with **multiple outputs, each must set `map`** to claim its pads. |
@@ -97,6 +98,23 @@ WAV yields:
   "streams":[{"index":0,"type":"audio","codec":"pcm_s16le","sample_rate":8000,"channels":1}]}]}
 ```
 
+### `version` — report the vocabulary version
+
+```jsonc
+{ "op": "version" }
+```
+
+Prints the engine's highest supported vocabulary version + its FFmpeg build as JSON on
+stdout — the machine-readable channel a consumer preflights before running jobs. Needs no
+input, so it works before any media is mounted:
+
+```json
+{"vocab_version":1,"ffmpeg_version":"n8.1.2"}
+```
+
+This query carries no `version` of its own, so even an engine older than the consumer answers
+it (it is the negotiation channel, exempt from the gate).
+
 ## The `filter` field is ffmpeg's filtergraph syntax
 
 The one place we deliberately **don't** invent our own language. libavfilter ships a complete
@@ -112,6 +130,25 @@ non-zero exit code. afmpeg's runtime carries all of this over its filesystem bri
 
 ## Versioning
 
-The vocabulary carries a version. A consumer (afmpeg) records the engine artifact version +
-vocabulary version it was built against; a mismatch is caught rather than silently
-misbehaving.
+The vocabulary carries a **version** that increments additively — once per landed vocabulary
+spec, in merge order — so a new field never has to be guessed at by an older engine:
+
+| Version | Adds |
+|---|---|
+| 0 | The pre-gate baseline (no `version` field). |
+| 1 | Stream copy / bitstream filters / concat demuxer (afmpeg spec 0013). |
+
+**The gate (two sides):**
+
+- **Engine (runtime).** Every `process`/`probe` spec is stamped by the consumer with the
+  `version` it was written in. If that exceeds the engine's `AFMPEG_VOCAB_VERSION`, the engine
+  rejects the whole spec — stderr message + a **distinct exit code `3`** (`version-too-new`, so a
+  caller can tell "upgrade the engine" from the malformed-spec code `2`) — rather than silently
+  dropping the fields it doesn't understand.
+- **Consumer (preflight).** afmpeg reads `op:"version"` once at construction and fails loudly if
+  the module is a gated engine older than the vocabulary it emits, turning a would-be silent
+  field-drop at first job into a clear startup error. A module that doesn't answer `op:"version"`
+  (a pre-gate engine, or a generic non-ffmpeg-wasi module) is tolerated — it carries no
+  vocabulary contract to check.
+
+The engine's current version is in the `--report` output and via `op:"version"`.

@@ -11,6 +11,7 @@
 // It reads a structured JSON job spec as argv[1] and dispatches on "op":
 //   {"op":"probe","inputs":[{"path":"in/clip.mp4"}]}   → stream info as JSON
 //   {"op":"process", ...}                              → transcode/filter/mux
+//   {"op":"version"}                                   → engine vocab version JSON
 // Paths resolve against the mounted WASI filesystem. Results go to stdout;
 // errors to stderr with a non-zero exit. See the reference docs (job-spec.md).
 //
@@ -30,10 +31,24 @@
 #include "third_party/cJSON/cJSON.h"
 #include "process.h"
 
+// AFMPEG_VOCAB_VERSION is the highest job-spec vocabulary version this engine
+// understands (spec 0007 §4 contract; afmpeg roadmap Phase 1 version-gating).
+// It increments additively, once per landed vocabulary spec, in merge order:
+//   1 — stream copy / bitstream filters / concat demuxer (spec 0013)
+// A spec whose "version" exceeds this is rejected in main() rather than having
+// its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
+#define AFMPEG_VOCAB_VERSION 1
+
+// EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
+// distinct from a malformed spec (2) so a caller can tell "upgrade the engine"
+// from "fix the spec".
+#define EXIT_VERSION_TOO_NEW 3
+
 // ---- capability report (build smoke test) -------------------------------
 
 static int report(void) {
     printf("ffmpeg-wasi engine\n");
+    printf("vocab_version: %d\n", AFMPEG_VOCAB_VERSION);
     printf("ffmpeg: %s\n", av_version_info());
     printf("libavcodec %u  libavformat %u  libavfilter %u\n",
            avcodec_version(), avformat_version(), avfilter_version());
@@ -132,6 +147,22 @@ static int op_probe(const cJSON *spec) {
 
 // ---- dispatch -----------------------------------------------------------
 
+// op_version reports the engine's job-spec vocabulary version as JSON on stdout,
+// the machine-readable channel afmpeg preflights at New() to detect a module too
+// old for the vocabulary it emits. Needs no input, so it works before any job.
+static int op_version(void) {
+    cJSON *out = cJSON_CreateObject();
+    cJSON_AddNumberToObject(out, "vocab_version", AFMPEG_VOCAB_VERSION);
+    cJSON_AddStringToObject(out, "ffmpeg_version", av_version_info());
+    char *json = cJSON_PrintUnformatted(out);
+    if (json) {
+        printf("%s\n", json);
+        free(json);
+    }
+    cJSON_Delete(out);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--report") == 0) {
         return report();
@@ -143,12 +174,25 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    // Version gate: reject a spec that declares a vocabulary newer than this
+    // engine understands, rather than silently dropping its unknown fields
+    // (afmpeg stamps "version"; absent == 0, the pre-gate baseline).
+    const cJSON *ver = cJSON_GetObjectItemCaseSensitive(spec, "version");
+    if (cJSON_IsNumber(ver) && ver->valueint > AFMPEG_VOCAB_VERSION) {
+        fprintf(stderr, "ffmpeg-wasi: job spec vocabulary version %d newer than this engine supports (%d); upgrade ffmpeg-wasi\n",
+                ver->valueint, AFMPEG_VOCAB_VERSION);
+        cJSON_Delete(spec);
+        return EXIT_VERSION_TOO_NEW;
+    }
+
     const char *op = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "op"));
     int rc;
     if (op && strcmp(op, "probe") == 0) {
         rc = op_probe(spec);
     } else if (op && strcmp(op, "process") == 0) {
         rc = op_process(spec);
+    } else if (op && strcmp(op, "version") == 0) {
+        rc = op_version();
     } else {
         fprintf(stderr, "ffmpeg-wasi: unknown op %s\n", op ? op : "(none)");
         rc = 2;
