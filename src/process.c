@@ -349,9 +349,14 @@ static int parse_output(Out *o, const cJSON *spec) {
         fprintf(stderr, "ffmpeg-wasi: process: each output needs path and a video and/or audio codec\n");
         return 2;
     }
+    // Guard the container type before walking it: a malformed but trusted spec
+    // whose "options" is not an object (e.g. a string) is ignored, not iterated
+    // unpredictably (spec 0027 §4C, defence-in-depth on trusted input).
     const cJSON *opts = cJSON_GetObjectItemCaseSensitive(spec, "options"), *kv = NULL;
-    cJSON_ArrayForEach(kv, opts) {
-        if (cJSON_IsString(kv)) av_dict_set(&o->enc_opts, kv->string, kv->valuestring, 0);
+    if (cJSON_IsObject(opts)) {
+        cJSON_ArrayForEach(kv, opts) {
+            if (cJSON_IsString(kv)) av_dict_set(&o->enc_opts, kv->string, kv->valuestring, 0);
+        }
     }
     avformat_alloc_output_context2(&o->ofmt, NULL, NULL, o->path);
     if (!o->ofmt) {
