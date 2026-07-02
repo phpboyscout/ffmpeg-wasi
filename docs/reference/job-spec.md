@@ -46,11 +46,13 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 |---|---|
 | `version` | The job-spec **vocabulary version** the spec is written in (integer; absent == 0, the pre-gate baseline). The engine rejects a spec whose `version` exceeds what it supports — see [Versioning](#versioning). |
 | `inputs[]` | Each input's path (resolved against the mounted filesystem) + demuxer options. |
+| `inputs[].concat` | *(v2)* An array of like-codec file paths joined into one continuous input via the **concat demuxer** (a stream-copy join; distinct from the `concat` filter, which re-encodes). When set, replaces `path`. |
 | `filter` | The full ffmpeg `filter_complex` string — `[0:v]scale=…[vout];[1:a]…[aout]`. Optional (passthrough graph for input 0 if omitted). |
 | `outputs[]` | One **output file** each. With a single output, `map` may be omitted (every graph pad is muxed into it); with **multiple outputs, each must set `map`** to claim its pads. |
-| `outputs[].map` | The graph output pad labels (e.g. `["[loud]"]`) routed to this file. |
-| `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). The output container is chosen from the path extension. |
+| `outputs[].map` | What to mux into this file — either graph output pad labels (bracketed, `["[loud]"]`, encoded) **or** *(v2)* input-stream specifiers (unbracketed: `"0:v"`, `"0:a:0"`, `"0:0"`, **stream-copied**). |
+| `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). *(v2)* The sentinel **`"copy"`** stream-copies the mapped input stream — no decode/encode, needs no codec, works for any codec in either variant. The output container is chosen from the path extension. |
 | `outputs[].options` | String key/values passed to the encoder (e.g. `{"crf":"28"}`). |
+| `outputs[].bitstream_filters` | *(v2)* Per copied stream, keyed by its `map` entry: a bitstream-filter name/chain (e.g. `{"0:v":"h264_mp4toannexb"}`), or `"none"` to force-disable. Absent → the muxer auto-inserts any container-required filter. |
 
 Working examples (verified end-to-end):
 
@@ -78,6 +80,18 @@ Working examples (verified end-to-end):
  "filter":"[0:a]asplit=2[a1][a2];[a1]volume=0.9[loud];[a2]volume=0.1[quiet]",
  "outputs":[{"path":"loud.mp4","map":["[loud]"],"audio_codec":"aac"},
             {"path":"quiet.mp4","map":["[quiet]"],"audio_codec":"aac"}]}
+
+// v2 — remux, no re-encode (both streams stream-copied)
+{"op":"process","version":2,"inputs":[{"path":"in.mp4"}],
+ "outputs":[{"path":"out.mkv","map":["0:v","0:a"],"video_codec":"copy","audio_codec":"copy"}]}
+
+// v2 — mixed: copy the video, re-encode only the audio
+{"op":"process","version":2,"inputs":[{"path":"in.mp4"}],"filter":"[0:a]loudnorm[aout]",
+ "outputs":[{"path":"out.mp4","map":["0:v","[aout]"],"video_codec":"copy","audio_codec":"aac"}]}
+
+// v2 — stream-copy join of like-codec segments via the concat demuxer
+{"op":"process","version":2,"inputs":[{"concat":["a.ts","b.ts","c.ts"]}],
+ "outputs":[{"path":"joined.ts","map":["0:v","0:a"],"video_codec":"copy","audio_codec":"copy"}]}
 ```
 
 On success the engine prints what it wrote, one entry per output file, e.g.
@@ -136,7 +150,8 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | Version | Adds |
 |---|---|
 | 0 | The pre-gate baseline (no `version` field). |
-| 1 | Stream copy / bitstream filters / concat demuxer (afmpeg spec 0013). |
+| 1 | Baseline + the version gate (`op:version`); no process/probe field changes. |
+| 2 | Stream copy / bitstream filters / concat demuxer (afmpeg spec 0013): the `copy` codec sentinel, unbracketed `in:type[:idx]` map specifiers, `outputs[].bitstream_filters`, `inputs[].concat`. |
 
 **The gate (two sides):**
 

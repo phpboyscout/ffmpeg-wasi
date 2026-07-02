@@ -34,10 +34,12 @@
 // AFMPEG_VOCAB_VERSION is the highest job-spec vocabulary version this engine
 // understands (spec 0007 §4 contract; afmpeg roadmap Phase 1 version-gating).
 // It increments additively, once per landed vocabulary spec, in merge order:
-//   1 — stream copy / bitstream filters / concat demuxer (spec 0013)
+//   1 — baseline + the version gate (op:version); no process/probe field changes
+//   2 — stream copy / bitstream filters (spec 0013): the "copy" codec sentinel,
+//       "in:type[:idx]" map specifiers, and outputs[].bitstream_filters
 // A spec whose "version" exceeds this is rejected in main() rather than having
 // its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
-#define AFMPEG_VOCAB_VERSION 1
+#define AFMPEG_VOCAB_VERSION 2
 
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"

@@ -20,6 +20,7 @@
 #include <libavutil/avstring.h>
 #include <libavutil/opt.h>
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavformat/avformat.h>
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersrc.h>
@@ -31,6 +32,11 @@
 #define MAX_GIN 32
 #define MAX_GOUT 16
 #define MAX_OUTPUTS 8
+#define MAX_CPY 32
+
+// COPY_CODEC is the codec sentinel that marks a mapped stream for packet
+// passthrough (no decode/encode) — mirrors ffmpeg's `-c copy` (spec 0013).
+#define COPY_CODEC "copy"
 
 // One graph input: a decoded input stream feeding a buffersrc.
 typedef struct {
@@ -47,8 +53,22 @@ typedef struct {
     const char *vcodec;
     const char *acodec;
     AVDictionary *enc_opts;
-    const cJSON *map; // array of "[label]" strings; NULL/empty → take all pads
+    const cJSON *map; // array of "[label]" (graph pads) / "in:type[:idx]" (copy) strings
+    const cJSON *bsf; // "bitstream_filters" object: map-key → bsf name/chain or "none"
 } Out;
+
+// One copied stream: an input (input, stream) wired straight to an output stream,
+// bypassing the decode/filter/encode path — read → optional bitstream filter →
+// interleaved mux (spec 0013). map_key is the "in:type[:idx]" entry it came from,
+// used to look up an explicit bitstream-filter override.
+typedef struct {
+    int in_idx;
+    int st_idx;
+    int out_idx;
+    const char *map_key;
+    AVStream *ost;
+    AVBSFContext *bsf; // NULL → passthrough (any container-required BSF is the muxer's job)
+} Cpy;
 
 // One graph output pad: a buffersink encoded into a stream of output out_idx.
 typedef struct {
@@ -68,6 +88,8 @@ typedef struct {
     int n_gin;
     GOut gout[MAX_GOUT];
     int n_gout;
+    Cpy cpy[MAX_CPY];
+    int n_cpy;
     Out out[MAX_OUTPUTS];
     int n_out;
 } Ctx;
@@ -81,6 +103,56 @@ static int parse_input_pad(const char *name, int *in_idx, enum AVMediaType *type
     else if (t == 'a' || t == 'A') *type = AVMEDIA_TYPE_AUDIO;
     else return -1;
     return 0;
+}
+
+// is_graph_pad reports whether a `map` entry is a bracketed graph-pad label
+// ("[vout]") — as opposed to an unbracketed input-stream specifier ("0:v").
+static int is_graph_pad(const char *entry) {
+    return entry && entry[0] == '[';
+}
+
+// parse_map_stream reads an unbracketed input-stream specifier into an input
+// index + a selector. Forms: "N:v"/"N:a" (best stream of that type), "N:v:K"
+// (the K-th stream of that type), and "N:D" (absolute stream index D). Returns 0
+// on a match, -1 for a bracketed pad or an unparseable entry. On return either
+// *type is set (with *sel the type-relative index, -1 for best) or *type is
+// UNKNOWN and *sel is the absolute stream index.
+static int parse_map_stream(const char *s, int *in_idx, enum AVMediaType *type, int *sel) {
+    if (is_graph_pad(s)) return -1;
+
+    char t = 0;
+    int k = -1;
+    if (sscanf(s, "%d:%c:%d", in_idx, &t, &k) >= 2 && (t == 'v' || t == 'V' || t == 'a' || t == 'A')) {
+        *type = (t == 'v' || t == 'V') ? AVMEDIA_TYPE_VIDEO : AVMEDIA_TYPE_AUDIO;
+        *sel = k;
+        return 0;
+    }
+
+    int n = 0, d = 0;
+    if (sscanf(s, "%d:%d", &n, &d) == 2) {
+        *in_idx = n;
+        *type = AVMEDIA_TYPE_UNKNOWN;
+        *sel = d;
+        return 0;
+    }
+
+    return -1;
+}
+
+// resolve_map_stream turns a parsed selector into a concrete stream index within
+// the input: an absolute index (type UNKNOWN), the best stream of a type
+// (sel < 0), or the sel-th stream of a type.
+static int resolve_map_stream(AVFormatContext *fmt, enum AVMediaType type, int sel) {
+    if (type == AVMEDIA_TYPE_UNKNOWN) {
+        return (sel >= 0 && (unsigned)sel < fmt->nb_streams) ? sel : AVERROR_STREAM_NOT_FOUND;
+    }
+    if (sel < 0) return av_find_best_stream(fmt, type, -1, -1, NULL, 0);
+
+    int count = 0;
+    for (unsigned i = 0; i < fmt->nb_streams; i++) {
+        if (fmt->streams[i]->codecpar->codec_type == type && count++ == sel) return (int)i;
+    }
+    return AVERROR_STREAM_NOT_FOUND;
 }
 
 // label_matches reports whether a `map` entry (optionally bracketed, "[vout]")
@@ -331,9 +403,12 @@ static void build_default_graph(Ctx *c, char *out, size_t n) {
     const char *vcodec = c->out[0].vcodec, *acodec = c->out[0].acodec;
     int has_v = av_find_best_stream(c->in[0], AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0) >= 0;
     int has_a = av_find_best_stream(c->in[0], AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0) >= 0;
+    // A copied stream (codec == "copy") bypasses the graph, so it gets no pad.
+    int copy_v = vcodec && strcmp(vcodec, COPY_CODEC) == 0;
+    int copy_a = acodec && strcmp(acodec, COPY_CODEC) == 0;
     char tmp[256] = "";
-    if (vcodec && has_v) av_strlcatf(tmp, sizeof(tmp), "[0:v]null[v];");
-    if (acodec && has_a) av_strlcatf(tmp, sizeof(tmp), "[0:a]anull[a];");
+    if (vcodec && !copy_v && has_v) av_strlcatf(tmp, sizeof(tmp), "[0:v]null[v];");
+    if (acodec && !copy_a && has_a) av_strlcatf(tmp, sizeof(tmp), "[0:a]anull[a];");
     size_t len = strlen(tmp);
     if (len && tmp[len - 1] == ';') tmp[len - 1] = 0;  // trim trailing ';'
     av_strlcpy(out, tmp, n);
@@ -345,6 +420,7 @@ static int parse_output(Out *o, const cJSON *spec) {
     o->vcodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "video_codec"));
     o->acodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "audio_codec"));
     o->map = cJSON_GetObjectItemCaseSensitive(spec, "map");
+    o->bsf = cJSON_GetObjectItemCaseSensitive(spec, "bitstream_filters");
     if (!o->path || (!o->vcodec && !o->acodec)) {
         fprintf(stderr, "ffmpeg-wasi: process: each output needs path and a video and/or audio codec\n");
         return 2;
@@ -364,6 +440,216 @@ static int parse_output(Out *o, const cJSON *spec) {
         return -1;
     }
     return 0;
+}
+
+// add_copy_descriptors scans every output's `map` for unbracketed input-stream
+// specifiers ("0:v", "0:a:0", "0:0") and records a Cpy for each — the streams
+// passed through verbatim rather than routed through the filter graph (spec 0013).
+static int add_copy_descriptors(Ctx *c) {
+    for (int oi = 0; oi < c->n_out; oi++) {
+        const cJSON *m = NULL;
+        cJSON_ArrayForEach(m, c->out[oi].map) {
+            if (!cJSON_IsString(m) || is_graph_pad(m->valuestring)) continue;
+            if (c->n_cpy >= MAX_CPY) {
+                fprintf(stderr, "ffmpeg-wasi: process: too many copied streams\n");
+                return AVERROR(EINVAL);
+            }
+
+            int in_idx = 0, sel = 0;
+            enum AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
+            if (parse_map_stream(m->valuestring, &in_idx, &type, &sel) < 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: cannot parse map entry %s\n", m->valuestring);
+                return AVERROR(EINVAL);
+            }
+            if (in_idx < 0 || in_idx >= c->n_in) {
+                fprintf(stderr, "ffmpeg-wasi: process: map %s references input %d, only %d given\n",
+                        m->valuestring, in_idx, c->n_in);
+                return AVERROR(EINVAL);
+            }
+
+            int st = resolve_map_stream(c->in[in_idx], type, sel);
+            if (st < 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: map %s selects no stream\n", m->valuestring);
+                return st;
+            }
+
+            Cpy *cp = &c->cpy[c->n_cpy++];
+            cp->in_idx = in_idx;
+            cp->st_idx = st;
+            cp->out_idx = oi;
+            cp->map_key = m->valuestring;
+            cp->ost = NULL;
+            cp->bsf = NULL;
+        }
+    }
+    return 0;
+}
+
+// setup_copy_stream creates the output stream for one copied input stream, copies
+// its codec parameters, and — if the output's `bitstream_filters` names one for
+// this map key — allocates and initialises that BSF (taking its adjusted
+// parameters onto the output stream). "none" force-disables; an absent entry
+// leaves any container-required BSF to the muxer's own auto-insertion.
+static int setup_copy_stream(Ctx *c, Cpy *cp) {
+    Out *out = &c->out[cp->out_idx];
+    AVStream *ist = c->in[cp->in_idx]->streams[cp->st_idx];
+
+    cp->ost = avformat_new_stream(out->ofmt, NULL);
+    if (!cp->ost) return AVERROR(ENOMEM);
+
+    int ret = avcodec_parameters_copy(cp->ost->codecpar, ist->codecpar);
+    if (ret < 0) return ret;
+    cp->ost->codecpar->codec_tag = 0; // let the muxer pick a tag valid for its container
+    cp->ost->time_base = ist->time_base;
+
+    const char *bsf_spec = NULL;
+    if (cJSON_IsObject(out->bsf)) {
+        const cJSON *b = cJSON_GetObjectItemCaseSensitive(out->bsf, cp->map_key);
+        if (cJSON_IsString(b)) bsf_spec = b->valuestring;
+    }
+    if (!bsf_spec || strcmp(bsf_spec, "none") == 0) return 0;
+
+    ret = av_bsf_list_parse_str(bsf_spec, &cp->bsf);
+    if (ret < 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: bad bitstream filter %s\n", bsf_spec);
+        return ret;
+    }
+    if ((ret = avcodec_parameters_copy(cp->bsf->par_in, ist->codecpar)) < 0) return ret;
+    cp->bsf->time_base_in = ist->time_base;
+    if ((ret = av_bsf_init(cp->bsf)) < 0) return ret;
+    if ((ret = avcodec_parameters_copy(cp->ost->codecpar, cp->bsf->par_out)) < 0) return ret;
+    cp->ost->codecpar->codec_tag = 0;
+    return 0;
+}
+
+// write_copy_pkt rescales a copied packet to the output timebase and interleaves
+// it into the muxer (which takes ownership of pkt).
+static int write_copy_pkt(AVFormatContext *ofmt, AVStream *ost, AVRational src_tb, AVPacket *pkt) {
+    av_packet_rescale_ts(pkt, src_tb, ost->time_base);
+    pkt->stream_index = ost->index;
+    pkt->pos = -1;
+    return av_interleaved_write_frame(ofmt, pkt);
+}
+
+// copy_one passes one source packet to a single copy target: through its BSF (a
+// drain loop) or verbatim, then muxed. Works on a private ref so the same source
+// packet can fan out to several copy targets and decoders.
+static int copy_one(Ctx *c, Cpy *cp, const AVPacket *src) {
+    AVFormatContext *ofmt = c->out[cp->out_idx].ofmt;
+    AVRational src_tb = c->in[cp->in_idx]->streams[cp->st_idx]->time_base;
+
+    AVPacket *pkt = av_packet_alloc();
+    if (!pkt) return AVERROR(ENOMEM);
+
+    int ret = av_packet_ref(pkt, src);
+    if (ret < 0) { av_packet_free(&pkt); return ret; }
+
+    if (!cp->bsf) {
+        ret = write_copy_pkt(ofmt, cp->ost, src_tb, pkt); // consumes pkt
+        av_packet_free(&pkt);
+        return ret;
+    }
+
+    ret = av_bsf_send_packet(cp->bsf, pkt); // consumes pkt
+    if (ret < 0) { av_packet_free(&pkt); return ret; }
+    while ((ret = av_bsf_receive_packet(cp->bsf, pkt)) == 0) {
+        ret = write_copy_pkt(ofmt, cp->ost, cp->bsf->time_base_out, pkt);
+        if (ret < 0) break;
+    }
+    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) ret = 0;
+    av_packet_free(&pkt);
+    return ret;
+}
+
+// copy_packet routes one input packet to every copy target fed by that
+// (input, stream) — independent of the decode path, so a stream may be both
+// copied and filtered (a tee).
+static int copy_packet(Ctx *c, int in_idx, const AVPacket *pkt) {
+    for (int i = 0; i < c->n_cpy; i++) {
+        if (c->cpy[i].in_idx != in_idx || c->cpy[i].st_idx != pkt->stream_index) continue;
+        int ret = copy_one(c, &c->cpy[i], pkt);
+        if (ret < 0) return ret;
+    }
+    return 0;
+}
+
+// flush_copy_bsfs drains any bitstream filters at end of stream (send NULL), so a
+// BSF that buffers (e.g. extradata extraction) emits its tail before the trailer.
+static int flush_copy_bsfs(Ctx *c) {
+    int ret = 0;
+    for (int i = 0; i < c->n_cpy && ret >= 0; i++) {
+        Cpy *cp = &c->cpy[i];
+        if (!cp->bsf) continue;
+
+        AVFormatContext *ofmt = c->out[cp->out_idx].ofmt;
+        av_bsf_send_packet(cp->bsf, NULL);
+
+        AVPacket *pkt = av_packet_alloc();
+        if (!pkt) return AVERROR(ENOMEM);
+        while (av_bsf_receive_packet(cp->bsf, pkt) == 0) {
+            if ((ret = write_copy_pkt(ofmt, cp->ost, cp->bsf->time_base_out, pkt)) < 0) break;
+        }
+        av_packet_free(&pkt);
+    }
+    return ret;
+}
+
+// open_concat_input joins a playlist of like-codec files as one continuous input
+// via the concat *demuxer* (distinct from the concat filter, which re-encodes).
+// It materialises an ffconcat list in the /tmp scratch overlay referencing each
+// segment by absolute path, then opens it with the concat demuxer (spec 0013 §3.2).
+// safe=0 permits the absolute paths — the playlist comes from the trusted job
+// spec, not the untrusted media.
+static int open_concat_input(AVFormatContext **out, const cJSON *concat, int idx) {
+    char listpath[64];
+    snprintf(listpath, sizeof(listpath), "/tmp/afmpeg-concat-%d.txt", idx);
+
+    FILE *lf = fopen(listpath, "w");
+    if (!lf) {
+        fprintf(stderr, "ffmpeg-wasi: process: cannot create concat list\n");
+        return AVERROR(EIO);
+    }
+    const cJSON *seg = NULL;
+    cJSON_ArrayForEach(seg, concat) {
+        const char *s = cJSON_GetStringValue(seg);
+        if (!s) { fclose(lf); return AVERROR(EINVAL); }
+        fprintf(lf, "file '/%s'\n", s[0] == '/' ? s + 1 : s); // absolute → location-independent
+    }
+    fclose(lf);
+
+    const AVInputFormat *cf = av_find_input_format("concat");
+    if (!cf) {
+        fprintf(stderr, "ffmpeg-wasi: process: concat demuxer not built\n");
+        return AVERROR_DEMUXER_NOT_FOUND;
+    }
+
+    AVDictionary *opts = NULL;
+    av_dict_set(&opts, "safe", "0", 0);
+    av_dict_set(&opts, "protocol_whitelist", "file,pipe", 0);
+    int rc = avformat_open_input(out, listpath, cf, &opts);
+    av_dict_free(&opts);
+    if (rc < 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: cannot open concat playlist\n");
+        return rc;
+    }
+    return avformat_find_stream_info(*out, NULL);
+}
+
+// open_one_input opens a single `inputs[]` entry: a concat playlist when it has a
+// `concat` array, otherwise a plain `path`.
+static int open_one_input(AVFormatContext **out, const cJSON *in, int idx) {
+    const cJSON *concat = cJSON_GetObjectItemCaseSensitive(in, "concat");
+    if (cJSON_IsArray(concat) && cJSON_GetArraySize(concat) > 0) {
+        return open_concat_input(out, concat, idx);
+    }
+
+    const char *p = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(in, "path"));
+    int rc = avformat_open_input(out, p, NULL, NULL);
+    if (rc < 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: cannot open input %s\n", p ? p : "(null)");
+        return rc;
+    }
+    return avformat_find_stream_info(*out, NULL);
 }
 
 int op_process(const cJSON *spec) {
@@ -395,19 +681,21 @@ int op_process(const cJSON *spec) {
         }
     }
 
-    // Open every input.
+    // Open every input (a plain path, or a concat-demuxer playlist).
     const cJSON *in = NULL;
     cJSON_ArrayForEach(in, inputs) {
         if (c.n_in >= MAX_INPUTS) { rc = AVERROR(EINVAL); goto end; }
-        const char *p = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(in, "path"));
-        if ((rc = avformat_open_input(&c.in[c.n_in], p, NULL, NULL)) < 0) {
-            fprintf(stderr, "ffmpeg-wasi: process: cannot open input %s\n", p ? p : "(null)"); goto end;
-        }
-        if ((rc = avformat_find_stream_info(c.in[c.n_in], NULL)) < 0) goto end;
+        if ((rc = open_one_input(&c.in[c.n_in], in, c.n_in)) < 0) goto end;
         c.n_in++;
     }
 
-    // The filter graph: the spec's filter, or a generated passthrough (single output).
+    // Copy streams: unbracketed map entries ("0:v") pass through verbatim,
+    // bypassing the graph/decoder/encoder (spec 0013).
+    if ((rc = add_copy_descriptors(&c)) < 0) goto end;
+
+    // The filter graph: the spec's filter, or a generated passthrough. A pure-copy
+    // (remux) job needs no graph — build/parse it only when a pad is required (an
+    // empty default graph means every requested stream is copied).
     char autograph[512];
     const char *graph_str = filter;
     if (!graph_str || !*graph_str) {
@@ -415,39 +703,47 @@ int op_process(const cJSON *spec) {
         graph_str = autograph;
     }
 
-    c.graph = avfilter_graph_alloc();
-    AVFilterInOut *gin = NULL, *gout = NULL;
-    if ((rc = avfilter_graph_parse2(c.graph, graph_str, &gin, &gout)) < 0) {
-        fprintf(stderr, "ffmpeg-wasi: process: bad filtergraph %s\n", graph_str); goto end;
-    }
-    // Wire a buffersrc onto each graph input pad.
-    for (AVFilterInOut *p = gin; p; p = p->next) {
-        int in_idx; enum AVMediaType type;
-        if (parse_input_pad(p->name, &in_idx, &type) < 0) {
-            fprintf(stderr, "ffmpeg-wasi: process: cannot map graph input pad %s (expected N:v / N:a)\n", p->name);
-            rc = AVERROR(EINVAL); avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
+    if (graph_str && *graph_str) {
+        c.graph = avfilter_graph_alloc();
+        AVFilterInOut *gin = NULL, *gout = NULL;
+        if ((rc = avfilter_graph_parse2(c.graph, graph_str, &gin, &gout)) < 0) {
+            fprintf(stderr, "ffmpeg-wasi: process: bad filtergraph %s\n", graph_str); goto end;
         }
-        if ((rc = add_buffersrc(&c, p, type, in_idx)) < 0) {
-            avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
+        // Wire a buffersrc onto each graph input pad.
+        for (AVFilterInOut *p = gin; p; p = p->next) {
+            int in_idx; enum AVMediaType type;
+            if (parse_input_pad(p->name, &in_idx, &type) < 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: cannot map graph input pad %s (expected N:v / N:a)\n", p->name);
+                rc = AVERROR(EINVAL); avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
+            }
+            if ((rc = add_buffersrc(&c, p, type, in_idx)) < 0) {
+                avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
+            }
         }
-    }
-    // Wire a buffersink onto each graph output pad, routed to its mapped output.
-    for (AVFilterInOut *p = gout; p; p = p->next) {
-        if (c.n_gout >= MAX_GOUT) { rc = AVERROR(EINVAL); avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end; }
-        if ((rc = add_buffersink(&c, p)) < 0) {
-            avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
+        // Wire a buffersink onto each graph output pad, routed to its mapped output.
+        for (AVFilterInOut *p = gout; p; p = p->next) {
+            if (c.n_gout >= MAX_GOUT) { rc = AVERROR(EINVAL); avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end; }
+            if ((rc = add_buffersink(&c, p)) < 0) {
+                avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
+            }
         }
-    }
-    avfilter_inout_free(&gin);
-    avfilter_inout_free(&gout);
+        avfilter_inout_free(&gin);
+        avfilter_inout_free(&gout);
 
-    if ((rc = avfilter_graph_config(c.graph, NULL)) < 0) {
-        fprintf(stderr, "ffmpeg-wasi: process: filtergraph config failed\n"); goto end;
+        if ((rc = avfilter_graph_config(c.graph, NULL)) < 0) {
+            fprintf(stderr, "ffmpeg-wasi: process: filtergraph config failed\n"); goto end;
+        }
+
+        // Encoders + output streams from the negotiated sink formats.
+        for (int i = 0; i < c.n_gout; i++) {
+            if ((rc = open_encoder(&c, &c.gout[i])) < 0) goto end;
+        }
     }
 
-    // Encoders + output streams from the negotiated sink formats.
-    for (int i = 0; i < c.n_gout; i++) {
-        if ((rc = open_encoder(&c, &c.gout[i])) < 0) goto end;
+    // Copy output streams (params + optional bitstream filter), added to their
+    // muxers before write_header alongside any encoded streams.
+    for (int i = 0; i < c.n_cpy; i++) {
+        if ((rc = setup_copy_stream(&c, &c.cpy[i])) < 0) goto end;
     }
 
     // Open + write the header for every output (each may have AVFMT_NOFILE).
@@ -487,12 +783,14 @@ int op_process(const cJSON *spec) {
                 continue;
             }
             rc = feed(&c, i, pkt, frame);
+            if (rc >= 0) rc = copy_packet(&c, i, pkt); // passthrough, independent of decode
             av_packet_unref(pkt);
         }
     }
-    // Final graph drain + encoder flush.
+    // Final graph drain + encoder flush + bitstream-filter flush.
     if (rc >= 0) rc = pull_sinks(&c);
     for (int i = 0; i < c.n_gout && rc >= 0; i++) rc = drain_encoder(&c, &c.gout[i], NULL);
+    if (rc >= 0) rc = flush_copy_bsfs(&c);
 
     av_packet_free(&pkt);
     av_frame_free(&frame);
@@ -512,6 +810,14 @@ int op_process(const cJSON *spec) {
                 cJSON *s = cJSON_CreateObject();
                 cJSON_AddStringToObject(s, "type", av_get_media_type_string(c.gout[j].type));
                 cJSON_AddStringToObject(s, "codec", c.gout[j].enc->codec->name);
+                cJSON_AddItemToArray(streams, s);
+            }
+            for (int j = 0; j < c.n_cpy; j++) {
+                if (c.cpy[j].out_idx != i) continue;
+                cJSON *s = cJSON_CreateObject();
+                cJSON_AddStringToObject(s, "type", av_get_media_type_string(c.cpy[j].ost->codecpar->codec_type));
+                cJSON_AddStringToObject(s, "codec", avcodec_get_name(c.cpy[j].ost->codecpar->codec_id));
+                cJSON_AddStringToObject(s, "disposition", "copy");
                 cJSON_AddItemToArray(streams, s);
             }
             cJSON_AddItemToArray(outs, od);
@@ -535,6 +841,7 @@ end:
     }
     for (int i = 0; i < c.n_gin; i++) avcodec_free_context(&c.gin[i].dec);
     for (int i = 0; i < c.n_gout; i++) avcodec_free_context(&c.gout[i].enc);
+    for (int i = 0; i < c.n_cpy; i++) av_bsf_free(&c.cpy[i].bsf); // ost is owned by its ofmt
     if (c.graph) avfilter_graph_free(&c.graph);
     for (int i = 0; i < c.n_in; i++) avformat_close_input(&c.in[i]);
     return rc < 0 ? 1 : 0;
