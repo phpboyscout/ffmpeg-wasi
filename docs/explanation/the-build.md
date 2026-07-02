@@ -49,12 +49,22 @@ few functions ("WASI has no …"). We bridge the gap minimally:
   so it's baked into `config.mak`) to **declare** functions wasi-libc's headers gate out
   (e.g. `dup`, `tempnam`), keeping the strict-C99 clang from erroring.
 - **`build/wasi-compat.c`** — **implements** the symbols the link actually needs. For
-  example WASI has no `dup(2)`, so we map it onto `fcntl(F_DUPFD)` (which wasi-libc backs
-  with `fd_renumber`).
+  example WASI has no `dup(2)` and no way to allocate a fresh lowest-available fd, so it is
+  a **stub that fails with `ENOSYS`** — enough to satisfy the link (libavformat's `file.o`
+  references `dup`) while the code paths that would call it are never exercised, because the
+  real file I/O goes over the mounted filesystem.
 
 This shim layer is small and explicit — and it's exactly the kind of porting work that
 "owning a current FFmpeg build" means. It grows as new codecs/protocols pull in new corners
 of POSIX.
+
+Not every POSIX gap is a *link-time* one. Some are **runtime devices**. libavutil's
+`av_get_random_seed()`, for instance, reads `/dev/urandom` (its only compiled entropy source
+here) and otherwise falls back to a `clock()`-jitter loop that never terminates under WASI —
+so any format needing a random id (the Matroska muxer seeds track UIDs this way) would hang.
+That gap is filled at the *runtime* layer, not here: the afmpeg host serves `/dev/urandom`
+from its vfs bridge. See afmpeg's
+[vfs-bridge explanation](https://afmpeg.phpboyscout.uk/explanation/components/vfs-bridge/#why-devurandom-is-load-bearing).
 
 ## The openh264 dependency
 
