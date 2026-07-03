@@ -55,11 +55,22 @@ LEAN_ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,fl
 # external lib, no vocabulary change (they extend the `filter` string's reach).
 # Grouped per spec 0017 §3 so the allowlist and the reference matrix stay in step.
 # (drawtext/subtitles pull freetype/libass → spec 0019, excluded here.)
+# Codec batch [0016] — native (in-tree) libavcodec decoders/encoders, all
+# LGPL-clean (no --enable-gpl / --enable-nonfree), flag-only, no external lib and
+# no vocabulary change (more valid video_codec/audio_codec strings + demuxable
+# inputs). Decoders: broadcast audio (ac3/eac3/dca), lossless/legacy audio
+# (alac/wmav2), the PCM tail, images (bmp/tiff), editing intermediates
+# (prores/dnxhd/dv), and legacy/broadcast video (mpeg2/mpeg4/vc1/wmv3/theora).
+# Encoders: ac3, alac, the PCM tail, and bmp/tiff (so those images round-trip).
+# AV1/HEVC and the external-lib encoders are elsewhere (0023 / 0018).
 INTERMEDIATE_ENABLE="\
 --enable-demuxer=mpegts,flv,avi,gif,caf,aiff,au \
 --enable-muxer=mpegts,hls,dash,flv,avi,gif,ogg,adts,caf,aiff,au,segment,stream_segment \
---enable-decoder=gif \
---enable-encoder=gif \
+--enable-decoder=gif,ac3,eac3,dca,alac,wmav2 \
+--enable-decoder=pcm_s24le,pcm_s32le,pcm_f64le,pcm_u8,pcm_s16be,pcm_s24be,pcm_mulaw,pcm_alaw \
+--enable-decoder=prores,dnxhd,dvvideo,mpeg2video,mpeg4,vc1,wmv3,theora,bmp,tiff \
+--enable-encoder=gif,ac3,alac,bmp,tiff \
+--enable-encoder=pcm_s24le,pcm_s32le,pcm_f32le,pcm_mulaw,pcm_alaw \
 --enable-filter=fade,hue,colorbalance,curves,colorchannelmixer,lut,lut3d \
 --enable-filter=unsharp,gblur,boxblur,hstack,vstack,xstack,blend,tile \
 --enable-filter=select,thumbnail,framestep,palettegen,paletteuse \

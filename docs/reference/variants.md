@@ -21,7 +21,9 @@ class from [afmpeg spec 0022](https://afmpeg.phpboyscout.uk/development/specs/00
   animated GIF, and the audio containers (ADTS/CAF/AIFF/AU); and the **native filter batch**
   (spec 0017): colour/levels, compose (`hstack`/`blend`), frame select (`select`/`thumbnail`),
   `palettegen`/`paletteuse`, deinterlace (`yadif`), `loudnorm`/`atempo`, and more — see
-  [filters](filters.md). Its artifact is named `ffmpeg-wasi-intermediate-<variant>.wasm`.
+  [filters](filters.md); and the **native codec batch** (spec 0016): AC-3/E-AC-3/DTS decode,
+  ProRes/DNxHD/DV, MPEG-2/4/VC-1/Theora, ALAC, the PCM family, and BMP/TIFF/GIF — see
+  [codecs](codecs.md). Its artifact is named `ffmpeg-wasi-intermediate-<variant>.wasm`.
 
 Build a profile locally with the `PROFILE` build-arg (or `just build <variant> <profile>`):
 
