@@ -37,9 +37,11 @@
 //   1 — baseline + the version gate (op:version); no process/probe field changes
 //   2 — stream copy / bitstream filters (spec 0013): the "copy" codec sentinel,
 //       "in:type[:idx]" map specifiers, and outputs[].bitstream_filters
+//   3 — seeking & time ranges (spec 0014): inputs[].seek {start, mode},
+//       outputs[].duration | end (mutually exclusive), outputs[].copy_ts
 // A spec whose "version" exceeds this is rejected in main() rather than having
 // its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
-#define AFMPEG_VOCAB_VERSION 2
+#define AFMPEG_VOCAB_VERSION 3
 
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"
@@ -112,6 +114,9 @@ static void probe_input(cJSON *out_inputs, const char *path) {
     }
     if (fmt->duration != AV_NOPTS_VALUE) {
         cJSON_AddNumberToObject(ji, "duration_sec", (double)fmt->duration / AV_TIME_BASE);
+    }
+    if (fmt->start_time != AV_NOPTS_VALUE) {
+        cJSON_AddNumberToObject(ji, "start_sec", (double)fmt->start_time / AV_TIME_BASE);
     }
     cJSON *streams = cJSON_AddArrayToObject(ji, "streams");
     for (unsigned i = 0; i < fmt->nb_streams; i++) {

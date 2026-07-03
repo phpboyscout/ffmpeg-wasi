@@ -55,6 +55,9 @@ typedef struct {
     AVDictionary *enc_opts;
     const cJSON *map; // array of "[label]" (graph pads) / "in:type[:idx]" (copy) strings
     const cJSON *bsf; // "bitstream_filters" object: map-key → bsf name/chain or "none"
+    double duration;  // -t seconds (0 = unset); mutually exclusive with end
+    double end;       // -to seconds (0 = unset)
+    int copy_ts;      // preserve source PTS (default 0 = zero-base the output)
 } Out;
 
 // One copied stream: an input (input, stream) wired straight to an output stream,
@@ -69,6 +72,14 @@ typedef struct {
     AVStream *ost;
     AVBSFContext *bsf; // NULL → passthrough (any container-required BSF is the muxer's job)
 } Cpy;
+
+// One graph input's seek-window state (spec 0014): the requested start, the
+// fast/accurate mode, and the rebase offset captured from the first frame that
+// survives the window (fast mode zero-bases on the keyframe actually landed on;
+// accurate mode on the requested start).
+typedef struct {
+    int64_t rebase; // offset subtracted from frame pts (stream tb); AV_NOPTS_VALUE until captured
+} GInSeek;
 
 // One graph output pad: a buffersink encoded into a stream of output out_idx.
 typedef struct {
@@ -86,12 +97,26 @@ typedef struct {
     AVFilterGraph *graph;
     GIn gin[MAX_GIN];
     int n_gin;
+    GInSeek gseek[MAX_GIN];
     GOut gout[MAX_GOUT];
     int n_gout;
     Cpy cpy[MAX_CPY];
     int n_cpy;
     Out out[MAX_OUTPUTS];
     int n_out;
+
+    // Per-input seek window (spec 0014): the requested start in AV_TIME_BASE
+    // units (AV_NOPTS_VALUE = no seek), the accurate flag, and the source-time
+    // threshold past which an input is treated as EOF early (INT64_MAX = read
+    // to the end). Set up before the read loop.
+    int64_t seek_us[MAX_INPUTS];
+    int seek_accurate[MAX_INPUTS];
+    int64_t in_cutoff_us[MAX_INPUTS];
+
+    // Per-(input, output) copy rebase offset: the first copied packet's source
+    // time (us), captured on arrival and shared by every copied stream of the
+    // pair so audio and video stay aligned. AV_NOPTS_VALUE until captured.
+    int64_t cpy_rebase_us[MAX_INPUTS][MAX_OUTPUTS];
 } Ctx;
 
 // parse_input_pad reads a "N:v" / "N:a" graph input label into an input index +
@@ -335,15 +360,54 @@ static int open_encoder(Ctx *c, GOut *go) {
     return 0;
 }
 
+// job_seek_offset_us is the source offset copy_ts preserves: the first seeked
+// input's start. With no seek it is 0 and copy_ts is a no-op; with several
+// differently-seeked inputs feeding one graph, the first one's timeline wins
+// (documented — a mixed-seek copy_ts timeline is not well-defined).
+static int64_t job_seek_offset_us(const Ctx *c) {
+    for (int i = 0; i < c->n_in; i++) {
+        if (c->seek_us[i] != AV_NOPTS_VALUE) return c->seek_us[i];
+    }
+    return 0;
+}
+
+// out_cutoff_us returns where output `out` stops on its own timeline (us), or
+// INT64_MAX for no window. On the default zero-based timeline `duration` and
+// `end` coincide (the output starts at 0); under copy_ts the timeline is the
+// source's, so `duration` counts from the seek point and `end` is an absolute
+// source position (spec 0014 Q1).
+static int64_t out_cutoff_us(const Ctx *c, const Out *out) {
+    if (out->duration > 0) {
+        int64_t base = out->copy_ts ? job_seek_offset_us(c) : 0;
+        return base + (int64_t)(out->duration * AV_TIME_BASE);
+    }
+    if (out->end > 0) return (int64_t)(out->end * AV_TIME_BASE);
+    return INT64_MAX;
+}
+
 static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
-    AVFormatContext *ofmt = c->out[go->out_idx].ofmt;
+    Out *out = &c->out[go->out_idx];
+    AVFormatContext *ofmt = out->ofmt;
     int ret = avcodec_send_frame(go->enc, frame);
     if (ret < 0) return ret;
+    int64_t cutoff = out_cutoff_us(c, out);
     AVPacket *pkt = av_packet_alloc();
     while (ret >= 0) {
         ret = avcodec_receive_packet(go->enc, pkt);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) { ret = 0; break; }
         if (ret < 0) break;
+        // copy_ts restores the source timeline the graph entered zero-based.
+        if (out->copy_ts) {
+            int64_t off = av_rescale_q(job_seek_offset_us(c), AV_TIME_BASE_Q, go->enc->time_base);
+            if (pkt->pts != AV_NOPTS_VALUE) pkt->pts += off;
+            if (pkt->dts != AV_NOPTS_VALUE) pkt->dts += off;
+        }
+        // Enforce the output window (-t / -to): drop packets past the cutoff.
+        if (cutoff != INT64_MAX && pkt->pts != AV_NOPTS_VALUE &&
+            av_rescale_q(pkt->pts, go->enc->time_base, AV_TIME_BASE_Q) >= cutoff) {
+            av_packet_unref(pkt);
+            continue;
+        }
         av_packet_rescale_ts(pkt, go->enc->time_base, go->ost->time_base);
         pkt->stream_index = go->ost->index;
         ret = av_interleaved_write_frame(ofmt, pkt);
@@ -376,6 +440,37 @@ done:
     return ret;
 }
 
+// push_frame applies the seek window to one decoded frame and feeds it into a
+// graph input (spec 0014): under an accurate seek, frames before the requested
+// start are discarded (the decode-and-discard that buys frame accuracy); the
+// surviving stream is zero-based — fast mode on the keyframe actually landed on,
+// accurate mode on the requested start — so the graph sees a clip starting at 0.
+// gi indexes the GIn (its seek state lives in c->gseek[gi]).
+static int push_frame(Ctx *c, int gi, AVFrame *frame) {
+    GIn *g = &c->gin[gi];
+    int ret;
+
+    if (c->seek_us[g->in_idx] != AV_NOPTS_VALUE) {
+        AVStream *st = c->in[g->in_idx]->streams[g->st_idx];
+        int64_t t = frame->best_effort_timestamp != AV_NOPTS_VALUE
+                        ? frame->best_effort_timestamp
+                        : frame->pts;
+
+        if (t != AV_NOPTS_VALUE) {
+            int64_t start = av_rescale_q(c->seek_us[g->in_idx], AV_TIME_BASE_Q, st->time_base);
+            if (c->seek_accurate[g->in_idx] && t < start) return 0; // decode-and-discard
+            if (c->gseek[gi].rebase == AV_NOPTS_VALUE) {
+                c->gseek[gi].rebase = c->seek_accurate[g->in_idx] ? start : t;
+            }
+            if (frame->pts != AV_NOPTS_VALUE) frame->pts = t - c->gseek[gi].rebase;
+        }
+    }
+
+    ret = av_buffersrc_add_frame_flags(g->src, frame, AV_BUFFERSRC_FLAG_KEEP_REF);
+    av_frame_unref(frame);
+    return ret;
+}
+
 // feed routes one input packet to every graph input fed by that (input, stream).
 static int feed(Ctx *c, int in_idx, AVPacket *pkt, AVFrame *frame) {
     int ret = 0;
@@ -385,8 +480,7 @@ static int feed(Ctx *c, int in_idx, AVPacket *pkt, AVFrame *frame) {
         ret = avcodec_send_packet(g->dec, pkt);
         if (ret < 0) return ret;
         while ((ret = avcodec_receive_frame(g->dec, frame)) >= 0) {
-            ret = av_buffersrc_add_frame_flags(g->src, frame, AV_BUFFERSRC_FLAG_KEEP_REF);
-            av_frame_unref(frame);
+            ret = push_frame(c, i, frame);
             if (ret < 0) return ret;
         }
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) ret = 0;
@@ -425,6 +519,16 @@ static int parse_output(Out *o, const cJSON *spec) {
         fprintf(stderr, "ffmpeg-wasi: process: each output needs path and a video and/or audio codec\n");
         return 2;
     }
+    // The output window (spec 0014): -t seconds or -to position, not both.
+    const cJSON *dur = cJSON_GetObjectItemCaseSensitive(spec, "duration");
+    const cJSON *end = cJSON_GetObjectItemCaseSensitive(spec, "end");
+    if (cJSON_IsNumber(dur)) o->duration = dur->valuedouble;
+    if (cJSON_IsNumber(end)) o->end = end->valuedouble;
+    if (o->duration > 0 && o->end > 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: `duration` and `end` are mutually exclusive on %s\n", o->path);
+        return 2;
+    }
+    o->copy_ts = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(spec, "copy_ts"));
     // Guard the container type before walking it: a malformed but trusted spec
     // whose "options" is not an object (e.g. a string) is ignored, not iterated
     // unpredictably (spec 0027 §4C, defence-in-depth on trusted input).
@@ -522,20 +626,53 @@ static int setup_copy_stream(Ctx *c, Cpy *cp) {
     return 0;
 }
 
-// write_copy_pkt rescales a copied packet to the output timebase and interleaves
-// it into the muxer (which takes ownership of pkt).
-static int write_copy_pkt(AVFormatContext *ofmt, AVStream *ost, AVRational src_tb, AVPacket *pkt) {
+// write_copy_pkt applies the seek/window semantics to one copied packet and
+// interleaves it into the muxer (spec 0014 composed with 0013's copy path):
+// the first packet of an (input, output) pair captures the rebase offset — the
+// keyframe the demuxer actually landed on, shared across the pair's streams so
+// audio and video stay aligned — the output window drops packets past the
+// cutoff, and timestamps are zero-based unless the output preserves them
+// (copy_ts). Consumes pkt on success or failure of the write.
+static int write_copy_pkt(Ctx *c, Cpy *cp, AVRational src_tb, AVPacket *pkt) {
+    Out *out = &c->out[cp->out_idx];
+    AVStream *ost = cp->ost;
+    int64_t *rebase = &c->cpy_rebase_us[cp->in_idx][cp->out_idx];
+
+    int64_t t = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+    if (t != AV_NOPTS_VALUE) {
+        int64_t t_us = av_rescale_q(t, src_tb, AV_TIME_BASE_Q);
+        if (*rebase == AV_NOPTS_VALUE) *rebase = t_us;
+
+        // The window on the source timeline: duration counts from the pair's
+        // start; end is absolute under copy_ts, output-relative otherwise.
+        int64_t cutoff = INT64_MAX;
+        if (out->duration > 0) {
+            cutoff = *rebase + (int64_t)(out->duration * AV_TIME_BASE);
+        } else if (out->end > 0) {
+            cutoff = (out->copy_ts ? 0 : *rebase) + (int64_t)(out->end * AV_TIME_BASE);
+        }
+        if (t_us >= cutoff) {
+            av_packet_unref(pkt);
+            return 0;
+        }
+
+        if (!out->copy_ts) {
+            int64_t off = av_rescale_q(*rebase, AV_TIME_BASE_Q, src_tb);
+            if (pkt->pts != AV_NOPTS_VALUE) pkt->pts -= off;
+            if (pkt->dts != AV_NOPTS_VALUE) pkt->dts -= off;
+        }
+    }
+
     av_packet_rescale_ts(pkt, src_tb, ost->time_base);
     pkt->stream_index = ost->index;
     pkt->pos = -1;
-    return av_interleaved_write_frame(ofmt, pkt);
+    return av_interleaved_write_frame(out->ofmt, pkt);
 }
 
 // copy_one passes one source packet to a single copy target: through its BSF (a
 // drain loop) or verbatim, then muxed. Works on a private ref so the same source
 // packet can fan out to several copy targets and decoders.
 static int copy_one(Ctx *c, Cpy *cp, const AVPacket *src) {
-    AVFormatContext *ofmt = c->out[cp->out_idx].ofmt;
     AVRational src_tb = c->in[cp->in_idx]->streams[cp->st_idx]->time_base;
 
     AVPacket *pkt = av_packet_alloc();
@@ -545,7 +682,7 @@ static int copy_one(Ctx *c, Cpy *cp, const AVPacket *src) {
     if (ret < 0) { av_packet_free(&pkt); return ret; }
 
     if (!cp->bsf) {
-        ret = write_copy_pkt(ofmt, cp->ost, src_tb, pkt); // consumes pkt
+        ret = write_copy_pkt(c, cp, src_tb, pkt); // consumes pkt
         av_packet_free(&pkt);
         return ret;
     }
@@ -553,7 +690,7 @@ static int copy_one(Ctx *c, Cpy *cp, const AVPacket *src) {
     ret = av_bsf_send_packet(cp->bsf, pkt); // consumes pkt
     if (ret < 0) { av_packet_free(&pkt); return ret; }
     while ((ret = av_bsf_receive_packet(cp->bsf, pkt)) == 0) {
-        ret = write_copy_pkt(ofmt, cp->ost, cp->bsf->time_base_out, pkt);
+        ret = write_copy_pkt(c, cp, cp->bsf->time_base_out, pkt);
         if (ret < 0) break;
     }
     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) ret = 0;
@@ -581,13 +718,12 @@ static int flush_copy_bsfs(Ctx *c) {
         Cpy *cp = &c->cpy[i];
         if (!cp->bsf) continue;
 
-        AVFormatContext *ofmt = c->out[cp->out_idx].ofmt;
         av_bsf_send_packet(cp->bsf, NULL);
 
         AVPacket *pkt = av_packet_alloc();
         if (!pkt) return AVERROR(ENOMEM);
         while (av_bsf_receive_packet(cp->bsf, pkt) == 0) {
-            if ((ret = write_copy_pkt(ofmt, cp->ost, cp->bsf->time_base_out, pkt)) < 0) break;
+            if ((ret = write_copy_pkt(c, cp, cp->bsf->time_base_out, pkt)) < 0) break;
         }
         av_packet_free(&pkt);
     }
@@ -681,17 +817,77 @@ int op_process(const cJSON *spec) {
         }
     }
 
-    // Open every input (a plain path, or a concat-demuxer playlist).
+    // Open every input (a plain path, or a concat-demuxer playlist) and apply
+    // its seek window (spec 0014): parse `seek {start, mode}` and fast-seek the
+    // demuxer to the keyframe at-or-before start — the packets before it are
+    // never read. Accurate mode additionally decode-and-discards up to the exact
+    // start (push_frame).
     const cJSON *in = NULL;
     cJSON_ArrayForEach(in, inputs) {
         if (c.n_in >= MAX_INPUTS) { rc = AVERROR(EINVAL); goto end; }
         if ((rc = open_one_input(&c.in[c.n_in], in, c.n_in)) < 0) goto end;
+
+        c.seek_us[c.n_in] = AV_NOPTS_VALUE;
+        const cJSON *sk = cJSON_GetObjectItemCaseSensitive(in, "seek");
+        if (cJSON_IsObject(sk)) {
+            const cJSON *start = cJSON_GetObjectItemCaseSensitive(sk, "start");
+            const char *mode = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(sk, "mode"));
+            if (!cJSON_IsNumber(start) || start->valuedouble < 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: input %d seek needs a non-negative `start`\n", c.n_in);
+                rc = AVERROR(EINVAL); goto end;
+            }
+            if (mode && strcmp(mode, "fast") != 0 && strcmp(mode, "accurate") != 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: input %d seek mode %s (want fast|accurate)\n", c.n_in, mode);
+                rc = AVERROR(EINVAL); goto end;
+            }
+            c.seek_us[c.n_in] = (int64_t)(start->valuedouble * AV_TIME_BASE);
+            c.seek_accurate[c.n_in] = mode && strcmp(mode, "accurate") == 0;
+            if ((rc = avformat_seek_file(c.in[c.n_in], -1, INT64_MIN,
+                                         c.seek_us[c.n_in], c.seek_us[c.n_in], 0)) < 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: cannot seek input %d to %.3fs\n",
+                        c.n_in, start->valuedouble);
+                goto end;
+            }
+        }
         c.n_in++;
     }
 
     // Copy streams: unbracketed map entries ("0:v") pass through verbatim,
     // bypassing the graph/decoder/encoder (spec 0013).
     if ((rc = add_copy_descriptors(&c)) < 0) goto end;
+
+    // An accurate seek needs the decode-and-discard a copied stream skips, so it
+    // is a hard error on a copy — the contract states the keyframe-only rule
+    // rather than silently producing an off-by-a-GOP cut (spec 0014 D-0014-F).
+    for (int i = 0; i < c.n_cpy; i++) {
+        if (c.seek_accurate[c.cpy[i].in_idx]) {
+            fprintf(stderr, "ffmpeg-wasi: process: accurate seek cannot apply to copied stream %s (copy cuts on keyframes; use mode \"fast\")\n",
+                    c.cpy[i].map_key);
+            rc = AVERROR(EINVAL); goto end;
+        }
+        c.cpy_rebase_us[c.cpy[i].in_idx][c.cpy[i].out_idx] = AV_NOPTS_VALUE;
+    }
+
+    // Early-EOF thresholds: when every output consuming an input is windowed,
+    // stop reading that input once its packets pass the largest cutoff (plus a
+    // margin for interleave) instead of demuxing to the end. Any unwindowed
+    // consumer keeps the input unbounded.
+    for (int i = 0; i < c.n_in; i++) {
+        int64_t max_cut = 0;
+        int unbounded = 0;
+        for (int j = 0; j < c.n_out; j++) {
+            // Conservatively treat every output as a consumer of every input:
+            // graph pads may mix inputs, so per-output wiring is not tracked.
+            const Out *o = &c.out[j];
+            if (o->duration <= 0 && o->end <= 0) { unbounded = 1; break; }
+            int64_t base = (c.seek_us[i] != AV_NOPTS_VALUE) ? c.seek_us[i] : 0;
+            int64_t cut = o->duration > 0
+                              ? base + (int64_t)(o->duration * AV_TIME_BASE)
+                              : (o->copy_ts ? 0 : base) + (int64_t)(o->end * AV_TIME_BASE);
+            if (cut > max_cut) max_cut = cut;
+        }
+        c.in_cutoff_us[i] = unbounded ? INT64_MAX : max_cut + AV_TIME_BASE; // +1s margin
+    }
 
     // The filter graph: the spec's filter, or a generated passthrough. A pure-copy
     // (remux) job needs no graph — build/parse it only when a pad is required (an
@@ -758,7 +954,12 @@ int op_process(const cJSON *spec) {
         }
     }
 
-    // Multi-input transcode loop: round-robin read, feed, drain.
+    // Seek-window state for each graph input (rebase captured on first frame).
+    for (int i = 0; i < c.n_gin; i++) c.gseek[i].rebase = AV_NOPTS_VALUE;
+
+    // Multi-input transcode loop: round-robin read, feed, drain. An input whose
+    // packets have passed every consuming output's window is EOF'd early rather
+    // than demuxed to the end (spec 0014).
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
     int remaining = c.n_in;
@@ -766,6 +967,15 @@ int op_process(const cJSON *spec) {
         for (int i = 0; i < c.n_in && rc >= 0; i++) {
             if (c.eof[i]) continue;
             int r = av_read_frame(c.in[i], pkt);
+            if (r >= 0 && c.in_cutoff_us[i] != INT64_MAX) {
+                int64_t t = pkt->dts != AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
+                if (t != AV_NOPTS_VALUE &&
+                    av_rescale_q(t, c.in[i]->streams[pkt->stream_index]->time_base,
+                                 AV_TIME_BASE_Q) > c.in_cutoff_us[i]) {
+                    av_packet_unref(pkt);
+                    r = AVERROR_EOF; // past every window: treat as end of input
+                }
+            }
             if (r < 0) {
                 c.eof[i] = 1;
                 remaining--;
@@ -774,12 +984,12 @@ int op_process(const cJSON *spec) {
                     if (c.gin[gi].in_idx != i) continue;
                     avcodec_send_packet(c.gin[gi].dec, NULL);
                     while (avcodec_receive_frame(c.gin[gi].dec, frame) >= 0) {
-                        av_buffersrc_add_frame_flags(c.gin[gi].src, frame, AV_BUFFERSRC_FLAG_KEEP_REF);
-                        av_frame_unref(frame);
+                        if ((rc = push_frame(&c, gi, frame)) < 0) break;
                     }
+                    if (rc < 0) break;
                     av_buffersrc_add_frame_flags(c.gin[gi].src, NULL, 0);
                 }
-                rc = pull_sinks(&c);
+                if (rc >= 0) rc = pull_sinks(&c);
                 continue;
             }
             rc = feed(&c, i, pkt, frame);
