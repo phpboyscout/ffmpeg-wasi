@@ -1,6 +1,6 @@
 #!/bin/sh
 # build/libav.sh — configure + build FFmpeg's libav* libraries for wasm32-wasi.
-#   FFMPEG_VERSION=n8.1.2 VARIANT=lgpl sh build/libav.sh
+#   FFMPEG_VERSION=n8.1.2 VARIANT=lgpl PROFILE=lean sh build/libav.sh
 set -eu
 HERE_LIBAV="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck disable=SC1091  # sourced at build time
@@ -8,6 +8,7 @@ HERE_LIBAV="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 
 : "${FFMPEG_VERSION:?set FFMPEG_VERSION, e.g. n8.1.2}"
 : "${VARIANT:=lgpl}"                       # lgpl (default) | gpl
+: "${PROFILE:=lean}"                        # lean (default) | intermediate — spec 0022
 : "${FFMPEG_SRC:=/ffmpeg}"
 
 git clone https://github.com/FFmpeg/FFmpeg --depth=1 --branch "$FFMPEG_VERSION" "$FFMPEG_SRC"
@@ -24,15 +25,33 @@ GPL_FLAGS=""
 # --disable-everything means the encoder must be named explicitly, not just the lib.
 OPENH264_FLAGS="--enable-libopenh264 --enable-encoder=libopenh264"
 
-# A general, dep-free native baseline (Phase A). External deps (zlib, openh264,
-# x264, …) extend this in build/deps.sh.
-ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,flac,pcm_s16le,pcm_f32le,rawvideo \
+# --- Lean profile (spec 0022 §3/§6) ----------------------------------------
+# Web-delivery essentials: the codecs/containers/filters that cover the great
+# majority of real jobs at the smallest size (roughly what shipped before 0022).
+# A general, dep-free native baseline; external deps (zlib, openh264, x264, …)
+# extend it in build/deps.sh.
+LEAN_ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,flac,pcm_s16le,pcm_f32le,rawvideo \
 --enable-encoder=mjpeg,png,aac,flac,pcm_s16le \
 --enable-demuxer=mov,matroska,webm,mp3,wav,ogg,aac,flac,image2,concat,rawvideo,pcm_s16le,pcm_f32le \
 --enable-muxer=mp4,mov,matroska,webm,mp3,wav,image2 \
 --enable-filter=null,anull,split,asplit,scale,crop,pad,format,fps,settb,asettb,setsar,setpts,asetpts,trim,atrim,loop,transpose,overlay,concat,xfade,amix,adelay,volume,afade,aresample,aformat,alimiter \
 --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc,extract_extradata \
 --enable-protocol=file,pipe"
+
+# --- Intermediate profile (spec 0022 §3/§6) --------------------------------
+# lean + every practical *software* codec/format/filter (no hardware, no heavy
+# thread-hungry encoders). Filled additively by the native flag batches:
+# containers [0015], decoders/native-encoders [0016], filters [0017] — each
+# appends its own --enable-* group here. Empty for now, so PROFILE=intermediate
+# builds byte-for-byte the lean set until those land (the mechanism, not the
+# codecs). No new external lib enters here; those (0018) ride build/deps.sh.
+INTERMEDIATE_ENABLE=""
+
+case "$PROFILE" in
+  lean)         ENABLE="$LEAN_ENABLE" ;;
+  intermediate) ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE" ;;
+  *) echo "libav.sh: unknown PROFILE '$PROFILE' (want lean|intermediate)" >&2; exit 2 ;;
+esac
 
 # Use clang as the linker (--ld=clang), not raw wasm-ld: clang understands
 # --target/--sysroot and links a WASI command (crt1/_start) automatically, so
@@ -59,4 +78,4 @@ for d in HAVE_SYSCTL HAVE_MKSTEMP HAVE_GETHRTIME HAVE_SETRLIMIT; do
 done
 
 make -j"$(nproc)"
-echo "libav* built ($VARIANT, FFmpeg $FFMPEG_VERSION)"
+echo "libav* built ($PROFILE, $VARIANT, FFmpeg $FFMPEG_VERSION)"

@@ -8,6 +8,29 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 # Variants & artifacts
 
+## Profiles (capability classes)
+
+A build has two axes: a **licence variant** (LGPL/GPL, below) and a **profile** — a capability
+class from [afmpeg spec 0022](https://afmpeg.phpboyscout.uk/development/specs/0022-build-size-matrix/):
+
+- **`lean`** (default) — web-delivery essentials at the smallest size. This is the baseline
+  documented below, and what today's `ffmpeg-wasi-<variant>.wasm` releases are.
+- **`intermediate`** — lean **+ every practical software codec/format/filter** (no hardware, no
+  heavy encoders). A build target that currently equals lean and is being filled additively by
+  the codec-coverage specs (containers, native decoders/encoders, filters). Its artifact is
+  named `ffmpeg-wasi-intermediate-<variant>.wasm`.
+
+Build a profile locally with the `PROFILE` build-arg (or `just build <variant> <profile>`):
+
+```sh
+docker build -f build/Dockerfile --build-arg VARIANT=lgpl --build-arg PROFILE=intermediate \
+  --target artifact -o dist .
+```
+
+The load-bearing guarantee (0022 D-0022-B): **intermediate is identical across the WASM and the
+future native runtimes** — the same codec set, so a consumer moves between them with no
+capability change, only a performance/security-posture shift.
+
 ## The two variants
 
 | | `ffmpeg-wasi-lgpl.wasm` | `ffmpeg-wasi-gpl.wasm` |
