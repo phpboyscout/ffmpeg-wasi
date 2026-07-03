@@ -8,11 +8,139 @@ HERE_DEPS="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "$HERE_DEPS/toolchain.sh"
 
 : "${VARIANT:=lgpl}"
+: "${PROFILE:=lean}"                # lean | intermediate — spec 0022; 0018 libs are intermediate
 : "${X264_BRANCH:=stable}"          # x264 has no release tags; pin a commit for releases
 : "${ZLIB_VERSION:=v1.3.1}"
 : "${OPENH264_VERSION:=v2.6.0}"     # H.264 encode for both variants (BSD source)
+# External LGPL/BSD encoder libs (spec 0018) — intermediate profile only.
+: "${OPUS_VERSION:=1.5.2}"          # libopus (BSD) — Opus encode
+: "${LAME_VERSION:=3.100}"          # libmp3lame (LGPL) — MP3 encode
+: "${OGG_VERSION:=1.3.5}"           # libogg (BSD) — Vorbis container dependency
+: "${VORBIS_VERSION:=1.3.7}"        # libvorbis (BSD) — Vorbis encode
+: "${WEBP_VERSION:=1.4.0}"          # libwebp (BSD) — WebP encode
+: "${VPX_VERSION:=v1.14.1}"         # libvpx (BSD) — VP8/VP9 encode (the heavyweight)
 
 mkdir -p "$PREFIX"
+
+# fetch_tarball <destdir> <url...> — download + extract a release tarball (which
+# ships a pre-generated ./configure, so the image needs no autoconf/automake).
+# Tries each mirror URL in turn with retries: release CDNs (SourceForge, xiph)
+# 502/stall often enough that a single URL makes the build flaky.
+fetch_tarball() {
+  dest="$1"; shift
+  mkdir -p "$dest"
+  for url in "$@"; do
+    if curl -fsSL --retry 4 --retry-all-errors --retry-delay 3 -o /tmp/fetch.tgz "$url"; then
+      tar xzf /tmp/fetch.tgz -C "$dest" --strip-components=1 && rm -f /tmp/fetch.tgz && return 0
+    fi
+    echo "fetch: $url failed — trying next mirror" >&2
+  done
+  echo "fetch: all mirrors failed for $dest" >&2
+  return 1
+}
+
+# fetch_config_sub caches one modern config.sub (from gcc-mirror on GitHub — CDN-
+# backed and current) that knows the wasm32-wasi triple. The audio libs' bundled
+# copies predate wasm and reject it ("machine wasm32 not recognized").
+FRESH_CONFIG_SUB=/tmp/config.sub
+fetch_config_sub() {
+  [ -f "$FRESH_CONFIG_SUB" ] && return 0
+  curl -fsSL --retry 4 --retry-all-errors --retry-delay 3 \
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub" -o "$FRESH_CONFIG_SUB"
+}
+
+# The autotools cross-compile shape shared by the 0018 audio libs: a fake host
+# triple to force cross mode (CC/CFLAGS from toolchain.sh do the real wasm32-wasi
+# targeting), asm off, static only, and LD routed through clang (mirrors x264).
+# Drops the fresh config.sub in first so the wasm host triple canonicalises.
+autotools_configure() {
+  fetch_config_sub
+  cp "$FRESH_CONFIG_SUB" config.sub
+  LD="$CC" \
+  LDFLAGS="--target=wasm32-wasip1 --sysroot=$WASI_SYSROOT $WASI_EMULATED_LIBS" \
+  ./configure --host=wasm32-wasi --prefix="$PREFIX" \
+    --enable-static --disable-shared "$@"
+}
+
+# build_libopus — Opus encode (BSD). Autotools; asm/rtcd/intrinsics off for the
+# portable C path (spec 0018).
+build_libopus() {
+  fetch_tarball /opus \
+    "https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz" \
+    "https://ftp.osuosl.org/pub/xiph/releases/opus/opus-${OPUS_VERSION}.tar.gz"
+  cd /opus
+  autotools_configure --disable-asm --disable-rtcd --disable-intrinsics \
+    --disable-doc --disable-extra-programs \
+    || { echo "opus configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+  echo "libopus built → $PREFIX"
+}
+
+# build_libmp3lame — MP3 encode (LGPL). Old autotools; force the wasi-compat
+# shims and drop the frontend/gtk test.
+build_libmp3lame() {
+  fetch_tarball /lame \
+    "https://downloads.sourceforge.net/project/lame/lame/${LAME_VERSION}/lame-${LAME_VERSION}.tar.gz" \
+    "https://ftp.osuosl.org/pub/blfs/conglomeration/lame/lame-${LAME_VERSION}.tar.gz"
+  cd /lame
+  CFLAGS="$CFLAGS -include $HERE_DEPS/wasi-compat.h" \
+  autotools_configure --disable-frontend --disable-gtktest --disable-decoder \
+    || { echo "lame configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+  echo "libmp3lame built → $PREFIX"
+}
+
+# build_libvorbis — Vorbis encode (BSD), on libogg (BSD). Two static archives.
+build_libvorbis() {
+  fetch_tarball /ogg \
+    "https://downloads.xiph.org/releases/ogg/libogg-${OGG_VERSION}.tar.gz" \
+    "https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-${OGG_VERSION}.tar.gz"
+  cd /ogg
+  autotools_configure \
+    || { echo "libogg configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+  echo "libogg built → $PREFIX"
+
+  fetch_tarball /vorbis \
+    "https://downloads.xiph.org/releases/vorbis/libvorbis-${VORBIS_VERSION}.tar.gz" \
+    "https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-${VORBIS_VERSION}.tar.gz"
+  cd /vorbis
+  autotools_configure --disable-oggtest \
+    || { echo "libvorbis configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+  echo "libvorbis built → $PREFIX"
+}
+
+# build_libwebp — WebP encode (BSD). Autotools (the release tarball ships
+# configure); threads off (no pthreads), SIMD auto-disables for the wasm target.
+# Installs libwebp + libwebpmux/demux + libsharpyuv and their .pc files.
+build_libwebp() {
+  fetch_tarball /webp \
+    "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-${WEBP_VERSION}.tar.gz" \
+    "https://github.com/webmproject/libwebp/releases/download/v${WEBP_VERSION}/libwebp-${WEBP_VERSION}.tar.gz"
+  cd /webp
+  autotools_configure --disable-threading \
+    || { echo "libwebp configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+  echo "libwebp built → $PREFIX"
+}
+
+# build_libvpx — VP8/VP9 encode (BSD), the heavyweight of the five. libvpx has its
+# own configure (not autotools): target=generic-gnu is the portable C path (no
+# asm), and wasi has neither threads nor cpuid, so multithread + runtime CPU detect
+# are off. VP9 encode is notably slow single-threaded (documented on the codec).
+build_libvpx() {
+  git clone https://github.com/webmproject/libvpx.git --depth=1 --branch "$VPX_VERSION" /libvpx
+  cd /libvpx
+  LD="$CC" CROSS='' \
+  ./configure --target=generic-gnu --prefix="$PREFIX" \
+    --enable-static --disable-shared --enable-vp8 --enable-vp9 \
+    --disable-examples --disable-tools --disable-docs --disable-unit-tests \
+    --disable-runtime-cpu-detect --disable-multithread \
+    || { echo "libvpx configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+  echo "libvpx built → $PREFIX"
+}
 
 # build_zlib cross-compiles zlib (permissive) to wasm32-wasi, static. FFmpeg's
 # native PNG codec needs it, so both variants get it.
@@ -99,3 +227,18 @@ case "$VARIANT" in
   lgpl) : ;;            # openh264 (above) is the LGPL variant's H.264 encoder
   *)    echo "deps: unknown VARIANT $VARIANT" >&2; exit 2 ;;
 esac
+
+# The external LGPL/BSD encoder quartet (spec 0018) lands in the intermediate
+# profile only (0022 §6) — both licence variants, since they are LGPL-compatible.
+if [ "$PROFILE" = intermediate ]; then
+  build_libopus
+  build_libmp3lame
+  build_libvorbis
+  build_libwebp
+  build_libvpx
+  # wasi has no pthreads and every lib here is built single-threaded, but some
+  # (libvpx) still list -lpthread in their .pc Libs.private. FFmpeg probes deps
+  # with --static pkg-config, so that spurious -lpthread reaches the wasm link
+  # and fails it — silently soft-disabling the encoder. Strip it project-wide.
+  sed -i 's/-lpthread//g' "$PREFIX"/lib/pkgconfig/*.pc
+fi

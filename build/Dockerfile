@@ -6,15 +6,15 @@ ARG FFMPEG_VERSION=n8.1.2
 ARG VARIANT=lgpl
 ARG PROFILE=lean
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git make pkg-config ca-certificates && rm -rf /var/lib/apt/lists/*
+        git make pkg-config ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
-# Build external codec dependencies (per variant) and libav* first — cached
-# across engine edits, so iterating on the driver reuses both. deps.sh is not
-# PROFILE-aware yet (the intermediate codec batches are flag-only, in libav.sh;
-# external encoder libs arrive with spec 0018), so it caches across profiles.
+# Build external codec dependencies (per variant + profile) and libav* first —
+# cached across engine edits, so iterating on the driver reuses both. deps.sh is
+# PROFILE-aware from spec 0018 (the intermediate profile pulls the external
+# encoder libs; lean and the flag-only batches don't), so it caches per profile.
 COPY build/toolchain.sh build/deps.sh build/libav.sh build/wasi-compat.h \
      build/openh264-wasi.patch build/openh264-threads.c /work/build/
-RUN VARIANT="$VARIANT" sh build/deps.sh
+RUN VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/deps.sh
 RUN FFMPEG_VERSION="$FFMPEG_VERSION" VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/libav.sh
 COPY build/ /work/build/
 COPY src/ /work/src/

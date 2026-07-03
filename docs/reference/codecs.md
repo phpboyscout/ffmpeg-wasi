@@ -33,13 +33,32 @@ The native codec batch (spec [0016](https://afmpeg.phpboyscout.uk/development/sp
 | **Editing intermediates** | prores, dnxhd, dvvideo | — |
 | **Legacy / broadcast video** | mpeg2video, mpeg4, vc1, wmv3, theora | — |
 
+### External encoders (spec 0018)
+
+The LGPL/BSD encoder libraries cross-compiled into the build (`build/deps.sh`) and linked by
+libav — external code, but all LGPL-compatible, so both licence variants get them. Encode
+uses the `lib*` name (e.g. `audio_codec: "libopus"`); the produced stream probes back to the
+plain codec name (`opus`).
+
+| | Encode (name) | Produces | Notes |
+|---|---|---|---|
+| **Opus** | `libopus` | opus | 48 kHz only; resample first |
+| **MP3** | `libmp3lame` | mp3 | |
+| **Vorbis** | `libvorbis` | vorbis | on libogg |
+| **VP8** | `libvpx` | vp8 | WebM video |
+| **VP9** | `libvpx-vp9` | vp9 | WebM video; **slow** single-threaded |
+| **WebP** | `libwebp` | webp | still/animated images |
+
+All are **software, single-threaded** — VP9 encode in particular is slow without threads, so
+pick VP8 unless VP9 is required. libvpx's encoder uses setjmp/longjmp, lowered to wasm
+exception-handling; the afmpeg runtime enables that feature to load the module.
+
 ### Notes
 
 - **DTS is decode-only** (`dca`) — the encoder is experimental in FFmpeg and left out
   (D-0016-B). TrueHD/AMR are not in this batch.
 - **`eq`** is not a codec — see [filters](filters.md).
-- **HEVC/AV1 encode and AV1 decode (dav1d)** are *not* here — they belong to spec 0023. The
-  LGPL external encoders (Opus/MP3/VP8-9/WebP/Vorbis) are spec 0018.
+- **HEVC/AV1 encode and AV1 decode (dav1d)** are *not* here — they belong to spec 0023.
 - **Patent posture** — AC-3, DTS, MPEG-2/4, VC-1 carry codec patents, the same class as the
   H.264/HEVC the engine already decodes; see the [licensing explanation](../explanation/licensing.md).
 - The **decode-only** codecs (prores, dnxhd, mpeg2video, vc1, …) are enabled in the build but

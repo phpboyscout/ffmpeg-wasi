@@ -80,6 +80,11 @@ INTERMEDIATE_ENABLE="\
 --enable-filter=highpass,lowpass,equalizer,atempo,aecho,silenceremove,afftdn \
 --enable-filter=pan,channelsplit,channelmap,join,aselect,areverse \
 --enable-filter=cropdetect,blackdetect,signalstats,silencedetect,ebur128,astats \
+--enable-libopus --enable-encoder=libopus \
+--enable-libmp3lame --enable-encoder=libmp3lame \
+--enable-libvorbis --enable-encoder=libvorbis \
+--enable-libwebp --enable-encoder=libwebp \
+--enable-libvpx --enable-encoder=libvpx_vp8,libvpx_vp9 \
 --enable-protocol=file,pipe"
 
 case "$PROFILE" in
@@ -91,10 +96,20 @@ esac
 # Use clang as the linker (--ld=clang), not raw wasm-ld: clang understands
 # --target/--sysroot and links a WASI command (crt1/_start) automatically, so
 # configure's link probe just works. (The engine link in driver.sh is also clang.)
+#
+# --pkg-config-flags=--static: our deps are static archives, so configure's dep
+#   probes need pkg-config's transitive Requires.private libs (e.g. vorbisenc →
+#   vorbis → ogg), which plain --libs omits.
+# --extra-libs=-lsetjmp: libvpx's encoder uses setjmp/longjmp, which clang's wasm
+#   SjLj lowering turns into __wasm_setjmp/__wasm_longjmp (in the sysroot's
+#   libsetjmp.a). Without it configure's encoder probe fails to link and silently
+#   soft-disables libvpx_vp8/vp9 (libav's own code never pulls SjLj setjmp).
 # shellcheck disable=SC2086  # $ENABLE/$GPL_FLAGS/$OPENH264_FLAGS are deliberately split into args
 LDFLAGS="--target=wasm32-wasip1 --sysroot=$WASI_SYSROOT $SJLJ -L$PREFIX/lib $WASI_EMULATED_LIBS" \
 ./configure \
   --cc="$CC" --cxx="$CXX" --ld="$CC" --nm="$NM" --ar="$AR" --ranlib="$RANLIB" --strip="$STRIP" \
+  --pkg-config-flags=--static \
+  --extra-libs=-lsetjmp \
   --extra-cflags="-include $HERE_LIBAV/wasi-compat.h -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-function-pointer-types" \
   --enable-cross-compile --arch=x86_32 --target-os=none \
   --disable-shared --enable-static --enable-small --disable-stripping \
