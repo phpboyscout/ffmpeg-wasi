@@ -50,11 +50,25 @@ LEAN_ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,fl
 # fragmented mp4 → the lean mp4 muxer); the segment muxer generalises segmenting;
 # flv/avi/gif and the audio containers (adts/caf/aiff/au) are breadth. gif rides
 # with its codec (gif enc/dec) so animated GIF is a complete, testable unit.
+#
+# Filter batch [0017] — native (in-tree) libavfilter filters, LGPL-clean, no
+# external lib, no vocabulary change (they extend the `filter` string's reach).
+# Grouped per spec 0017 §3 so the allowlist and the reference matrix stay in step.
+# (drawtext/subtitles pull freetype/libass → spec 0019, excluded here.)
 INTERMEDIATE_ENABLE="\
 --enable-demuxer=mpegts,flv,avi,gif,caf,aiff,au \
 --enable-muxer=mpegts,hls,dash,flv,avi,gif,ogg,adts,caf,aiff,au,segment,stream_segment \
 --enable-decoder=gif \
 --enable-encoder=gif \
+--enable-filter=fade,hue,colorbalance,curves,colorchannelmixer,lut,lut3d \
+--enable-filter=unsharp,gblur,boxblur,hstack,vstack,xstack,blend,tile \
+--enable-filter=select,thumbnail,framestep,palettegen,paletteuse \
+--enable-filter=yadif,bwdif,chromakey,colorkey,rotate,hflip,vflip,reverse \
+--enable-filter=drawbox,drawgrid,vignette \
+--enable-filter=loudnorm,dynaudnorm,acompressor,compand \
+--enable-filter=highpass,lowpass,equalizer,atempo,aecho,silenceremove,afftdn \
+--enable-filter=pan,channelsplit,channelmap,join,aselect,areverse \
+--enable-filter=cropdetect,blackdetect,signalstats,silencedetect,ebur128,astats \
 --enable-protocol=file,pipe"
 
 case "$PROFILE" in

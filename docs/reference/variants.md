@@ -18,8 +18,10 @@ class from [afmpeg spec 0022](https://afmpeg.phpboyscout.uk/development/specs/00
 - **`intermediate`** — lean **+ every practical software codec/format/filter** (no hardware, no
   heavy encoders), filled additively by the codec-coverage specs. It currently adds the **native
   container batch** (spec 0015): MPEG-TS, HLS/DASH segmenting, fragmented MP4/CMAF, FLV, AVI,
-  animated GIF, and the audio containers (ADTS/CAF/AIFF/AU). Its artifact is named
-  `ffmpeg-wasi-intermediate-<variant>.wasm`.
+  animated GIF, and the audio containers (ADTS/CAF/AIFF/AU); and the **native filter batch**
+  (spec 0017): colour/levels, compose (`hstack`/`blend`), frame select (`select`/`thumbnail`),
+  `palettegen`/`paletteuse`, deinterlace (`yadif`), `loudnorm`/`atempo`, and more — see
+  [filters](filters.md). Its artifact is named `ffmpeg-wasi-intermediate-<variant>.wasm`.
 
 Build a profile locally with the `PROFILE` build-arg (or `just build <variant> <profile>`):
 
