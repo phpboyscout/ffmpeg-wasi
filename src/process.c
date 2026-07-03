@@ -52,7 +52,9 @@ typedef struct {
     const char *path;
     const char *vcodec;
     const char *acodec;
+    const char *format;    // forced muxer name (spec 0015); NULL → guess by extension
     AVDictionary *enc_opts;
+    AVDictionary *fmt_opts; // muxer options → write_header (spec 0015)
     const cJSON *map; // array of "[label]" (graph pads) / "in:type[:idx]" (copy) strings
     const cJSON *bsf; // "bitstream_filters" object: map-key → bsf name/chain or "none"
     double duration;  // -t seconds (0 = unset); mutually exclusive with end
@@ -546,9 +548,24 @@ static int parse_output(Out *o, const cJSON *spec) {
             if (cJSON_IsString(kv)) av_dict_set(&o->enc_opts, kv->string, kv->valuestring, 0);
         }
     }
-    avformat_alloc_output_context2(&o->ofmt, NULL, NULL, o->path);
+    // Muxer options (spec 0015): a separate dict routed to write_header — segment
+    // timing/naming, fragmentation flags (movflags), etc. — distinct from the
+    // encoder `options` above (D-0015-B: no guessing which dict an option is for).
+    const cJSON *fopts = cJSON_GetObjectItemCaseSensitive(spec, "format_options");
+    if (cJSON_IsObject(fopts)) {
+        cJSON_ArrayForEach(kv, fopts) {
+            if (cJSON_IsString(kv)) av_dict_set(&o->fmt_opts, kv->string, kv->valuestring, 0);
+        }
+    }
+
+    // `format` forces the muxer by name (spec 0015: "hls"/"dash"/"segment"/
+    // "mpegts"/… — needed where the extension doesn't imply it); absent → the
+    // path extension guesses (D-0015-C).
+    o->format = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "format"));
+    avformat_alloc_output_context2(&o->ofmt, NULL, o->format, o->path);
     if (!o->ofmt) {
-        fprintf(stderr, "ffmpeg-wasi: process: cannot guess output format for %s\n", o->path);
+        fprintf(stderr, "ffmpeg-wasi: process: cannot resolve output format for %s%s%s\n",
+                o->path, o->format ? " / " : "", o->format ? o->format : "");
         return -1;
     }
     return 0;
@@ -990,7 +1007,9 @@ int op_process(const cJSON *spec) {
                 fprintf(stderr, "ffmpeg-wasi: process: cannot open output %s\n", c.out[i].path); goto end;
             }
         }
-        if ((rc = avformat_write_header(c.out[i].ofmt, NULL)) < 0) {
+        // Muxer options (spec 0015) drive segmenting/fragmentation here; a
+        // segmenting muxer (NOFILE) opens its own child files during write_header.
+        if ((rc = avformat_write_header(c.out[i].ofmt, &c.out[i].fmt_opts)) < 0) {
             fprintf(stderr, "ffmpeg-wasi: process: write header for %s failed\n", c.out[i].path); goto end;
         }
     }
@@ -1055,6 +1074,11 @@ int op_process(const cJSON *spec) {
         for (int i = 0; i < c.n_out; i++) {
             cJSON *od = cJSON_CreateObject();
             cJSON_AddStringToObject(od, "path", c.out[i].path);
+            // A segmenting/NOFILE muxer (hls/dash/segment) wrote a set of files —
+            // `path` is the playlist/manifest; the segments are on the fs by
+            // pattern (spec 0015 Q1: marker, not an enumerated child list).
+            if (c.out[i].ofmt->oformat->flags & AVFMT_NOFILE)
+                cJSON_AddBoolToObject(od, "segmented", 1);
             cJSON *streams = cJSON_AddArrayToObject(od, "streams");
             for (int j = 0; j < c.n_gout; j++) {
                 if (c.gout[j].out_idx != i) continue;
@@ -1089,6 +1113,7 @@ end:
             avio_closep(&c.out[i].ofmt->pb);
         if (c.out[i].ofmt) avformat_free_context(c.out[i].ofmt);
         av_dict_free(&c.out[i].enc_opts);
+        av_dict_free(&c.out[i].fmt_opts);
     }
     for (int i = 0; i < c.n_gin; i++) avcodec_free_context(&c.gin[i].dec);
     for (int i = 0; i < c.n_gout; i++) avcodec_free_context(&c.gout[i].enc);

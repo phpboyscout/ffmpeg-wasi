@@ -42,9 +42,12 @@
 //   4 — input options & formats (spec 0024): inputs[].format (forced demuxer),
 //       inputs[].options (demuxer dict, incl. raw geometry), and N:v:K indexed
 //       graph-input stream selection
+//   5 — container coverage (spec 0015): outputs[].format (forced muxer),
+//       outputs[].format_options (muxer dict — segmenting/fragmentation);
+//       the container (de)muxer batch is a build-profile matter, not a vocab one
 // A spec whose "version" exceeds this is rejected in main() rather than having
 // its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
-#define AFMPEG_VOCAB_VERSION 4
+#define AFMPEG_VOCAB_VERSION 5
 
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"

@@ -42,10 +42,20 @@ LEAN_ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,fl
 # lean + every practical *software* codec/format/filter (no hardware, no heavy
 # thread-hungry encoders). Filled additively by the native flag batches:
 # containers [0015], decoders/native-encoders [0016], filters [0017] — each
-# appends its own --enable-* group here. Empty for now, so PROFILE=intermediate
-# builds byte-for-byte the lean set until those land (the mechanism, not the
-# codecs). No new external lib enters here; those (0018) ride build/deps.sh.
-INTERMEDIATE_ENABLE=""
+# appends its own --enable-* group here. No new external lib enters here; those
+# (0018) ride build/deps.sh.
+#
+# Container batch [0015] — native (de)muxers, no licence delta. mpegts/hls/dash
+# are the web-delivery marquee (hls muxes TS segments → needs mpegts; dash muxes
+# fragmented mp4 → the lean mp4 muxer); the segment muxer generalises segmenting;
+# flv/avi/gif and the audio containers (adts/caf/aiff/au) are breadth. gif rides
+# with its codec (gif enc/dec) so animated GIF is a complete, testable unit.
+INTERMEDIATE_ENABLE="\
+--enable-demuxer=mpegts,flv,avi,gif,caf,aiff,au \
+--enable-muxer=mpegts,hls,dash,flv,avi,gif,ogg,adts,caf,aiff,au,segment,stream_segment \
+--enable-decoder=gif \
+--enable-encoder=gif \
+--enable-protocol=file,pipe"
 
 case "$PROFILE" in
   lean)         ENABLE="$LEAN_ENABLE" ;;

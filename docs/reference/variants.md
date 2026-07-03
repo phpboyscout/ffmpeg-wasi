@@ -16,9 +16,10 @@ class from [afmpeg spec 0022](https://afmpeg.phpboyscout.uk/development/specs/00
 - **`lean`** (default) — web-delivery essentials at the smallest size. This is the baseline
   documented below, and what today's `ffmpeg-wasi-<variant>.wasm` releases are.
 - **`intermediate`** — lean **+ every practical software codec/format/filter** (no hardware, no
-  heavy encoders). A build target that currently equals lean and is being filled additively by
-  the codec-coverage specs (containers, native decoders/encoders, filters). Its artifact is
-  named `ffmpeg-wasi-intermediate-<variant>.wasm`.
+  heavy encoders), filled additively by the codec-coverage specs. It currently adds the **native
+  container batch** (spec 0015): MPEG-TS, HLS/DASH segmenting, fragmented MP4/CMAF, FLV, AVI,
+  animated GIF, and the audio containers (ADTS/CAF/AIFF/AU). Its artifact is named
+  `ffmpeg-wasi-intermediate-<variant>.wasm`.
 
 Build a profile locally with the `PROFILE` build-arg (or `just build <variant> <profile>`):
 

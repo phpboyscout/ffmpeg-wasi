@@ -54,7 +54,9 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 | `outputs[]` | One **output file** each. With a single output, `map` may be omitted (every graph pad is muxed into it); with **multiple outputs, each must set `map`** to claim its pads. |
 | `outputs[].map` | What to mux into this file — either graph output pad labels (bracketed, `["[loud]"]`, encoded) **or** *(v2)* input-stream specifiers (unbracketed: `"0:v"`, `"0:a:0"`, `"0:0"`, **stream-copied**). Graph input pads accept the same indexed form — `[0:v:1]` in a `filter` selects the second video stream *(v4)*. |
 | `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). *(v2)* The sentinel **`"copy"`** stream-copies the mapped input stream — no decode/encode, needs no codec, works for any codec in either variant. The output container is chosen from the path extension. |
-| `outputs[].options` | String key/values passed to the encoder (e.g. `{"crf":"28"}`). |
+| `outputs[].options` | String key/values passed to the **encoder** (e.g. `{"crf":"28"}`). |
+| `outputs[].format` | *(v5)* Force the **muxer** by name (`"hls"`, `"dash"`, `"segment"`, `"mpegts"`, …) instead of guessing from the path extension. |
+| `outputs[].format_options` | *(v5)* Options passed to the **muxer** (write_header) — segment timing/naming (`hls_time`, `hls_segment_filename`), fragmentation (`movflags`), etc. Distinct from `options` (the encoder). |
 | `outputs[].bitstream_filters` | *(v2)* Per copied stream, keyed by its `map` entry: a bitstream-filter name/chain (e.g. `{"0:v":"h264_mp4toannexb"}`), or `"none"` to force-disable. Absent → the muxer auto-inserts any container-required filter. |
 | `outputs[].duration` / `outputs[].end` | *(v3)* Stop the output after `duration` seconds (`-t`) or at position `end` (`-to`). **Mutually exclusive.** On the default zero-based timeline the two coincide; under `copy_ts`, `end` is an absolute source position. |
 | `outputs[].copy_ts` | *(v3)* `true` preserves source timestamps. Default `false` zero-bases the output — a fast-seeked clip starts at the keyframe actually landed on, an accurate one at the requested start. |
@@ -115,7 +117,20 @@ Working examples (verified end-to-end):
             "options":{"video_size":"1280x720","pixel_format":"yuv420p","framerate":"25"}}],
  "filter":"[0:v]null[v]",
  "outputs":[{"path":"out.mp4","map":["[v]"],"video_codec":"libopenh264"}]}
+
+// v5 — mp4 → MPEG-TS remux, no re-encode (the h264_mp4toannexb BSF auto-inserts)
+{"op":"process","version":5,"inputs":[{"path":"in.mp4"}],
+ "outputs":[{"path":"out.ts","map":["0:v","0:a"],"video_codec":"copy","audio_codec":"copy"}]}
+
+// v5 — HLS: one output entry writes segment files + a playlist to the fs (no network)
+{"op":"process","version":5,"inputs":[{"path":"in.mp4"}],"filter":"[0:v]null[v]",
+ "outputs":[{"path":"stream.m3u8","map":["[v]"],"format":"hls","video_codec":"libopenh264",
+   "format_options":{"hls_time":"4","hls_segment_filename":"seg_%03d.ts","hls_list_size":"0"}}]}
 ```
+
+A **segmenting** output (`hls`/`dash`/`segment`) reports `"segmented": true` in its result entry;
+`path` is the playlist/manifest and the segment files sit beside it on the mounted filesystem by
+the requested pattern.
 
 On success the engine prints what it wrote, one entry per output file, e.g.
 `{"outputs":[{"path":"loud.mp4","streams":[{"type":"audio","codec":"aac"}]},{"path":"quiet.mp4","streams":[{"type":"audio","codec":"aac"}]}]}`.
@@ -177,6 +192,7 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | 2 | Stream copy / bitstream filters / concat demuxer (afmpeg spec 0013): the `copy` codec sentinel, unbracketed `in:type[:idx]` map specifiers, `outputs[].bitstream_filters`, `inputs[].concat`. |
 | 3 | Seeking & time ranges (afmpeg spec 0014): `inputs[].seek {start, mode}`, `outputs[].duration` \| `end` (mutually exclusive), `outputs[].copy_ts`. Probe replies gain `start_sec`. |
 | 4 | Input options & formats (afmpeg spec 0024): `inputs[].format` (forced demuxer), `inputs[].options` (demuxer dict, incl. raw geometry), and `N:v:K` indexed graph-input stream selection. |
+| 5 | Container coverage (afmpeg spec 0015): `outputs[].format` (forced muxer), `outputs[].format_options` (muxer dict — segmenting/fragmentation); a `segmented` result marker. The container (de)muxer batch itself is a build-profile matter (intermediate), not a vocabulary one. |
 
 **The gate (two sides):**
 
