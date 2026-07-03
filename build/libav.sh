@@ -26,9 +26,9 @@ OPENH264_FLAGS="--enable-libopenh264 --enable-encoder=libopenh264"
 
 # A general, dep-free native baseline (Phase A). External deps (zlib, openh264,
 # x264, …) extend this in build/deps.sh.
-ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,flac,pcm_s16le \
+ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,flac,pcm_s16le,pcm_f32le,rawvideo \
 --enable-encoder=mjpeg,png,aac,flac,pcm_s16le \
---enable-demuxer=mov,matroska,webm,mp3,wav,ogg,aac,flac,image2,concat \
+--enable-demuxer=mov,matroska,webm,mp3,wav,ogg,aac,flac,image2,concat,rawvideo,pcm_s16le,pcm_f32le \
 --enable-muxer=mp4,mov,matroska,webm,mp3,wav,image2 \
 --enable-filter=null,anull,split,asplit,scale,crop,pad,format,fps,settb,asettb,setsar,setpts,asetpts,trim,atrim,loop,transpose,overlay,concat,xfade,amix,adelay,volume,afade,aresample,aformat,alimiter \
 --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc,extract_extradata \

@@ -39,9 +39,12 @@
 //       "in:type[:idx]" map specifiers, and outputs[].bitstream_filters
 //   3 — seeking & time ranges (spec 0014): inputs[].seek {start, mode},
 //       outputs[].duration | end (mutually exclusive), outputs[].copy_ts
+//   4 — input options & formats (spec 0024): inputs[].format (forced demuxer),
+//       inputs[].options (demuxer dict, incl. raw geometry), and N:v:K indexed
+//       graph-input stream selection
 // A spec whose "version" exceeds this is rejected in main() rather than having
 // its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
-#define AFMPEG_VOCAB_VERSION 3
+#define AFMPEG_VOCAB_VERSION 4
 
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"

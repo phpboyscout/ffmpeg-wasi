@@ -120,10 +120,12 @@ typedef struct {
 } Ctx;
 
 // parse_input_pad reads a "N:v" / "N:a" graph input label into an input index +
-// media type.
-static int parse_input_pad(const char *name, int *in_idx, enum AVMediaType *type) {
+// media type, plus an optional "N:v:K" per-type stream index (spec 0024; -1 =
+// best stream of that type, the default).
+static int parse_input_pad(const char *name, int *in_idx, enum AVMediaType *type, int *sel) {
     char t = 0;
-    if (sscanf(name, "%d:%c", in_idx, &t) != 2) return -1;
+    *sel = -1;
+    if (sscanf(name, "%d:%c:%d", in_idx, &t, sel) < 2) return -1;
     if (t == 'v' || t == 'V') *type = AVMEDIA_TYPE_VIDEO;
     else if (t == 'a' || t == 'A') *type = AVMEDIA_TYPE_AUDIO;
     else return -1;
@@ -203,17 +205,23 @@ static int find_output_for_pad(Ctx *c, const char *label) {
 }
 
 // add_buffersrc opens the decoder for one input pad and wires a buffersrc into
-// the graph at the pad it feeds.
-static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int in_idx) {
+// the graph at the pad it feeds. sel selects a specific stream of the type
+// (spec 0024; -1 = best).
+static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int in_idx, int sel) {
     if (in_idx < 0 || in_idx >= c->n_in) {
         fprintf(stderr, "ffmpeg-wasi: process: filter references input %d, only %d given\n", in_idx, c->n_in);
         return AVERROR(EINVAL);
     }
-    const AVCodec *dec_codec = NULL;
-    int st = av_find_best_stream(c->in[in_idx], type, -1, -1, &dec_codec, 0);
+    int st = resolve_map_stream(c->in[in_idx], type, sel);
     if (st < 0) {
-        fprintf(stderr, "ffmpeg-wasi: process: input %d has no %s stream\n", in_idx, av_get_media_type_string(type));
+        fprintf(stderr, "ffmpeg-wasi: process: input %d has no %s stream %d\n",
+                in_idx, av_get_media_type_string(type), sel);
         return st;
+    }
+    const AVCodec *dec_codec = avcodec_find_decoder(c->in[in_idx]->streams[st]->codecpar->codec_id);
+    if (!dec_codec) {
+        fprintf(stderr, "ffmpeg-wasi: process: no decoder for input %d stream %d\n", in_idx, st);
+        return AVERROR_DECODER_NOT_FOUND;
     }
 
     GIn *g = &c->gin[c->n_gin];
@@ -780,11 +788,44 @@ static int open_one_input(AVFormatContext **out, const cJSON *in, int idx) {
     }
 
     const char *p = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(in, "path"));
-    int rc = avformat_open_input(out, p, NULL, NULL);
+
+    // Forced demuxer (spec 0024): `format` names the demuxer (e.g. "rawvideo",
+    // "s16le", "mp4"); absent → auto-probe. Needed for headerless/raw inputs.
+    const AVInputFormat *ifmt = NULL;
+    const char *fmt_name = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(in, "format"));
+    if (fmt_name) {
+        ifmt = av_find_input_format(fmt_name);
+        if (!ifmt) {
+            fprintf(stderr, "ffmpeg-wasi: process: unknown input format %s\n", fmt_name);
+            return AVERROR_DEMUXER_NOT_FOUND;
+        }
+    }
+
+    // Demuxer options (spec 0024): the `options` dict reaches avformat_open_input
+    // (raw geometry — video_size/pixel_format/framerate, sample_rate, … — rides
+    // here). Unconsumed keys are a typed error (Q2: fail loud on a wrong option).
+    AVDictionary *opts = NULL;
+    const cJSON *od = cJSON_GetObjectItemCaseSensitive(in, "options"), *kv = NULL;
+    if (cJSON_IsObject(od)) {
+        cJSON_ArrayForEach(kv, od) {
+            if (cJSON_IsString(kv)) av_dict_set(&opts, kv->string, kv->valuestring, 0);
+        }
+    }
+
+    int rc = avformat_open_input(out, p, ifmt, &opts);
     if (rc < 0) {
         fprintf(stderr, "ffmpeg-wasi: process: cannot open input %s\n", p ? p : "(null)");
+        av_dict_free(&opts);
         return rc;
     }
+    if (av_dict_count(opts) > 0) {
+        const AVDictionaryEntry *e = av_dict_iterate(opts, NULL);
+        fprintf(stderr, "ffmpeg-wasi: process: input %d: unknown demuxer option %s\n", idx, e ? e->key : "?");
+        av_dict_free(&opts);
+        return AVERROR(EINVAL);
+    }
+    av_dict_free(&opts);
+
     return avformat_find_stream_info(*out, NULL);
 }
 
@@ -907,12 +948,12 @@ int op_process(const cJSON *spec) {
         }
         // Wire a buffersrc onto each graph input pad.
         for (AVFilterInOut *p = gin; p; p = p->next) {
-            int in_idx; enum AVMediaType type;
-            if (parse_input_pad(p->name, &in_idx, &type) < 0) {
-                fprintf(stderr, "ffmpeg-wasi: process: cannot map graph input pad %s (expected N:v / N:a)\n", p->name);
+            int in_idx, sel; enum AVMediaType type;
+            if (parse_input_pad(p->name, &in_idx, &type, &sel) < 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: cannot map graph input pad %s (expected N:v / N:a / N:v:K)\n", p->name);
                 rc = AVERROR(EINVAL); avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
             }
-            if ((rc = add_buffersrc(&c, p, type, in_idx)) < 0) {
+            if ((rc = add_buffersrc(&c, p, type, in_idx, sel)) < 0) {
                 avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
             }
         }

@@ -48,9 +48,11 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 | `inputs[]` | Each input's path (resolved against the mounted filesystem) + demuxer options. |
 | `inputs[].concat` | *(v2)* An array of like-codec file paths joined into one continuous input via the **concat demuxer** (a stream-copy join; distinct from the `concat` filter, which re-encodes). When set, replaces `path`. |
 | `inputs[].seek` | *(v3)* `{"start": seconds, "mode": "fast"\|"accurate"}` — start the input at a point instead of decoding from the beginning. **fast** (default) seeks the demuxer to the keyframe at-or-before `start`; **accurate** additionally decodes-and-discards to the exact frame. Accurate cannot feed a copied stream (a copy cuts on keyframes) — that is a hard error. |
+| `inputs[].format` | *(v4)* Force the demuxer by name (e.g. `"rawvideo"`, `"s16le"`, `"mp4"`) instead of auto-probing. Required for headerless/raw inputs. |
+| `inputs[].options` | *(v4)* Demuxer options passed as an AVDictionary — raw geometry rides here (`{"video_size":"1280x720","pixel_format":"yuv420p","framerate":"25"}` for rawvideo; `{"sample_rate":"48000","ch_layout":"mono"}` for PCM). An unconsumed key is a typed error. |
 | `filter` | The full ffmpeg `filter_complex` string — `[0:v]scale=…[vout];[1:a]…[aout]`. Optional (passthrough graph for input 0 if omitted). |
 | `outputs[]` | One **output file** each. With a single output, `map` may be omitted (every graph pad is muxed into it); with **multiple outputs, each must set `map`** to claim its pads. |
-| `outputs[].map` | What to mux into this file — either graph output pad labels (bracketed, `["[loud]"]`, encoded) **or** *(v2)* input-stream specifiers (unbracketed: `"0:v"`, `"0:a:0"`, `"0:0"`, **stream-copied**). |
+| `outputs[].map` | What to mux into this file — either graph output pad labels (bracketed, `["[loud]"]`, encoded) **or** *(v2)* input-stream specifiers (unbracketed: `"0:v"`, `"0:a:0"`, `"0:0"`, **stream-copied**). Graph input pads accept the same indexed form — `[0:v:1]` in a `filter` selects the second video stream *(v4)*. |
 | `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). *(v2)* The sentinel **`"copy"`** stream-copies the mapped input stream — no decode/encode, needs no codec, works for any codec in either variant. The output container is chosen from the path extension. |
 | `outputs[].options` | String key/values passed to the encoder (e.g. `{"crf":"28"}`). |
 | `outputs[].bitstream_filters` | *(v2)* Per copied stream, keyed by its `map` entry: a bitstream-filter name/chain (e.g. `{"0:v":"h264_mp4toannexb"}`), or `"none"` to force-disable. Absent → the muxer auto-inserts any container-required filter. |
@@ -106,6 +108,13 @@ Working examples (verified end-to-end):
 {"op":"process","version":3,
  "inputs":[{"path":"in.mp4","seek":{"start":12.5}}],
  "outputs":[{"path":"cut.mp4","map":["0:v","0:a"],"video_codec":"copy","audio_codec":"copy"}]}
+
+// v4 — raw headerless input: forced demuxer + geometry, transcoded
+{"op":"process","version":4,
+ "inputs":[{"path":"frames.yuv","format":"rawvideo",
+            "options":{"video_size":"1280x720","pixel_format":"yuv420p","framerate":"25"}}],
+ "filter":"[0:v]null[v]",
+ "outputs":[{"path":"out.mp4","map":["[v]"],"video_codec":"libopenh264"}]}
 ```
 
 On success the engine prints what it wrote, one entry per output file, e.g.
@@ -167,6 +176,7 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | 1 | Baseline + the version gate (`op:version`); no process/probe field changes. |
 | 2 | Stream copy / bitstream filters / concat demuxer (afmpeg spec 0013): the `copy` codec sentinel, unbracketed `in:type[:idx]` map specifiers, `outputs[].bitstream_filters`, `inputs[].concat`. |
 | 3 | Seeking & time ranges (afmpeg spec 0014): `inputs[].seek {start, mode}`, `outputs[].duration` \| `end` (mutually exclusive), `outputs[].copy_ts`. Probe replies gain `start_sec`. |
+| 4 | Input options & formats (afmpeg spec 0024): `inputs[].format` (forced demuxer), `inputs[].options` (demuxer dict, incl. raw geometry), and `N:v:K` indexed graph-input stream selection. |
 
 **The gate (two sides):**
 
