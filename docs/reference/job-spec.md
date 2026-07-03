@@ -1,6 +1,6 @@
 ---
 title: The job-spec vocabulary
-description: The structured operations the engine accepts — process and probe — the compatibility contract with afmpeg.
+description: The structured operations the engine accepts — process, probe, and frames — the compatibility contract with afmpeg.
 date: 2026-06-28
 tags: [reference, api]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]
@@ -150,6 +150,40 @@ WAV yields:
   "streams":[{"index":0,"type":"audio","codec":"pcm_s16le","sample_rate":8000,"channels":1}]}]}
 ```
 
+### `frames` — extract still frames
+
+```jsonc
+{
+  "op": "frames", "version": 6,
+  "inputs": [ { "path": "in/clip.mp4" } ],   // exactly one video input
+  "select": {                                 // exactly one selector
+    "timestamp":  12.5,                        // (a) single frame, seconds
+    "timestamps": [1.0, 5.0, 30.0],            // (b) explicit list
+    "interval":   10.0,                        // (c) every N seconds
+    "scene":      0.4                           // (d) scene-change threshold, or "thumbnail"
+  },
+  "path":  "out/frame_%03d.png",              // templated: one integer token (or none for a single frame)
+  "codec": "png",                              // image encoder: png (default) | mjpeg | webp
+  "scale": "320:-2",                           // optional ffmpeg scale args
+  "count": 25                                  // optional cap on frames emitted
+}
+```
+
+Pulls one or more stills from a video to templated image files (afmpeg spec 0021) — the
+bread-and-butter "poster at 5s / thumbnail strip / contact sheet" chore as typed fields rather
+than an `fps`/`select` graph into an `image2` muxer. The seeking selectors (`timestamp` /
+`timestamps` / `interval`) fast-seek to the keyframe at-or-before each target and decode forward
+to the first frame ≥ target — cheap, not a full-stream decode; `scene` stream-decodes through
+the `select='gt(scene,T)'` or `thumbnail` filter (which need the **intermediate** profile). Each
+frame is optionally scaled, encoded, and written; the engine owns the naming and reports each:
+
+```json
+{"frames":[{"path":"out/frame_000.png","index":0,"timestamp":12.5}],"count":1}
+```
+
+`select` is a one-of (zero or multiple is rejected). `count` caps output — an uncapped `interval`
+falls back to a built-in bound. The image codecs are native (png/mjpeg); `webp` rides spec 0018.
+
 ### `version` — report the vocabulary version
 
 ```jsonc
@@ -193,6 +227,7 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | 3 | Seeking & time ranges (afmpeg spec 0014): `inputs[].seek {start, mode}`, `outputs[].duration` \| `end` (mutually exclusive), `outputs[].copy_ts`. Probe replies gain `start_sec`. |
 | 4 | Input options & formats (afmpeg spec 0024): `inputs[].format` (forced demuxer), `inputs[].options` (demuxer dict, incl. raw geometry), and `N:v:K` indexed graph-input stream selection. |
 | 5 | Container coverage (afmpeg spec 0015): `outputs[].format` (forced muxer), `outputs[].format_options` (muxer dict — segmenting/fragmentation); a `segmented` result marker. The container (de)muxer batch itself is a build-profile matter (intermediate), not a vocabulary one. |
+| 6 | Frame extraction (afmpeg spec 0021): the new `op:"frames"` — pull stills by `select {timestamp \| timestamps \| interval \| scene}` to a templated `path`, with optional `codec`/`scale`/`count`. |
 
 **The gate (two sides):**
 

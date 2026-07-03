@@ -30,6 +30,7 @@
 
 #include "third_party/cJSON/cJSON.h"
 #include "process.h"
+#include "frames.h"
 
 // AFMPEG_VOCAB_VERSION is the highest job-spec vocabulary version this engine
 // understands (spec 0007 §4 contract; afmpeg roadmap Phase 1 version-gating).
@@ -45,9 +46,12 @@
 //   5 — container coverage (spec 0015): outputs[].format (forced muxer),
 //       outputs[].format_options (muxer dict — segmenting/fragmentation);
 //       the container (de)muxer batch is a build-profile matter, not a vocab one
+//   6 — frame extraction (spec 0021): the new op:"frames" — pull stills by
+//       select {timestamp | timestamps | interval | scene} to a templated
+//       path, optional codec/scale/count
 // A spec whose "version" exceeds this is rejected in main() rather than having
 // its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
-#define AFMPEG_VOCAB_VERSION 5
+#define AFMPEG_VOCAB_VERSION 6
 
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"
@@ -204,6 +208,8 @@ int main(int argc, char **argv) {
         rc = op_probe(spec);
     } else if (op && strcmp(op, "process") == 0) {
         rc = op_process(spec);
+    } else if (op && strcmp(op, "frames") == 0) {
+        rc = op_frames(spec);
     } else if (op && strcmp(op, "version") == 0) {
         rc = op_version();
     } else {
