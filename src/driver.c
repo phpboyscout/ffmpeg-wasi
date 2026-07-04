@@ -31,6 +31,7 @@
 #include "third_party/cJSON/cJSON.h"
 #include "process.h"
 #include "frames.h"
+#include "meta.h"
 
 // AFMPEG_VOCAB_VERSION is the highest job-spec vocabulary version this engine
 // understands (spec 0007 §4 contract; afmpeg roadmap Phase 1 version-gating).
@@ -49,9 +50,13 @@
 //   6 — frame extraction (spec 0021): the new op:"frames" — pull stills by
 //       select {timestamp | timestamps | interval | scene} to a templated
 //       path, optional codec/scale/count
+//   7 — metadata & chapters (spec 0020): outputs[].metadata (container tags),
+//       outputs[].chapters ("copy"/input index), outputs[].stream_metadata
+//       (per-map tags/language/disposition). Probe replies gain tags/chapters
+//       and per-stream tags/disposition/language (additive read side).
 // A spec whose "version" exceeds this is rejected in main() rather than having
 // its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
-#define AFMPEG_VOCAB_VERSION 6
+#define AFMPEG_VOCAB_VERSION 7
 
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"
@@ -102,6 +107,14 @@ static void describe_stream(cJSON *streams, unsigned index, const AVStream *st) 
         cJSON_AddNumberToObject(js, "sample_rate", cp->sample_rate);
         cJSON_AddNumberToObject(js, "channels", cp->ch_layout.nb_channels);
     }
+
+    // Metadata (spec 0020, additive): the stream's tags, its decoded disposition
+    // flags, and its language (hoisted from the tags for convenience).
+    const AVDictionaryEntry *lang = av_dict_get(st->metadata, "language", NULL, 0);
+    if (lang) cJSON_AddStringToObject(js, "language", lang->value);
+    meta_add_disposition(js, st->disposition);
+    meta_add_tags(js, st->metadata);
+
     cJSON_AddItemToArray(streams, js);
 }
 
@@ -128,6 +141,22 @@ static void probe_input(cJSON *out_inputs, const char *path) {
     if (fmt->start_time != AV_NOPTS_VALUE) {
         cJSON_AddNumberToObject(ji, "start_sec", (double)fmt->start_time / AV_TIME_BASE);
     }
+    // Container tags + chapters (spec 0020, additive). Chapter start/end are
+    // rescaled from the chapter's own time_base to seconds.
+    meta_add_tags(ji, fmt->metadata);
+    if (fmt->nb_chapters > 0) {
+        cJSON *chapters = cJSON_AddArrayToObject(ji, "chapters");
+        for (unsigned i = 0; i < fmt->nb_chapters; i++) {
+            const AVChapter *ch = fmt->chapters[i];
+            cJSON *jc = cJSON_CreateObject();
+            cJSON_AddNumberToObject(jc, "start", ch->start * av_q2d(ch->time_base));
+            cJSON_AddNumberToObject(jc, "end", ch->end * av_q2d(ch->time_base));
+            const AVDictionaryEntry *title = av_dict_get(ch->metadata, "title", NULL, 0);
+            if (title) cJSON_AddStringToObject(jc, "title", title->value);
+            cJSON_AddItemToArray(chapters, jc);
+        }
+    }
+
     cJSON *streams = cJSON_AddArrayToObject(ji, "streams");
     for (unsigned i = 0; i < fmt->nb_streams; i++) {
         describe_stream(streams, i, fmt->streams[i]);

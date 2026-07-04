@@ -126,7 +126,20 @@ Working examples (verified end-to-end):
 {"op":"process","version":5,"inputs":[{"path":"in.mp4"}],"filter":"[0:v]null[v]",
  "outputs":[{"path":"stream.m3u8","map":["[v]"],"format":"hls","video_codec":"libopenh264",
    "format_options":{"hls_time":"4","hls_segment_filename":"seg_%03d.ts","hls_list_size":"0"}}]}
+
+// v7 — remux to mkv, set container tags, copy chapters, tag a stream's language/disposition
+{"op":"process","version":7,"inputs":[{"path":"in.mp4"}],
+ "outputs":[{"path":"out.mkv","map":["0:v","0:a"],"video_codec":"copy","audio_codec":"copy",
+   "metadata":{"title":"My Title","artist":"Me"},
+   "chapters":"copy",
+   "stream_metadata":{"0:a":{"language":"eng","disposition":["default"]}}}]}
 ```
+
+**Metadata (spec 0020).** `outputs[].metadata` is a `{key:value}` tag map set on the output
+container; `outputs[].chapters` is a passthrough directive (`"copy"` carries the first input's
+chapters, an input index picks another, `"none"`/absent drops them); `outputs[].stream_metadata`
+maps a `map` entry to `{language, disposition, tags}` applied to that output stream. An
+`attached_pic` cover-art stream copied via `map` keeps its disposition automatically.
 
 A **segmenting** output (`hls`/`dash`/`segment`) reports `"segmented": true` in its result entry;
 `path` is the playlist/manifest and the segment files sit beside it on the mounted filesystem by
@@ -149,6 +162,11 @@ WAV yields:
 {"inputs":[{"path":"tone.wav","format":"wav","duration_sec":0.5,
   "streams":[{"index":0,"type":"audio","codec":"pcm_s16le","sample_rate":8000,"channels":1}]}]}
 ```
+
+Since **v7** (spec 0020) the reply additionally carries, where present, the container's `tags`
+object and `chapters` array (`start`/`end` in seconds + `title`), and on each stream its
+`language`, decoded `disposition` flag names, and `tags` — all additive, so an older consumer
+ignores them.
 
 ### `frames` — extract still frames
 
@@ -228,6 +246,7 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | 4 | Input options & formats (afmpeg spec 0024): `inputs[].format` (forced demuxer), `inputs[].options` (demuxer dict, incl. raw geometry), and `N:v:K` indexed graph-input stream selection. |
 | 5 | Container coverage (afmpeg spec 0015): `outputs[].format` (forced muxer), `outputs[].format_options` (muxer dict — segmenting/fragmentation); a `segmented` result marker. The container (de)muxer batch itself is a build-profile matter (intermediate), not a vocabulary one. |
 | 6 | Frame extraction (afmpeg spec 0021): the new `op:"frames"` — pull stills by `select {timestamp \| timestamps \| interval \| scene}` to a templated `path`, with optional `codec`/`scale`/`count`. |
+| 7 | Metadata & chapters (afmpeg spec 0020): `outputs[].metadata` (container tags), `outputs[].chapters` (`"copy"`/index passthrough), `outputs[].stream_metadata` (per-map `language`/`disposition`/`tags`). Probe replies gain container `tags`/`chapters` and per-stream `tags`/`disposition`/`language` (additive). |
 
 **The gate (two sides):**
 

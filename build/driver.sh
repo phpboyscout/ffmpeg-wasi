@@ -13,7 +13,7 @@ HERE="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 mkdir -p "$(dirname -- "$OUT")"
 
 # Engine sources: the driver + operations, the vendored JSON parser, and the wasi shims.
-ENGINE_SRC="$DRIVER_SRC $SRC_DIR/process.c $SRC_DIR/frames.c $SRC_DIR/third_party/cJSON/cJSON.c $HERE/wasi-compat.c"
+ENGINE_SRC="$DRIVER_SRC $SRC_DIR/process.c $SRC_DIR/frames.c $SRC_DIR/meta.c $SRC_DIR/third_party/cJSON/cJSON.c $HERE/wasi-compat.c"
 
 # External codec libraries the libav* archives depend on (e.g. libx264 in the GPL
 # variant), discovered from $PREFIX and linked AFTER libav* so their symbols

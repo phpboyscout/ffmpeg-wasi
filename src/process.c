@@ -18,6 +18,7 @@
 
 #include <libavutil/avutil.h>
 #include <libavutil/avstring.h>
+#include <libavutil/mem.h>
 #include <libavutil/opt.h>
 #include <libavcodec/avcodec.h>
 #include <libavcodec/bsf.h>
@@ -27,6 +28,7 @@
 #include <libavfilter/buffersink.h>
 
 #include "process.h"
+#include "meta.h"
 
 #define MAX_INPUTS 32
 #define MAX_GIN 32
@@ -60,6 +62,13 @@ typedef struct {
     double duration;  // -t seconds (0 = unset); mutually exclusive with end
     double end;       // -to seconds (0 = unset)
     int copy_ts;      // preserve source PTS (default 0 = zero-base the output)
+
+    // Metadata (spec 0020): container `metadata` tags, a `chapters` passthrough
+    // directive ("copy" / an input index), and `stream_metadata` — a per-map-key
+    // object of {tags, language, disposition} applied to each output stream.
+    const cJSON *metadata;
+    const cJSON *chapters;
+    const cJSON *stream_metadata;
 } Out;
 
 // One copied stream: an input (input, stream) wired straight to an output stream,
@@ -90,6 +99,7 @@ typedef struct {
     AVCodecContext *enc;
     AVStream *ost;
     int out_idx;
+    char label[64]; // the graph pad label, for per-stream metadata routing (0020)
 } GOut;
 
 typedef struct {
@@ -303,6 +313,7 @@ static int add_buffersink(Ctx *c, AVFilterInOut *pad) {
     GOut *go = &c->gout[c->n_gout];
     go->type = type;
     go->out_idx = out_idx;
+    snprintf(go->label, sizeof(go->label), "%s", pad->name ? pad->name : ""); // for 0020 routing
     const AVFilter *bufsink = avfilter_get_by_name(type == AVMEDIA_TYPE_VIDEO ? "buffersink" : "abuffersink");
     char nm[32];
     snprintf(nm, sizeof(nm), "sink%d", c->n_gout);
@@ -539,6 +550,11 @@ static int parse_output(Out *o, const cJSON *spec) {
         return 2;
     }
     o->copy_ts = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(spec, "copy_ts"));
+    // Metadata (spec 0020): container tags, a chapters passthrough directive, and
+    // the per-stream metadata object. Parsed here, applied before write_header.
+    o->metadata = cJSON_GetObjectItemCaseSensitive(spec, "metadata");
+    o->chapters = cJSON_GetObjectItemCaseSensitive(spec, "chapters");
+    o->stream_metadata = cJSON_GetObjectItemCaseSensitive(spec, "stream_metadata");
     // Guard the container type before walking it: a malformed but trusted spec
     // whose "options" is not an object (e.g. a string) is ignored, not iterated
     // unpredictably (spec 0027 §4C, defence-in-depth on trusted input).
@@ -630,6 +646,11 @@ static int setup_copy_stream(Ctx *c, Cpy *cp) {
     if (ret < 0) return ret;
     cp->ost->codecpar->codec_tag = 0; // let the muxer pick a tag valid for its container
     cp->ost->time_base = ist->time_base;
+    // Carry the source disposition + tags across the copy (spec 0020): an
+    // attached_pic (cover art) stream must keep its flag or the muxer rejects it /
+    // re-encodes a still; language and other tags ride along too.
+    cp->ost->disposition = ist->disposition;
+    av_dict_copy(&cp->ost->metadata, ist->metadata, 0);
 
     const char *bsf_spec = NULL;
     if (cJSON_IsObject(out->bsf)) {
@@ -846,6 +867,81 @@ static int open_one_input(AVFormatContext **out, const cJSON *in, int idx) {
     return avformat_find_stream_info(*out, NULL);
 }
 
+// copy_chapters deep-copies an input's chapters onto an output context (spec 0020
+// D-0020-B): id/time_base/start/end + the title dict, so a transcode keeps its
+// chapter list. Passthrough only — authoring chapters from the spec is deferred.
+static int copy_chapters(AVFormatContext *dst, const AVFormatContext *src) {
+    for (unsigned i = 0; i < src->nb_chapters; i++) {
+        const AVChapter *sc = src->chapters[i];
+        AVChapter *dc = av_mallocz(sizeof(*dc));
+        if (!dc) return AVERROR(ENOMEM);
+        dc->id = sc->id;
+        dc->time_base = sc->time_base;
+        dc->start = sc->start;
+        dc->end = sc->end;
+        av_dict_copy(&dc->metadata, sc->metadata, 0);
+        AVChapter **tmp = av_realloc_array(dst->chapters, dst->nb_chapters + 1, sizeof(*tmp));
+        if (!tmp) { av_dict_free(&dc->metadata); av_free(dc); return AVERROR(ENOMEM); }
+        dst->chapters = tmp;
+        dst->chapters[dst->nb_chapters++] = dc;
+    }
+    return 0;
+}
+
+// stream_meta_for finds the stream_metadata entry whose key matches map_key,
+// bracket-insensitively (the same routing as graph pads): a copied stream passes
+// its "0:a" specifier, an encoded pad its label "vout" against a "[vout]" key.
+static const cJSON *stream_meta_for(const Out *out, const char *map_key) {
+    if (!cJSON_IsObject(out->stream_metadata) || !map_key) return NULL;
+
+    const cJSON *e = NULL;
+    cJSON_ArrayForEach(e, out->stream_metadata) {
+        if (e->string && label_matches(e->string, map_key)) return e;
+    }
+    return NULL;
+}
+
+// apply_stream_metadata applies one stream_metadata entry to an output stream:
+// language + arbitrary tags onto ost->metadata, and the disposition set. Overrides
+// whatever a copy carried across (spec 0020 D-0020-D).
+static void apply_stream_metadata(const cJSON *meta, AVStream *ost) {
+    if (!cJSON_IsObject(meta)) return;
+
+    const char *lang = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(meta, "language"));
+    if (lang) av_dict_set(&ost->metadata, "language", lang, 0);
+    meta_apply_tags(&ost->metadata, cJSON_GetObjectItemCaseSensitive(meta, "tags"));
+    const cJSON *disp = cJSON_GetObjectItemCaseSensitive(meta, "disposition");
+    if (cJSON_IsArray(disp)) ost->disposition = meta_disposition_from_json(disp);
+}
+
+// apply_output_metadata threads one output's container tags, chapter passthrough,
+// and per-stream metadata into its muxer just before write_header (spec 0020).
+static int apply_output_metadata(Ctx *c, int oi) {
+    Out *out = &c->out[oi];
+    meta_apply_tags(&out->ofmt->metadata, out->metadata);
+
+    // chapters: "copy" carries input 0's; an explicit index picks another; absent
+    // or "none" drops them.
+    const char *ch = cJSON_GetStringValue(out->chapters);
+    if (ch && strcmp(ch, "none") != 0) {
+        int src = strcmp(ch, "copy") == 0 ? 0 : atoi(ch);
+        if (src >= 0 && src < c->n_in) {
+            int rc = copy_chapters(out->ofmt, c->in[src]);
+            if (rc < 0) return rc;
+        }
+    }
+
+    for (int i = 0; i < c->n_gout; i++) {
+        if (c->gout[i].out_idx == oi)
+            apply_stream_metadata(stream_meta_for(out, c->gout[i].label), c->gout[i].ost);
+    }
+    for (int i = 0; i < c->n_cpy; i++) {
+        if (c->cpy[i].out_idx == oi)
+            apply_stream_metadata(stream_meta_for(out, c->cpy[i].map_key), c->cpy[i].ost);
+    }
+    return 0;
+}
+
 int op_process(const cJSON *spec) {
     const cJSON *inputs = cJSON_GetObjectItemCaseSensitive(spec, "inputs");
     const cJSON *outputs = cJSON_GetObjectItemCaseSensitive(spec, "outputs");
@@ -1002,6 +1098,8 @@ int op_process(const cJSON *spec) {
 
     // Open + write the header for every output (each may have AVFMT_NOFILE).
     for (int i = 0; i < c.n_out; i++) {
+        // Thread metadata/chapters/per-stream tags into the muxer first (0020).
+        if ((rc = apply_output_metadata(&c, i)) < 0) goto end;
         if (!(c.out[i].ofmt->oformat->flags & AVFMT_NOFILE)) {
             if ((rc = avio_open(&c.out[i].ofmt->pb, c.out[i].path, AVIO_FLAG_WRITE)) < 0) {
                 fprintf(stderr, "ffmpeg-wasi: process: cannot open output %s\n", c.out[i].path); goto end;
