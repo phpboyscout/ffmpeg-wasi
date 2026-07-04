@@ -13,9 +13,12 @@ WORKDIR /work
 # cached across engine edits, so iterating on the driver reuses both. deps.sh is
 # PROFILE-aware from spec 0018 (the intermediate profile pulls the external
 # encoder libs; lean and the flag-only batches don't), so it caches per profile.
-COPY build/toolchain.sh build/deps.sh build/libav.sh build/wasi-compat.h \
+# libav.sh is COPY'd *after* the deps RUN, so editing the codec allowlist rebuilds
+# only libav — not the (slow, meson-heavy) external-dep layer.
+COPY build/toolchain.sh build/deps.sh build/wasi-compat.h \
      build/openh264-wasi.patch build/openh264-threads.c /work/build/
 RUN VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/deps.sh
+COPY build/libav.sh /work/build/
 RUN FFMPEG_VERSION="$FFMPEG_VERSION" VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/libav.sh
 COPY build/ /work/build/
 COPY src/ /work/src/

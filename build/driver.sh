@@ -53,8 +53,12 @@ done
 # the one C++ dependency; the engine and libav* are C), linked after the codec libs.
 # -lsetjmp resolves the __wasm_setjmp/__wasm_longjmp that clang's SjLj lowering
 # emits for libvpx's encoder (its setjmp/longjmp use); harmless when unreferenced.
+#
+# -z stack-size lifts the wasm data stack from wasi-sdk's 64 KB default to 8 MB:
+# the engine's op_process holds a large Ctx and FFmpeg's native encoders recurse
+# deeply (the mpegvideo/mjpeg path most of all), so 64 KB overflows into a trap.
 # shellcheck disable=SC2086  # $ENGINE_SRC/$DEP_LIBS/$WASI_EMULATED_LIBS are deliberately split
-$CC $CFLAGS -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
+$CC $CFLAGS -Wl,-z,stack-size=8388608 -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
   -L"$FFMPEG_SRC/libavformat" -L"$FFMPEG_SRC/libavcodec" -L"$FFMPEG_SRC/libavfilter" \
   -L"$FFMPEG_SRC/libavutil" -L"$FFMPEG_SRC/libswresample" -L"$FFMPEG_SRC/libswscale" \
   -lavformat -lavcodec -lavfilter -lavutil -lswresample -lswscale \

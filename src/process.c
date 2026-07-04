@@ -35,6 +35,7 @@
 #define MAX_GOUT 16
 #define MAX_OUTPUTS 8
 #define MAX_CPY 32
+#define MAX_SUB 16
 
 // COPY_CODEC is the codec sentinel that marks a mapped stream for packet
 // passthrough (no decode/encode) — mirrors ffmpeg's `-c copy` (spec 0013).
@@ -54,6 +55,7 @@ typedef struct {
     const char *path;
     const char *vcodec;
     const char *acodec;
+    const char *scodec;    // subtitle encoder name, or "copy" (spec 0019); NULL → none
     const char *format;    // forced muxer name (spec 0015); NULL → guess by extension
     AVDictionary *enc_opts;
     AVDictionary *fmt_opts; // muxer options → write_header (spec 0015)
@@ -92,6 +94,20 @@ typedef struct {
     int64_t rebase; // offset subtracted from frame pts (stream tb); AV_NOPTS_VALUE until captured
 } GInSeek;
 
+// One transcoded subtitle stream (spec 0019): an input subtitle track decoded to
+// AVSubtitle and re-encoded to another subtitle codec, then muxed. Subtitles do
+// not traverse the lavfi graph (libavfilter has no general subtitle buffersrc),
+// so this is a third lane beside the graph and the copy path. A copied subtitle
+// (subtitle_codec:"copy") rides the Cpy path instead.
+typedef struct {
+    int in_idx;
+    int st_idx;
+    int out_idx;
+    AVCodecContext *dec;
+    AVCodecContext *enc;
+    AVStream *ost;
+} Sub;
+
 // One graph output pad: a buffersink encoded into a stream of output out_idx.
 typedef struct {
     enum AVMediaType type;
@@ -114,6 +130,8 @@ typedef struct {
     int n_gout;
     Cpy cpy[MAX_CPY];
     int n_cpy;
+    Sub sub[MAX_SUB];
+    int n_sub;
     Out out[MAX_OUTPUTS];
     int n_out;
 
@@ -161,8 +179,11 @@ static int parse_map_stream(const char *s, int *in_idx, enum AVMediaType *type, 
 
     char t = 0;
     int k = -1;
-    if (sscanf(s, "%d:%c:%d", in_idx, &t, &k) >= 2 && (t == 'v' || t == 'V' || t == 'a' || t == 'A')) {
-        *type = (t == 'v' || t == 'V') ? AVMEDIA_TYPE_VIDEO : AVMEDIA_TYPE_AUDIO;
+    if (sscanf(s, "%d:%c:%d", in_idx, &t, &k) >= 2 &&
+        (t == 'v' || t == 'V' || t == 'a' || t == 'A' || t == 's' || t == 'S')) {
+        if (t == 'v' || t == 'V') *type = AVMEDIA_TYPE_VIDEO;
+        else if (t == 'a' || t == 'A') *type = AVMEDIA_TYPE_AUDIO;
+        else *type = AVMEDIA_TYPE_SUBTITLE; // spec 0019: N:s subtitle-stream maps
         *sel = k;
         return 0;
     }
@@ -534,10 +555,11 @@ static int parse_output(Out *o, const cJSON *spec) {
     o->path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "path"));
     o->vcodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "video_codec"));
     o->acodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "audio_codec"));
+    o->scodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "subtitle_codec"));
     o->map = cJSON_GetObjectItemCaseSensitive(spec, "map");
     o->bsf = cJSON_GetObjectItemCaseSensitive(spec, "bitstream_filters");
-    if (!o->path || (!o->vcodec && !o->acodec)) {
-        fprintf(stderr, "ffmpeg-wasi: process: each output needs path and a video and/or audio codec\n");
+    if (!o->path || (!o->vcodec && !o->acodec && !o->scodec)) {
+        fprintf(stderr, "ffmpeg-wasi: process: each output needs path and a video, audio and/or subtitle codec\n");
         return 2;
     }
     // The output window (spec 0014): -t seconds or -to position, not both.
@@ -616,6 +638,22 @@ static int add_copy_descriptors(Ctx *c) {
             if (st < 0) {
                 fprintf(stderr, "ffmpeg-wasi: process: map %s selects no stream\n", m->valuestring);
                 return st;
+            }
+
+            // A subtitle stream with a real subtitle_codec (not "copy") is
+            // transcoded on the Sub lane; everything else — and copied subtitles —
+            // rides the packet-passthrough Cpy path (spec 0019 D-0019-B).
+            const char *sc = c->out[oi].scodec;
+            int transcode_sub = type == AVMEDIA_TYPE_SUBTITLE && sc && strcmp(sc, COPY_CODEC) != 0;
+            if (transcode_sub) {
+                if (c->n_sub >= MAX_SUB) { fprintf(stderr, "ffmpeg-wasi: process: too many subtitle streams\n"); return AVERROR(EINVAL); }
+                Sub *su = &c->sub[c->n_sub++];
+                su->in_idx = in_idx;
+                su->st_idx = st;
+                su->out_idx = oi;
+                su->dec = su->enc = NULL;
+                su->ost = NULL;
+                continue;
             }
 
             Cpy *cp = &c->cpy[c->n_cpy++];
@@ -774,6 +812,97 @@ static int flush_copy_bsfs(Ctx *c) {
         av_packet_free(&pkt);
     }
     return ret;
+}
+
+// setup_sub_stream opens the decoder + encoder for one transcoded subtitle stream
+// and adds its output stream (spec 0019). The encoder inherits the decoder's ASS
+// subtitle_header — mov_text/ass encode from ASS-formatted events, so they need it.
+static int setup_sub_stream(Ctx *c, Sub *su) {
+    Out *out = &c->out[su->out_idx];
+    AVStream *ist = c->in[su->in_idx]->streams[su->st_idx];
+
+    const AVCodec *dec = avcodec_find_decoder(ist->codecpar->codec_id);
+    if (!dec) { fprintf(stderr, "ffmpeg-wasi: process: no decoder for subtitle stream\n"); return AVERROR_DECODER_NOT_FOUND; }
+    su->dec = avcodec_alloc_context3(dec);
+    if (!su->dec) return AVERROR(ENOMEM);
+    int ret = avcodec_parameters_to_context(su->dec, ist->codecpar);
+    if (ret < 0) return ret;
+    su->dec->pkt_timebase = ist->time_base;
+    if ((ret = avcodec_open2(su->dec, dec, NULL)) < 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: open subtitle decoder failed\n"); return ret;
+    }
+
+    const AVCodec *enc = avcodec_find_encoder_by_name(out->scodec);
+    if (!enc || enc->type != AVMEDIA_TYPE_SUBTITLE) {
+        fprintf(stderr, "ffmpeg-wasi: process: unknown subtitle encoder %s\n", out->scodec);
+        return AVERROR_ENCODER_NOT_FOUND;
+    }
+    su->enc = avcodec_alloc_context3(enc);
+    if (!su->enc) return AVERROR(ENOMEM);
+    su->enc->time_base = (AVRational){1, 1000}; // subtitle ms timeline
+    if (su->dec->subtitle_header && su->dec->subtitle_header_size > 0) {
+        su->enc->subtitle_header = av_malloc(su->dec->subtitle_header_size + 1);
+        if (!su->enc->subtitle_header) return AVERROR(ENOMEM);
+        memcpy(su->enc->subtitle_header, su->dec->subtitle_header, su->dec->subtitle_header_size);
+        su->enc->subtitle_header[su->dec->subtitle_header_size] = 0;
+        su->enc->subtitle_header_size = su->dec->subtitle_header_size;
+    }
+    if (out->ofmt->oformat->flags & AVFMT_GLOBALHEADER) su->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if ((ret = avcodec_open2(su->enc, enc, NULL)) < 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: open subtitle encoder %s failed\n", out->scodec); return ret;
+    }
+
+    su->ost = avformat_new_stream(out->ofmt, NULL);
+    if (!su->ost) return AVERROR(ENOMEM);
+    if ((ret = avcodec_parameters_from_context(su->ost->codecpar, su->enc)) < 0) return ret;
+    su->ost->time_base = su->enc->time_base;
+    return 0;
+}
+
+// write_sub_pkt encodes one decoded AVSubtitle to the output subtitle stream and
+// muxes it, timing the packet from the subtitle's pts + display window (spec 0019).
+static int write_sub_pkt(Ctx *c, Sub *su, AVSubtitle *sub) {
+    const int bufsize = 1 << 16; // one subtitle event; ample for text formats
+    uint8_t *buf = av_malloc(bufsize); // heap, not the wasm stack
+    if (!buf) return AVERROR(ENOMEM);
+    int n = avcodec_encode_subtitle(su->enc, buf, bufsize, sub);
+    if (n <= 0) { av_free(buf); return n; } // n==0: nothing to write
+
+    AVPacket *pkt = av_packet_alloc();
+    int ret = pkt ? av_new_packet(pkt, n) : AVERROR(ENOMEM);
+    if (ret < 0) { av_free(buf); av_packet_free(&pkt); return ret; }
+    memcpy(pkt->data, buf, n);
+    av_free(buf);
+
+    int64_t pts = sub->pts != AV_NOPTS_VALUE ? sub->pts : 0; // AV_TIME_BASE units
+    pkt->pts = av_rescale_q(pts, AV_TIME_BASE_Q, su->ost->time_base)
+             + av_rescale_q(sub->start_display_time, (AVRational){1, 1000}, su->ost->time_base);
+    pkt->dts = pkt->pts;
+    pkt->duration = av_rescale_q((int64_t)sub->end_display_time - sub->start_display_time,
+                                 (AVRational){1, 1000}, su->ost->time_base);
+    pkt->stream_index = su->ost->index;
+    ret = av_interleaved_write_frame(c->out[su->out_idx].ofmt, pkt);
+    av_packet_free(&pkt);
+    return ret;
+}
+
+// sub_packet decodes one input subtitle packet and re-encodes it to every Sub
+// target fed by that (input, stream) — the subtitle transcode lane (spec 0019).
+static int sub_packet(Ctx *c, int in_idx, const AVPacket *pkt) {
+    for (int i = 0; i < c->n_sub; i++) {
+        Sub *su = &c->sub[i];
+        if (su->in_idx != in_idx || su->st_idx != pkt->stream_index) continue;
+
+        AVSubtitle sub;
+        int got = 0;
+        int ret = avcodec_decode_subtitle2(su->dec, &sub, &got, (AVPacket *)pkt);
+        if (ret < 0) return ret;
+        if (!got) continue;
+        ret = write_sub_pkt(c, su, &sub);
+        avsubtitle_free(&sub);
+        if (ret < 0) return ret;
+    }
+    return 0;
 }
 
 // open_concat_input joins a playlist of like-codec files as one continuous input
@@ -1096,6 +1225,11 @@ int op_process(const cJSON *spec) {
         if ((rc = setup_copy_stream(&c, &c.cpy[i])) < 0) goto end;
     }
 
+    // Transcoded subtitle streams (spec 0019): decoder + encoder + output stream.
+    for (int i = 0; i < c.n_sub; i++) {
+        if ((rc = setup_sub_stream(&c, &c.sub[i])) < 0) goto end;
+    }
+
     // Open + write the header for every output (each may have AVFMT_NOFILE).
     for (int i = 0; i < c.n_out; i++) {
         // Thread metadata/chapters/per-stream tags into the muxer first (0020).
@@ -1152,6 +1286,7 @@ int op_process(const cJSON *spec) {
             }
             rc = feed(&c, i, pkt, frame);
             if (rc >= 0) rc = copy_packet(&c, i, pkt); // passthrough, independent of decode
+            if (rc >= 0) rc = sub_packet(&c, i, pkt);  // subtitle transcode lane (spec 0019)
             av_packet_unref(pkt);
         }
     }
@@ -1193,6 +1328,13 @@ int op_process(const cJSON *spec) {
                 cJSON_AddStringToObject(s, "disposition", "copy");
                 cJSON_AddItemToArray(streams, s);
             }
+            for (int j = 0; j < c.n_sub; j++) {
+                if (c.sub[j].out_idx != i) continue;
+                cJSON *s = cJSON_CreateObject();
+                cJSON_AddStringToObject(s, "type", "subtitle");
+                cJSON_AddStringToObject(s, "codec", c.sub[j].enc->codec->name);
+                cJSON_AddItemToArray(streams, s);
+            }
             cJSON_AddItemToArray(outs, od);
         }
         char *j = cJSON_PrintUnformatted(res);
@@ -1216,6 +1358,10 @@ end:
     for (int i = 0; i < c.n_gin; i++) avcodec_free_context(&c.gin[i].dec);
     for (int i = 0; i < c.n_gout; i++) avcodec_free_context(&c.gout[i].enc);
     for (int i = 0; i < c.n_cpy; i++) av_bsf_free(&c.cpy[i].bsf); // ost is owned by its ofmt
+    for (int i = 0; i < c.n_sub; i++) { // ost is owned by its ofmt
+        avcodec_free_context(&c.sub[i].dec);
+        avcodec_free_context(&c.sub[i].enc);
+    }
     if (c.graph) avfilter_graph_free(&c.graph);
     for (int i = 0; i < c.n_in; i++) avformat_close_input(&c.in[i]);
     return rc < 0 ? 1 : 0;

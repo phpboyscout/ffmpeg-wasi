@@ -54,9 +54,12 @@
 //       outputs[].chapters ("copy"/input index), outputs[].stream_metadata
 //       (per-map tags/language/disposition). Probe replies gain tags/chapters
 //       and per-stream tags/disposition/language (additive read side).
+//   8 — subtitle streams (spec 0019): outputs[].subtitle_codec (an encoder name
+//       or "copy") + "N:s" subtitle-stream map specifiers — extract/convert/copy
+//       subtitle tracks (the AVMEDIA_TYPE_SUBTITLE lane)
 // A spec whose "version" exceeds this is rejected in main() rather than having
 // its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
-#define AFMPEG_VOCAB_VERSION 7
+#define AFMPEG_VOCAB_VERSION 8
 
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"

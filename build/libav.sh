@@ -87,6 +87,10 @@ INTERMEDIATE_ENABLE="\
 --enable-libvpx --enable-encoder=libvpx_vp8,libvpx_vp9 \
 --enable-libfreetype --enable-libharfbuzz --enable-libass \
 --enable-filter=drawtext,subtitles,ass \
+--enable-decoder=subrip,ass,webvtt,movtext \
+--enable-encoder=srt,ass,webvtt,movtext \
+--enable-muxer=srt,webvtt,ass \
+--enable-demuxer=srt,ass,webvtt \
 --enable-protocol=file,pipe"
 
 case "$PROFILE" in

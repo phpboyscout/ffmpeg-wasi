@@ -133,7 +133,20 @@ Working examples (verified end-to-end):
    "metadata":{"title":"My Title","artist":"Me"},
    "chapters":"copy",
    "stream_metadata":{"0:a":{"language":"eng","disposition":["default"]}}}]}
+
+// v8 — convert a subtitle track to WebVTT (sidecar), and embed one as mov_text in mp4
+{"op":"process","version":8,"inputs":[{"path":"sub.srt"}],
+ "outputs":[{"path":"out.vtt","map":["0:s"],"subtitle_codec":"webvtt"}]}
+{"op":"process","version":8,"inputs":[{"path":"in.mp4"},{"path":"sub.srt"}],
+ "outputs":[{"path":"out.mp4","map":["0:v","0:a","1:s"],
+   "video_codec":"copy","audio_codec":"copy","subtitle_codec":"mov_text"}]}
 ```
+
+**Subtitle streams (spec 0019).** `outputs[].subtitle_codec` transcodes a subtitle track named in
+`map` by an `N:s` specifier (e.g. `srt`, `webvtt`, `mov_text`, `ass`), or `"copy"` to remux it
+unchanged. An output may carry `subtitle_codec` alone (a sidecar `.srt`/`.vtt`) or beside video +
+audio (an embedded track). Subtitles ride their own decode→encode lane — they do not traverse the
+`filter` graph — so they are mapped by stream specifier, never a graph-pad label.
 
 **Metadata (spec 0020).** `outputs[].metadata` is a `{key:value}` tag map set on the output
 container; `outputs[].chapters` is a passthrough directive (`"copy"` carries the first input's
@@ -247,6 +260,7 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | 5 | Container coverage (afmpeg spec 0015): `outputs[].format` (forced muxer), `outputs[].format_options` (muxer dict — segmenting/fragmentation); a `segmented` result marker. The container (de)muxer batch itself is a build-profile matter (intermediate), not a vocabulary one. |
 | 6 | Frame extraction (afmpeg spec 0021): the new `op:"frames"` — pull stills by `select {timestamp \| timestamps \| interval \| scene}` to a templated `path`, with optional `codec`/`scale`/`count`. |
 | 7 | Metadata & chapters (afmpeg spec 0020): `outputs[].metadata` (container tags), `outputs[].chapters` (`"copy"`/index passthrough), `outputs[].stream_metadata` (per-map `language`/`disposition`/`tags`). Probe replies gain container `tags`/`chapters` and per-stream `tags`/`disposition`/`language` (additive). |
+| 8 | Subtitle streams (afmpeg spec 0019): `outputs[].subtitle_codec` (an encoder name or `"copy"`) + `N:s` subtitle map specifiers — extract/convert/copy subtitle tracks (the subtitle transcode lane). |
 
 **The gate (two sides):**
 
