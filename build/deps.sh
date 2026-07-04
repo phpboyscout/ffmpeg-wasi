@@ -19,6 +19,11 @@ HERE_DEPS="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 : "${VORBIS_VERSION:=1.3.7}"        # libvorbis (BSD) — Vorbis encode
 : "${WEBP_VERSION:=1.4.0}"          # libwebp (BSD) — WebP encode
 : "${VPX_VERSION:=v1.14.1}"         # libvpx (BSD) — VP8/VP9 encode (the heavyweight)
+# Text/subtitle burn-in libs (spec 0019, via the meson toolchain of spec 0029).
+: "${FREETYPE_VERSION:=2.13.3}"     # freetype (FTL) — glyph rasteriser (drawtext + libass)
+: "${HARFBUZZ_VERSION:=8.5.0}"      # harfbuzz (MIT) — shaping; FFmpeg 8 drawtext requires it
+: "${FRIBIDI_VERSION:=1.0.16}"      # fribidi (LGPL) — bidi; libass requires it
+: "${LIBASS_VERSION:=0.17.3}"       # libass (ISC) — subtitles/ass burn-in
 
 mkdir -p "$PREFIX"
 
@@ -31,7 +36,8 @@ fetch_tarball() {
   mkdir -p "$dest"
   for url in "$@"; do
     if curl -fsSL --retry 4 --retry-all-errors --retry-delay 3 -o /tmp/fetch.tgz "$url"; then
-      tar xzf /tmp/fetch.tgz -C "$dest" --strip-components=1 && rm -f /tmp/fetch.tgz && return 0
+      # tar auto-detects the compression (gzip / xz — harfbuzz + fribidi ship .tar.xz).
+      tar xf /tmp/fetch.tgz -C "$dest" --strip-components=1 && rm -f /tmp/fetch.tgz && return 0
     fi
     echo "fetch: $url failed — trying next mirror" >&2
   done
@@ -60,6 +66,41 @@ autotools_configure() {
   LDFLAGS="--target=wasm32-wasip1 --sysroot=$WASI_SYSROOT $WASI_EMULATED_LIBS" \
   ./configure --host=wasm32-wasi --prefix="$PREFIX" \
     --enable-static --disable-shared "$@"
+}
+
+# write_meson_cross emits a meson cross-file for wasm32-wasi (spec 0029) from the
+# toolchain's $CFLAGS — harfbuzz + fribidi are meson-only. c_args/cpp_args are the
+# shell word-split of $CFLAGS, each single-quoted into a meson string list, so
+# meson compiles with the exact same wasm target flags as the rest of the build.
+# needs_exe_wrapper=true: the sandbox can't run the wasm output during the build.
+write_meson_cross() {
+  # shellcheck disable=SC2086  # deliberate word-split of CFLAGS into list elements
+  cargs=$(printf "'%s'," $CFLAGS)
+  # shellcheck disable=SC2086
+  ldargs=$(printf "'%s'," --target=wasm32-wasip1 --sysroot="$WASI_SYSROOT" $WASI_EMULATED_LIBS)
+  cat > /tmp/wasi-cross.txt <<EOF
+[binaries]
+c = 'clang'
+cpp = 'clang++'
+ar = 'llvm-ar'
+strip = 'llvm-strip'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'wasi'
+cpu_family = 'wasm32'
+cpu = 'wasm32'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+
+[built-in options]
+c_args = [${cargs%,}]
+c_link_args = [${ldargs%,}]
+cpp_args = [${cargs%,}]
+cpp_link_args = [${ldargs%,}]
+EOF
 }
 
 # build_libopus — Opus encode (BSD). Autotools; asm/rtcd/intrinsics off for the
@@ -140,6 +181,74 @@ build_libvpx() {
     || { echo "libvpx configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
   make -j"$(nproc)" install
   echo "libvpx built → $PREFIX"
+}
+
+# build_freetype — glyph rasteriser (FTL) for drawtext + libass (spec 0019).
+# Autotools; every optional dependency (harfbuzz/brotli/png/bz2/zlib) is off — we
+# need only core glyph rendering, and harfbuzz would circular-dep with freetype.
+# freetype's real configure is in builds/unix, so its config.sub is refreshed too.
+build_freetype() {
+  fetch_tarball /freetype \
+    "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.gz" \
+    "https://downloads.sourceforge.net/freetype/freetype-${FREETYPE_VERSION}.tar.gz"
+  cd /freetype
+  fetch_config_sub
+  [ -f builds/unix/config.sub ] && cp "$FRESH_CONFIG_SUB" builds/unix/config.sub
+  autotools_configure --without-harfbuzz --without-brotli --without-png \
+    --without-bzip2 --without-zlib \
+    || { echo "freetype configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+  echo "freetype built → $PREFIX"
+}
+
+# build_harfbuzz — text-shaping engine (MIT), meson-built (spec 0029). FFmpeg 8's
+# drawtext requires it (drawtext_filter_deps="libfreetype libharfbuzz"), and libass
+# uses it for shaping. C++ — links libc++ at the final engine link. Everything but
+# freetype integration is off. Slow to compile under -Oz (~5-8 min).
+build_harfbuzz() {
+  fetch_tarball /harfbuzz \
+    "https://github.com/harfbuzz/harfbuzz/releases/download/${HARFBUZZ_VERSION}/harfbuzz-${HARFBUZZ_VERSION}.tar.xz"
+  cd /harfbuzz
+  # -DHB_NO_MT: single-threaded harfbuzz (no std::atomic). meson pulls the threads
+  # dep, so without this clang emits wasm atomic ops (i32.atomic.store) that
+  # wazero rejects (the threads feature is off). Safe — the engine is single-threaded.
+  CFLAGS="$CFLAGS -DHB_NO_MT" write_meson_cross
+  meson setup build --cross-file /tmp/wasi-cross.txt --prefix="$PREFIX" \
+    --default-library=static --buildtype=minsize \
+    -Dfreetype=enabled -Dglib=disabled -Dgobject=disabled -Dcairo=disabled \
+    -Dicu=disabled -Dtests=disabled -Ddocs=disabled -Dutilities=disabled \
+    || { echo "harfbuzz setup failed"; tail -40 build/meson-logs/meson-log.txt 2>/dev/null; exit 1; }
+  ninja -C build install
+  echo "harfbuzz built → $PREFIX"
+}
+
+# build_fribidi — Unicode bidi algorithm (LGPL), meson-built (spec 0029). Required
+# by libass.
+build_fribidi() {
+  fetch_tarball /fribidi \
+    "https://github.com/fribidi/fribidi/releases/download/v${FRIBIDI_VERSION}/fribidi-${FRIBIDI_VERSION}.tar.xz"
+  cd /fribidi
+  write_meson_cross
+  meson setup build --cross-file /tmp/wasi-cross.txt --prefix="$PREFIX" \
+    --default-library=static --buildtype=minsize -Ddocs=false -Dtests=false -Dbin=false \
+    || { echo "fribidi setup failed"; tail -40 build/meson-logs/meson-log.txt 2>/dev/null; exit 1; }
+  ninja -C build install
+  echo "fribidi built → $PREFIX"
+}
+
+# build_libass — ASS/SSA + SRT/VTT rasteriser (ISC) for the subtitles/ass burn-in
+# filters (spec 0019). Autotools, needs freetype + fribidi (+ harfbuzz for shaping),
+# all built above. fontconfig is off — the sandbox has no system fonts, so fonts
+# come from the mounted fs by path (D-0019-C); asm off for the portable path.
+build_libass() {
+  fetch_tarball /libass \
+    "https://github.com/libass/libass/releases/download/${LIBASS_VERSION}/libass-${LIBASS_VERSION}.tar.gz"
+  cd /libass
+  autotools_configure --disable-fontconfig --disable-require-system-font-provider \
+    --disable-libunibreak --disable-asm \
+    || { echo "libass configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+  echo "libass built → $PREFIX"
 }
 
 # build_zlib cross-compiles zlib (permissive) to wasm32-wasi, static. FFmpeg's
@@ -236,9 +345,16 @@ if [ "$PROFILE" = intermediate ]; then
   build_libvorbis
   build_libwebp
   build_libvpx
+  # Text/subtitle burn-in (spec 0019): freetype → harfbuzz → fribidi → libass,
+  # in dependency order (harfbuzz + libass link freetype; libass links fribidi).
+  build_freetype
+  build_harfbuzz
+  build_fribidi
+  build_libass
   # wasi has no pthreads and every lib here is built single-threaded, but some
-  # (libvpx) still list -lpthread in their .pc Libs.private. FFmpeg probes deps
-  # with --static pkg-config, so that spurious -lpthread reaches the wasm link
-  # and fails it — silently soft-disabling the encoder. Strip it project-wide.
-  sed -i 's/-lpthread//g' "$PREFIX"/lib/pkgconfig/*.pc
+  # .pc files still advertise it: libvpx lists -lpthread, harfbuzz (meson) lists
+  # -pthread. FFmpeg probes deps with --static pkg-config, so either reaches the
+  # wasm link — -lpthread has no archive, and -pthread makes clang emit
+  # --shared-memory (which wasm-ld rejects without atomics). Strip both.
+  sed -i 's/-lpthread//g; s/-pthread//g' "$PREFIX"/lib/pkgconfig/*.pc
 fi

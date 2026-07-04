@@ -23,9 +23,11 @@ class from [afmpeg spec 0022](https://afmpeg.phpboyscout.uk/development/specs/00
   `palettegen`/`paletteuse`, deinterlace (`yadif`), `loudnorm`/`atempo`, and more — see
   [filters](filters.md); and the **native codec batch** (spec 0016): AC-3/E-AC-3/DTS decode,
   ProRes/DNxHD/DV, MPEG-2/4/VC-1/Theora, ALAC, the PCM family, and BMP/TIFF/GIF — see
-  [codecs](codecs.md); and the **external LGPL encoder libs** (spec 0018), cross-compiled into
+  [codecs](codecs.md); the **external LGPL encoder libs** (spec 0018), cross-compiled into
   the build via `build/deps.sh`: **Opus** (`libopus`), **MP3** (`libmp3lame`), **Vorbis**
-  (`libvorbis`), **VP8/VP9** (`libvpx`) and **WebP** (`libwebp`). Its artifact is named
+  (`libvorbis`), **VP8/VP9** (`libvpx`) and **WebP** (`libwebp`); and the **text/subtitle burn-in**
+  libs (spec 0019): **freetype** + **harfbuzz** (the `drawtext` filter) and **libass** (the
+  `subtitles`/`ass` filters), the meson-built ones via spec 0029. Its artifact is named
   `ffmpeg-wasi-intermediate-<variant>.wasm`.
 
 Build a profile locally with the `PROFILE` build-arg (or `just build <variant> <profile>`):

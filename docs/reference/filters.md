@@ -41,6 +41,7 @@ all in-tree, LGPL-clean, no external library:
 | **Audio EQ / dynamics** | `highpass`, `lowpass`, `equalizer`, `atempo`, `aecho`, `silenceremove`, `afftdn` |
 | **Channels** | `pan`, `channelsplit`, `channelmap`, `join` |
 | **Analysis (metadata)** | `cropdetect`, `blackdetect`, `signalstats`, `silencedetect`, `ebur128`, `astats` |
+| **Text / subtitles** (spec [0019](https://afmpeg.phpboyscout.uk/development/specs/0019-text-and-subtitles/)) | `drawtext` (freetype + harfbuzz), `subtitles`, `ass` (libass) — burn text/`.srt`/`.ass` onto video |
 
 ### Notes
 
@@ -51,5 +52,7 @@ all in-tree, LGPL-clean, no external library:
 - **Analysis filters** (`cropdetect`, `ebur128`, …) currently emit their measurements to the log
   (stderr), not as structured output — observe-only for now (spec 0017 Q-0017-1).
 - **`eq`** is a GPL filter, so it is present only in the **gpl** variant, not the LGPL default.
-- **`drawtext`** (freetype) and **`subtitles`/`ass`** (libass) pull external libraries and are
-  **not** in this batch — they belong to spec 0019.
+- **Fonts have no fontconfig** — the sandbox has no system fonts. Name the font by path:
+  `drawtext=fontfile=/font.ttf:…`; for `subtitles`/`ass`, point libass at a mounted directory
+  (`subtitles=filename=sub.srt:fontsdir=/fonts:force_style='FontName=…'`). The libs
+  (freetype/harfbuzz/libass) cross-compile via the meson toolchain of spec 0029.

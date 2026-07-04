@@ -85,6 +85,8 @@ INTERMEDIATE_ENABLE="\
 --enable-libvorbis --enable-encoder=libvorbis \
 --enable-libwebp --enable-encoder=libwebp \
 --enable-libvpx --enable-encoder=libvpx_vp8,libvpx_vp9 \
+--enable-libfreetype --enable-libharfbuzz --enable-libass \
+--enable-filter=drawtext,subtitles,ass \
 --enable-protocol=file,pipe"
 
 case "$PROFILE" in
@@ -100,16 +102,17 @@ esac
 # --pkg-config-flags=--static: our deps are static archives, so configure's dep
 #   probes need pkg-config's transitive Requires.private libs (e.g. vorbisenc →
 #   vorbis → ogg), which plain --libs omits.
-# --extra-libs=-lsetjmp: libvpx's encoder uses setjmp/longjmp, which clang's wasm
-#   SjLj lowering turns into __wasm_setjmp/__wasm_longjmp (in the sysroot's
-#   libsetjmp.a). Without it configure's encoder probe fails to link and silently
-#   soft-disables libvpx_vp8/vp9 (libav's own code never pulls SjLj setjmp).
+# --extra-libs: -lsetjmp for libvpx's encoder setjmp/longjmp (clang's wasm SjLj
+#   lowering → __wasm_setjmp/__wasm_longjmp in the sysroot's libsetjmp.a); and
+#   -lc++/-lc++abi so configure's dep probes resolve harfbuzz's C++ symbols
+#   (libass → harfbuzz). Without these the probes fail to link and silently
+#   soft-disable the lib (libav's own code is C).
 # shellcheck disable=SC2086  # $ENABLE/$GPL_FLAGS/$OPENH264_FLAGS are deliberately split into args
 LDFLAGS="--target=wasm32-wasip1 --sysroot=$WASI_SYSROOT $SJLJ -L$PREFIX/lib $WASI_EMULATED_LIBS" \
 ./configure \
   --cc="$CC" --cxx="$CXX" --ld="$CC" --nm="$NM" --ar="$AR" --ranlib="$RANLIB" --strip="$STRIP" \
   --pkg-config-flags=--static \
-  --extra-libs=-lsetjmp \
+  --extra-libs="-lsetjmp -lc++ -lc++abi" \
   --extra-cflags="-include $HERE_LIBAV/wasi-compat.h -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-function-pointer-types" \
   --enable-cross-compile --arch=x86_32 --target-os=none \
   --disable-shared --enable-static --enable-small --disable-stripping \

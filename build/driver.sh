@@ -27,8 +27,12 @@ dep_rank() {
   case "$1" in
     webpmux|webpdemux) echo 10 ;;   # → webp
     vorbisenc)         echo 10 ;;   # → vorbis → ogg
+    ass)               echo 15 ;;   # → freetype, fribidi, harfbuzz
     vorbis)            echo 20 ;;
     webp)              echo 30 ;;   # → sharpyuv
+    harfbuzz)          echo 40 ;;   # → freetype (consumed by ass + drawtext)
+    freetype)          echo 70 ;;   # leaf provider (harfbuzz/libass/drawtext)
+    fribidi)           echo 70 ;;   # leaf provider (libass)
     sharpyuv)          echo 70 ;;   # leaf provider (libwebp)
     ogg)               echo 80 ;;   # leaf provider (libvorbis)
     z)                 echo 90 ;;   # leaf provider

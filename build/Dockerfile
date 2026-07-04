@@ -6,7 +6,8 @@ ARG FFMPEG_VERSION=n8.1.2
 ARG VARIANT=lgpl
 ARG PROFILE=lean
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git make pkg-config ca-certificates curl && rm -rf /var/lib/apt/lists/*
+        git make pkg-config ca-certificates curl xz-utils meson ninja-build \
+        && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
 # Build external codec dependencies (per variant + profile) and libav* first —
 # cached across engine edits, so iterating on the driver reuses both. deps.sh is
