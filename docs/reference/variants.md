@@ -80,8 +80,10 @@ release (`nX.Y.Z-N`) publishes:
 
 | Asset | What |
 |---|---|
-| `ffmpeg-wasi-lgpl.wasm` / `.gz` | the LGPL module (and gzipped) |
-| `ffmpeg-wasi-gpl.wasm` / `.gz` | the GPL module (and gzipped) |
+| `ffmpeg-wasi-lgpl.wasm` / `.gz` | the LGPL **lean** module (and gzipped) |
+| `ffmpeg-wasi-gpl.wasm` / `.gz` | the GPL **lean** module (and gzipped) |
+| `ffmpeg-wasi-intermediate-lgpl.wasm` / `.gz` | the LGPL **intermediate** module — lean + subtitles, LGPL encoders, native codec batch, burn-in |
+| `ffmpeg-wasi-intermediate-gpl.wasm` / `.gz` | the GPL **intermediate** module |
 | `checksums.txt` | SHA-256 of every artifact (incl. `provenance.json`) — [verify before use](../how-to/choose-a-variant.md) |
 | `checksums.txt.sig` | a **detached OpenPGP signature** over `checksums.txt` from a release-signing key held in AWS KMS, signable only by this project's tag pipeline (GitLab OIDC). [afmpeg](https://gitlab.com/phpboyscout/afmpeg) verifies it (via `gitlab.com/phpboyscout/signing`) against a pinned key |
 | `provenance.json` | exact FFmpeg/dependency/toolchain versions, configure line, per-asset licence |

@@ -51,16 +51,23 @@ validate:
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
   timeout: 2h
   before_script:
-    - apt-get update && apt-get install -y --no-install-recommends git make pkg-config gzip ca-certificates && rm -rf /var/lib/apt/lists/*
+    # curl + xz-utils + meson/ninja are needed by the intermediate profile (its
+    # external libs are fetched tarballs; harfbuzz/fribidi are meson builds). They
+    # are harmless for the lean profile, which uses neither.
+    - apt-get update && apt-get install -y --no-install-recommends git make pkg-config gzip ca-certificates curl xz-utils meson ninja-build && rm -rf /var/lib/apt/lists/*
   script:
     - export FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
-    - echo "Building ${VARIANT} for FFmpeg ${FFMPEG_VERSION}"
+    # Artifact name: lean keeps the legacy ffmpeg-wasi-<variant>.wasm; a non-lean
+    # profile carries the profile in the name (spec 0022). PROFILE reaches deps.sh
+    # and libav.sh via the environment (a GitLab job variable), defaulting to lean.
+    - 'if [ "${PROFILE:-lean}" = lean ]; then NAME="ffmpeg-wasi-${VARIANT}"; else NAME="ffmpeg-wasi-${PROFILE}-${VARIANT}"; fi'
+    - echo "Building ${NAME} for FFmpeg ${FFMPEG_VERSION}"
     - sh build/deps.sh
     - sh build/libav.sh
     - mkdir -p dist
-    - OUT="dist/ffmpeg-wasi-${VARIANT}.wasm" sh build/driver.sh
-    - cp "dist/ffmpeg-wasi-${VARIANT}.wasm" "ffmpeg-wasi-${VARIANT}.wasm"
-    - gzip -k -9 "ffmpeg-wasi-${VARIANT}.wasm"
+    - OUT="dist/${NAME}.wasm" sh build/driver.sh
+    - cp "dist/${NAME}.wasm" "${NAME}.wasm"
+    - gzip -k -9 "${NAME}.wasm"
   artifacts:
     paths:
       - "ffmpeg-wasi-*.wasm*"
@@ -76,6 +83,21 @@ build:gpl:
   variables:
     VARIANT: gpl
 
+# The intermediate profile (spec 0022): lean + every practical software codec/
+# filter (subtitles, LGPL encoders, native codec batch, burn-in). Published
+# alongside lean so a consumer gets the full advertised capability.
+build:lgpl:intermediate:
+  extends: .build
+  variables:
+    VARIANT: lgpl
+    PROFILE: intermediate
+
+build:gpl:intermediate:
+  extends: .build
+  variables:
+    VARIANT: gpl
+    PROFILE: intermediate
+
 # Sign the release manifest. Tag-gated; uses GitLab OIDC to assume the
 # ffmpeg-wasi signer role, then `gtb` mints the OpenPGP public key from the KMS
 # key and signs checksums.txt with a detached OpenPGP signature (afmpeg spec
@@ -90,6 +112,8 @@ sign:
   needs:
     - build:lgpl
     - build:gpl
+    - build:lgpl:intermediate
+    - build:gpl:intermediate
   id_tokens:
     AWS_WEB_IDENTITY_TOKEN:
       # The IAM OIDC provider hardcodes client_id_list=["sts.amazonaws.com"];
@@ -139,6 +163,8 @@ release:
     # build → the .wasm/.gz; sign → checksums.txt, provenance.json, the signature.
     - build:lgpl
     - build:gpl
+    - build:lgpl:intermediate
+    - build:gpl:intermediate
     - sign
   variables:
     PKG: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/ffmpeg-wasi/${CI_COMMIT_TAG}"
@@ -151,6 +177,8 @@ release:
       # `sign` job; the modules from the build jobs.
       for f in ffmpeg-wasi-lgpl.wasm ffmpeg-wasi-lgpl.wasm.gz \
                ffmpeg-wasi-gpl.wasm ffmpeg-wasi-gpl.wasm.gz \
+               ffmpeg-wasi-intermediate-lgpl.wasm ffmpeg-wasi-intermediate-lgpl.wasm.gz \
+               ffmpeg-wasi-intermediate-gpl.wasm ffmpeg-wasi-intermediate-gpl.wasm.gz \
                checksums.txt checksums.txt.sig provenance.json; do
         echo "uploading $f"
         curl --fail --silent --show-error \
@@ -161,11 +189,15 @@ release:
       release-cli create \
         --name "ffmpeg-wasi ${CI_COMMIT_TAG}" \
         --tag-name "${CI_COMMIT_TAG}" \
-        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI — **lgpl** (default; H.264 encode via openh264) and **gpl** (libx264 H.264 encode). Both encode H.264; the self-compiled openh264 carries an AVC patent caveat (see the licensing docs). The manifest is signed: \`checksums.txt.sig\` is a detached OpenPGP signature over \`checksums.txt\` from a KMS-held key (afmpeg verifies it via the org signing module against a pinned key). Pin a module by its URL + SHA-256 from \`checksums.txt\`; see \`provenance.json\` for exactly what went in." \
+        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI. Two licence variants — **lgpl** (default; H.264 encode via openh264) and **gpl** (libx264 H.264 encode) — each in two capability profiles: **lean** (web-delivery essentials, the \`ffmpeg-wasi-<variant>.wasm\` assets) and **intermediate** (lean + every practical software codec/filter — subtitles, LGPL encoders, native codec batch, text burn-in — the \`ffmpeg-wasi-intermediate-<variant>.wasm\` assets). Both variants encode H.264; the self-compiled openh264 carries an AVC patent caveat (see the licensing docs). The manifest is signed: \`checksums.txt.sig\` is a detached OpenPGP signature over \`checksums.txt\` from a KMS-held key (afmpeg verifies it via the org signing module against a pinned key). Pin a module by its URL + SHA-256 from \`checksums.txt\`; see \`provenance.json\` for exactly what went in." \
         --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-gpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-gpl.wasm\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-lgpl.wasm\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-gpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-gpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm.gz\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-gpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-gpl.wasm.gz\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-lgpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-lgpl.wasm.gz\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-gpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-gpl.wasm.gz\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"checksums.txt\",\"url\":\"${PKG}/checksums.txt\",\"link_type\":\"other\"}" \
         --assets-link "{\"name\":\"checksums.txt.sig\",\"url\":\"${PKG}/checksums.txt.sig\",\"link_type\":\"other\"}" \
         --assets-link "{\"name\":\"provenance.json\",\"url\":\"${PKG}/provenance.json\",\"link_type\":\"other\"}"

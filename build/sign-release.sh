@@ -33,8 +33,10 @@ cat > provenance.json <<PROV
   "build_tag": "${CI_COMMIT_TAG}",
   "commit": "${CI_COMMIT_SHA}",
   "variants": {
-    "lgpl": { "file": "ffmpeg-wasi-lgpl.wasm", "license": "LGPL-2.1-or-later", "h264_encode": "openh264" },
-    "gpl":  { "file": "ffmpeg-wasi-gpl.wasm",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264" }
+    "lgpl": { "file": "ffmpeg-wasi-lgpl.wasm", "license": "LGPL-2.1-or-later", "h264_encode": "openh264", "profile": "lean" },
+    "gpl":  { "file": "ffmpeg-wasi-gpl.wasm",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "lean" },
+    "intermediate-lgpl": { "file": "ffmpeg-wasi-intermediate-lgpl.wasm", "license": "LGPL-2.1-or-later", "h264_encode": "openh264", "profile": "intermediate" },
+    "intermediate-gpl":  { "file": "ffmpeg-wasi-intermediate-gpl.wasm",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "intermediate" }
   },
   "h264_patent_note": "Both variants encode H.264 from self-compiled sources (openh264/libx264), outside Cisco's binary patent grant; shipped under the AVC pool's royalty-free volume tier. See docs/explanation/licensing.md.",
   "tooling_license": "MIT"
@@ -45,6 +47,8 @@ PROV
 #    signature over checksums.txt transitively certifies the whole release set.
 sha256sum ffmpeg-wasi-lgpl.wasm ffmpeg-wasi-lgpl.wasm.gz \
   ffmpeg-wasi-gpl.wasm ffmpeg-wasi-gpl.wasm.gz \
+  ffmpeg-wasi-intermediate-lgpl.wasm ffmpeg-wasi-intermediate-lgpl.wasm.gz \
+  ffmpeg-wasi-intermediate-gpl.wasm ffmpeg-wasi-intermediate-gpl.wasm.gz \
   provenance.json > checksums.txt
 
 # 3. Mint the OpenPGP public key from KMS. Fixed name/email/created → deterministic
