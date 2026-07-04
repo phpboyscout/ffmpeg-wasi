@@ -53,6 +53,21 @@ All are **software, single-threaded** — VP9 encode in particular is slow witho
 pick VP8 unless VP9 is required. libvpx's encoder uses setjmp/longjmp, lowered to wasm
 exception-handling; the afmpeg runtime enables that feature to load the module.
 
+### Subtitles (spec 0019)
+
+The intermediate profile also enables the **subtitle codec batch**, which rides the dedicated
+subtitle transcode lane (decode → re-encode), not the filter graph. Drive it with `subtitle_codec`
+on a subtitle output stream — see the [job spec](job-spec.md); for *burning* subtitles into video
+use the `subtitles`/`ass`/`drawtext` [filters](filters.md) instead.
+
+| | Codecs |
+|---|---|
+| **Decode** | subrip, ass, webvtt, movtext |
+| **Encode** | srt, ass, webvtt, mov_text |
+
+(`movtext` is the configure-time name; the encoder is `mov_text` at runtime — the MP4/MOV
+timed-text codec.)
+
 ### Notes
 
 - **DTS is decode-only** (`dca`) — the encoder is experimental in FFmpeg and left out

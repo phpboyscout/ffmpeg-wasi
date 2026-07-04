@@ -8,8 +8,8 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 # Build from source
 
-You don't need to build — every release [ships both variants](choose-a-variant.md). But the
-whole pipeline is MIT and reproducible, so building it yourself is easy.
+You don't need to build — every release [ships both variants in two profiles](choose-a-variant.md).
+But the whole pipeline is MIT and reproducible, so building it yourself is easy.
 
 ## Prerequisites
 
@@ -37,10 +37,25 @@ whole pipeline is MIT and reproducible, so building it yourself is easy.
 The module lands at `dist/ffmpeg-wasi-<variant>.wasm`. To build a different upstream FFmpeg,
 add `--build-arg FFMPEG_VERSION=n8.1.2` (any FFmpeg release tag).
 
+### Build the intermediate profile
+
+Add `--build-arg PROFILE=intermediate` (default `lean`) to build the full software-codec
+module — the LGPL encoders, the native codec/container batches, and text/subtitle burn-in:
+
+```sh
+docker build -f build/Dockerfile \
+  --build-arg VARIANT=lgpl --build-arg PROFILE=intermediate \
+  --target artifact -o dist .
+```
+
+It lands at `dist/ffmpeg-wasi-intermediate-<variant>.wasm` — the same asset the release
+publishes. See [variants & profiles](../reference/variants.md#profiles-capability-classes).
+
 With [just](https://github.com/casey/just):
 
 ```sh
-just build lgpl
+just build lgpl              # lean (default)
+just build lgpl intermediate # intermediate profile
 ```
 
 ## Run it
@@ -58,6 +73,7 @@ codecs/muxers/filters — confirming it links and runs:
 
 ```
 ffmpeg-wasi engine
+vocab_version: 8
 ffmpeg: n8.1.2
 libavcodec 4070502  libavformat 4066406  libavfilter 724582
 encoders:

@@ -51,7 +51,8 @@ all in-tree, LGPL-clean, no external library:
   encoder that doesn't accept that rate (e.g. AAC).
 - **Analysis filters** (`cropdetect`, `ebur128`, …) currently emit their measurements to the log
   (stderr), not as structured output — observe-only for now (spec 0017 Q-0017-1).
-- **`eq`** is a GPL filter, so it is present only in the **gpl** variant, not the LGPL default.
+- **`eq`** (a GPL-only level/gamma filter) is **not enabled in either variant** — reach for
+  `curves`, `colorbalance`, or `colorchannelmixer` for level adjustment instead.
 - **Fonts have no fontconfig** — the sandbox has no system fonts. Name the font by path:
   `drawtext=fontfile=/font.ttf:…`; for `subtitles`/`ass`, point libass at a mounted directory
   (`subtitles=filename=sub.srt:fontsdir=/fonts:force_style='FontName=…'`). The libs

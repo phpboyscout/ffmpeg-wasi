@@ -51,6 +51,7 @@ You'll see the engine report itself:
 
 ```
 ffmpeg-wasi engine
+vocab_version: 8
 ffmpeg: n8.1.2
 libavcodec 4070502  libavformat 4066406  libavfilter 724582
 encoders:

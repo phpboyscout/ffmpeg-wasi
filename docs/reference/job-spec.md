@@ -1,6 +1,6 @@
 ---
 title: The job-spec vocabulary
-description: The structured operations the engine accepts — process, probe, and frames — the compatibility contract with afmpeg.
+description: The structured operations the engine accepts — process, probe, frames, and version — the compatibility contract with afmpeg.
 date: 2026-06-28
 tags: [reference, api]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]
@@ -15,7 +15,7 @@ is the **compatibility contract** between ffmpeg-wasi and [afmpeg](https://gitla
 it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
 !!! note "Status"
-    **`probe` and `process` both run today.** `process` supports **multiple inputs, the full
+    **`probe`, `process`, `frames`, and `version` all run today.** `process` supports **multiple inputs, the full
     `filter_complex`, and multiple output files** — pad labels (`[0:v]`, `[1:a]`, … →
     `[vout]`, `[aout]`) parsed by `avfilter_graph_parse2`; each graph output pad is routed by
     `map` to the `outputs[]` entry that names it, encoded (video pads with `video_codec`,
@@ -226,7 +226,7 @@ stdout — the machine-readable channel a consumer preflights before running job
 input, so it works before any media is mounted:
 
 ```json
-{"vocab_version":1,"ffmpeg_version":"n8.1.2"}
+{"vocab_version":8,"ffmpeg_version":"n8.1.2"}
 ```
 
 This query carries no `version` of its own, so even an engine older than the consumer answers

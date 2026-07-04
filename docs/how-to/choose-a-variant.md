@@ -8,7 +8,8 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 # Choose & verify a variant
 
-Every release ships two modules. Pick by **licence**, then **verify** before you trust it.
+Every release ships **four** modules — two **licence variants**, each in two capability
+**profiles**. Pick by **licence** and **profile**, then **verify** before you trust it.
 
 ## Which one?
 
@@ -27,6 +28,18 @@ graph TD
 
 When in doubt, start with **LGPL**. See [the licensing model](../explanation/licensing.md) for
 the full picture (and why shipping both together is clean).
+
+## Which profile?
+
+Each variant comes in two profiles (spec [0022](https://afmpeg.phpboyscout.uk/development/specs/0022-build-size-matrix/)):
+
+- **lean** (default, `ffmpeg-wasi-<variant>.wasm`) — web-delivery essentials at the smallest size.
+- **intermediate** (`ffmpeg-wasi-intermediate-<variant>.wasm`) — lean **+ every practical software
+  codec/format/filter**: the LGPL encoders (Opus/MP3/Vorbis/VP8-9/WebP), the native codec and
+  container batches, and text/subtitle burn-in. Larger, but no separate build.
+
+Start with **lean**; reach for **intermediate** when you need a codec, container, or filter it
+doesn't carry — see the [capability tables](../reference/variants.md#profiles-capability-classes).
 
 !!! warning "H.264 and AVC patents"
     Both variants encode H.264, and both are self-compiled — so neither rides under Cisco's
@@ -66,4 +79,5 @@ rt, _ := afmpeg.New(ctx, afmpeg.WithModuleURL(
 Each [release](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases) lists every asset's URL
 and `checksums.txt`. For `n8.1.2-1` the GPL module's SHA-256 is
 `093c9e084fa82780e7247cd7457c3742e398fc3075ba803eef6924cc72512586`. For exactly what went into
-a build (FFmpeg version, dependencies, configure line, licence), read its `provenance.json`.
+a build (FFmpeg version, build tag, commit, and per-variant licence/encoder/profile), read its
+`provenance.json`.

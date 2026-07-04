@@ -10,7 +10,7 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 Information-oriented, accurate facts.
 
-- **[The job-spec vocabulary](job-spec.md)** — the `process` / `probe` operations; the
-  compatibility contract with afmpeg.
+- **[The job-spec vocabulary](job-spec.md)** — the `process` / `probe` / `frames` / `version`
+  operations; the compatibility contract with afmpeg.
 - **[Variants & artifacts](variants.md)** — the LGPL/GPL builds, the codec/filter/muxer
   baseline, the release assets, and versioning.

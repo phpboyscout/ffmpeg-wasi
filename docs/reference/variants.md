@@ -86,7 +86,7 @@ release (`nX.Y.Z-N`) publishes:
 | `ffmpeg-wasi-intermediate-gpl.wasm` / `.gz` | the GPL **intermediate** module |
 | `checksums.txt` | SHA-256 of every artifact (incl. `provenance.json`) — [verify before use](../how-to/choose-a-variant.md) |
 | `checksums.txt.sig` | a **detached OpenPGP signature** over `checksums.txt` from a release-signing key held in AWS KMS, signable only by this project's tag pipeline (GitLab OIDC). [afmpeg](https://gitlab.com/phpboyscout/afmpeg) verifies it (via `gitlab.com/phpboyscout/signing`) against a pinned key |
-| `provenance.json` | exact FFmpeg/dependency/toolchain versions, configure line, per-asset licence |
+| `provenance.json` | the exact FFmpeg version, build tag, and commit, plus a per-variant record (file, licence, H.264 encoder, profile) |
 
 Because the signature covers `checksums.txt`, and `checksums.txt` covers every other
 asset (including `provenance.json`), one signature certifies the whole release. The private

@@ -32,25 +32,31 @@ pure-Go-embeddable.
 
 > **Status: it transcodes.** Current FFmpeg (n8.1.2) compiles to `wasm32-wasi` and runs
 > under wazero, and the engine does **real in-memory transcodes** — verified end-to-end:
-> WAV → AAC, and H.264 → scaled → H.264 (libx264, GPL variant). `probe` and `process` both
-> work, including the full **multi-input `filter_complex`** (N inputs → one graph) and
-> **multi-output muxing** (each graph pad routed by `map` to its own output file). Design:
+> WAV → AAC, and H.264 → scaled → H.264 (libx264, GPL variant). `probe`, `process`, `frames`,
+> and `version` all work — `process` includes the full **multi-input `filter_complex`** (N
+> inputs → one graph) and **multi-output muxing** (each graph pad routed by `map` to its own
+> output file). Design:
 > [spec 0007](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
 
 ## What you get
 
-Each release publishes two ready-to-use artifacts — **pick the licence that fits and skip
-building**:
+Each release publishes **four** ready-to-use modules — two licence **variants**, each in two
+capability **profiles** — **pick the licence that fits and skip building**:
 
 | Variant | Licence | H.264 encode | For |
 |---|---|---|---|
 | **`ffmpeg-wasi-lgpl.wasm`** | LGPL-2.1+ | openh264 (BSD) | the default — proprietary-compatible |
 | **`ffmpeg-wasi-gpl.wasm`** | GPL-2.0+ | libx264 (best quality) | when you want x264 and accept GPL |
 
+The **lean** profile above is web-delivery essentials at the smallest size; the **intermediate**
+profile (`ffmpeg-wasi-intermediate-<variant>.wasm`) adds every practical software codec/filter —
+the LGPL encoders, the native codec/container batches, and text/subtitle burn-in. See
+[variants & profiles](docs/reference/variants.md).
+
 Plus a checksum manifest (`checksums.txt`), a **detached OpenPGP signature** over it
 (`checksums.txt.sig` — KMS-held key, signable only by this project's tag pipeline via GitLab OIDC, verified
-offline by afmpeg), and a provenance manifest (the exact FFmpeg + dependency + toolchain
-versions). Pin by URL + SHA-256. Both variants encode H.264; the self-compiled openh264 in the
+offline by afmpeg), and a provenance manifest (the exact FFmpeg version, build tag, and commit,
+plus a per-variant record). Pin by URL + SHA-256. Both variants encode H.264; the self-compiled openh264 in the
 LGPL variant carries an AVC **patent** caveat — see [licensing](docs/explanation/licensing.md#h264-encode-and-the-avc-patent-pool).
 
 ## Quick start (consuming it from Go)
