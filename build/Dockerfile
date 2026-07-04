@@ -15,7 +15,7 @@ WORKDIR /work
 # encoder libs; lean and the flag-only batches don't), so it caches per profile.
 # libav.sh is COPY'd *after* the deps RUN, so editing the codec allowlist rebuilds
 # only libav — not the (slow, meson-heavy) external-dep layer.
-COPY build/toolchain.sh build/deps.sh build/wasi-compat.h \
+COPY build/toolchain.sh build/deps.sh build/config.sub build/wasi-compat.h \
      build/openh264-wasi.patch build/openh264-threads.c /work/build/
 RUN VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/deps.sh
 COPY build/libav.sh /work/build/

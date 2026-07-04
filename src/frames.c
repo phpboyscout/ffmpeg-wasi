@@ -295,7 +295,8 @@ static int grab_at(Frames *f, double t_sec, const char *tmpl, int ntok, int cap,
 static int grab_scene(Frames *f, const char *tmpl, int ntok, int cap, AVPacket *pkt, AVFrame *frame) {
     AVStream *st = f->fmt->streams[f->vstream];
     int rc = 0;
-    while (f->written < cap && (rc = av_read_frame(f->fmt, pkt)) >= 0) {
+    while (f->written < cap) {
+        if ((rc = av_read_frame(f->fmt, pkt)) < 0) break; // EOF (normal) or read error
         if (pkt->stream_index != f->vstream) { av_packet_unref(pkt); continue; }
         rc = avcodec_send_packet(f->dec, pkt);
         av_packet_unref(pkt);
@@ -306,27 +307,37 @@ static int grab_scene(Frames *f, const char *tmpl, int ntok, int cap, AVPacket *
             av_frame_unref(frame);
             if (rc < 0 || f->written >= cap) break;
         }
-        if (rc < 0 && rc != AVERROR(EAGAIN)) break;
+        if (rc == AVERROR(EAGAIN)) rc = 0; // decoder wants more input — normal
+        if (rc < 0) break;                 // a real decode/emit error
     }
-    // Flush the decoder, then the graph, so a batching filter emits its last frame.
-    avcodec_send_packet(f->dec, NULL);
-    while (avcodec_receive_frame(f->dec, frame) >= 0 && f->written < cap) {
-        double t = frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame->best_effort_timestamp * av_q2d(st->time_base) : -1;
-        emit_one(f, frame, t, tmpl, ntok, cap);
-        av_frame_unref(frame);
+    if (rc == AVERROR_EOF) rc = 0; // end of input is not an error
+
+    // Flush the decoder, then the graph, so a batching filter (thumbnail) emits its
+    // last pick. Propagate any write error instead of silently reporting success.
+    if (rc >= 0) {
+        avcodec_send_packet(f->dec, NULL);
+        while (f->written < cap && (rc = avcodec_receive_frame(f->dec, frame)) >= 0) {
+            double t = frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame->best_effort_timestamp * av_q2d(st->time_base) : -1;
+            rc = emit_one(f, frame, t, tmpl, ntok, cap);
+            av_frame_unref(frame);
+            if (rc < 0) break;
+        }
+        if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) rc = 0;
     }
-    if (f->written < cap) {
+    if (rc >= 0 && f->written < cap) {
         av_buffersrc_add_frame_flags(f->src, NULL, 0); // signal EOF to the graph
         AVFrame *out = av_frame_alloc();
+        if (!out) return AVERROR(ENOMEM);
         while (f->written < cap && av_buffersink_get_frame(f->sink, out) >= 0) {
             char path[1024];
             expand_path(tmpl, ntok, f->written, path, sizeof(path));
-            write_frame(f, out, path, -1);
+            rc = write_frame(f, out, path, -1);
             av_frame_unref(out);
+            if (rc < 0) break;
         }
         av_frame_free(&out);
     }
-    return 0;
+    return rc;
 }
 
 // ---- op -----------------------------------------------------------------

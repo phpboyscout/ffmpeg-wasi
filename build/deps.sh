@@ -9,50 +9,70 @@ HERE_DEPS="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 
 : "${VARIANT:=lgpl}"
 : "${PROFILE:=lean}"                # lean | intermediate — spec 0022; 0018 libs are intermediate
-: "${X264_BRANCH:=stable}"          # x264 has no release tags; pin a commit for releases
+# x264 has no release tags; pin an exact commit for a reproducible build (fetched
+# by SHA — the branch is only a hint). Bump X264_COMMIT to advance it.
+: "${X264_COMMIT:=b35605ace3ddf7c1a5d67a2eb553f034aef41d55}"
 : "${ZLIB_VERSION:=v1.3.1}"
 : "${OPENH264_VERSION:=v2.6.0}"     # H.264 encode for both variants (BSD source)
-# External LGPL/BSD encoder libs (spec 0018) — intermediate profile only.
+# External LGPL/BSD encoder libs (spec 0018) — intermediate profile only. Each
+# tarball is pinned by SHA-256 (verified in fetch_tarball); bump version + digest
+# together.
 : "${OPUS_VERSION:=1.5.2}"          # libopus (BSD) — Opus encode
+OPUS_SHA256=65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1
 : "${LAME_VERSION:=3.100}"          # libmp3lame (LGPL) — MP3 encode
+LAME_SHA256=ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
 : "${OGG_VERSION:=1.3.5}"           # libogg (BSD) — Vorbis container dependency
+OGG_SHA256=0eb4b4b9420a0f51db142ba3f9c64b333f826532dc0f48c6410ae51f4799b664
 : "${VORBIS_VERSION:=1.3.7}"        # libvorbis (BSD) — Vorbis encode
+VORBIS_SHA256=0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab
 : "${WEBP_VERSION:=1.4.0}"          # libwebp (BSD) — WebP encode
+WEBP_SHA256=61f873ec69e3be1b99535634340d5bde750b2e4447caa1db9f61be3fd49ab1e5
 : "${VPX_VERSION:=v1.14.1}"         # libvpx (BSD) — VP8/VP9 encode (the heavyweight)
 # Text/subtitle burn-in libs (spec 0019, via the meson toolchain of spec 0029).
 : "${FREETYPE_VERSION:=2.13.3}"     # freetype (FTL) — glyph rasteriser (drawtext + libass)
+FREETYPE_SHA256=5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747
 : "${HARFBUZZ_VERSION:=8.5.0}"      # harfbuzz (MIT) — shaping; FFmpeg 8 drawtext requires it
+HARFBUZZ_SHA256=77e4f7f98f3d86bf8788b53e6832fb96279956e1c3961988ea3d4b7ca41ddc27
 : "${FRIBIDI_VERSION:=1.0.16}"      # fribidi (LGPL) — bidi; libass requires it
+FRIBIDI_SHA256=1b1cde5b235d40479e91be2f0e88a309e3214c8ab470ec8a2744d82a5a9ea05c
 : "${LIBASS_VERSION:=0.17.3}"       # libass (ISC) — subtitles/ass burn-in
+LIBASS_SHA256=da7c348deb6fa6c24507afab2dee7545ba5dd5bbf90a137bfe9e738f7df68537
 
 mkdir -p "$PREFIX"
 
-# fetch_tarball <destdir> <url...> — download + extract a release tarball (which
-# ships a pre-generated ./configure, so the image needs no autoconf/automake).
-# Tries each mirror URL in turn with retries: release CDNs (SourceForge, xiph)
-# 502/stall often enough that a single URL makes the build flaky.
+# fetch_tarball <destdir> <sha256> <url...> — download, verify, and extract a
+# release tarball (which ships a pre-generated ./configure, so the image needs no
+# autoconf/automake). Tries each mirror URL in turn with retries (release CDNs —
+# SourceForge, xiph — 502/stall often enough that a single URL makes the build
+# flaky), and rejects any download whose SHA-256 doesn't match the pinned digest,
+# so a compromised/altered mirror can't slip tainted source into the artifact.
 fetch_tarball() {
-  dest="$1"; shift
+  dest="$1"; sha="$2"; shift 2
   mkdir -p "$dest"
   for url in "$@"; do
     if curl -fsSL --retry 4 --retry-all-errors --retry-delay 3 -o /tmp/fetch.tgz "$url"; then
+      got=$(sha256sum /tmp/fetch.tgz | cut -d' ' -f1)
+      if [ "$got" != "$sha" ]; then
+        echo "fetch: $url sha256 mismatch (got $got, want $sha) — trying next mirror" >&2
+        rm -f /tmp/fetch.tgz
+        continue
+      fi
       # tar auto-detects the compression (gzip / xz — harfbuzz + fribidi ship .tar.xz).
       tar xf /tmp/fetch.tgz -C "$dest" --strip-components=1 && rm -f /tmp/fetch.tgz && return 0
     fi
     echo "fetch: $url failed — trying next mirror" >&2
   done
-  echo "fetch: all mirrors failed for $dest" >&2
+  echo "fetch: all mirrors failed (or checksum mismatched) for $dest" >&2
   return 1
 }
 
-# fetch_config_sub caches one modern config.sub (from gcc-mirror on GitHub — CDN-
-# backed and current) that knows the wasm32-wasi triple. The audio libs' bundled
-# copies predate wasm and reject it ("machine wasm32 not recognized").
-FRESH_CONFIG_SUB=/tmp/config.sub
+# The vendored config.sub (build/config.sub, committed to the repo) is a modern
+# one that knows the wasm32-wasi triple — the older autotools libs' bundled copies
+# predate wasm and reject it ("machine wasm32 not recognized"). Vendoring it (vs
+# fetching a moving gcc master each build) makes the build deterministic + offline.
+FRESH_CONFIG_SUB="$HERE_DEPS/config.sub"
 fetch_config_sub() {
-  [ -f "$FRESH_CONFIG_SUB" ] && return 0
-  curl -fsSL --retry 4 --retry-all-errors --retry-delay 3 \
-    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub" -o "$FRESH_CONFIG_SUB"
+  [ -f "$FRESH_CONFIG_SUB" ] || { echo "deps: vendored config.sub missing at $FRESH_CONFIG_SUB" >&2; return 1; }
 }
 
 # The autotools cross-compile shape shared by the 0018 audio libs: a fake host
@@ -68,16 +88,28 @@ autotools_configure() {
     --enable-static --disable-shared "$@"
 }
 
+# meson_list turns its arguments into a meson string-list body ('a','b',…), single-
+# quoting each and escaping any embedded single quote, so a flag value can't break
+# the meson parse. (Each argument is one list element — a flag must not itself
+# contain a space; the toolchain's paths are space-free by construction.)
+meson_list() {
+  out=""
+  for w in "$@"; do
+    esc=$(printf '%s' "$w" | sed "s/'/'\\\\''/g")
+    out="$out'$esc',"
+  done
+  printf '%s' "${out%,}"
+}
+
 # write_meson_cross emits a meson cross-file for wasm32-wasi (spec 0029) from the
-# toolchain's $CFLAGS — harfbuzz + fribidi are meson-only. c_args/cpp_args are the
-# shell word-split of $CFLAGS, each single-quoted into a meson string list, so
-# meson compiles with the exact same wasm target flags as the rest of the build.
-# needs_exe_wrapper=true: the sandbox can't run the wasm output during the build.
+# toolchain's $CFLAGS — harfbuzz + fribidi are meson-only. c_args/cpp_args carry the
+# exact same wasm target flags as the rest of the build. needs_exe_wrapper=true: the
+# sandbox can't run the wasm output during the build.
 write_meson_cross() {
-  # shellcheck disable=SC2086  # deliberate word-split of CFLAGS into list elements
-  cargs=$(printf "'%s'," $CFLAGS)
+  # shellcheck disable=SC2086  # $CFLAGS is deliberately split into per-flag args
+  cargs=$(meson_list $CFLAGS)
   # shellcheck disable=SC2086
-  ldargs=$(printf "'%s'," --target=wasm32-wasip1 --sysroot="$WASI_SYSROOT" $WASI_EMULATED_LIBS)
+  ldargs=$(meson_list --target=wasm32-wasip1 --sysroot="$WASI_SYSROOT" $WASI_EMULATED_LIBS)
   cat > /tmp/wasi-cross.txt <<EOF
 [binaries]
 c = 'clang'
@@ -96,17 +128,17 @@ endian = 'little'
 needs_exe_wrapper = true
 
 [built-in options]
-c_args = [${cargs%,}]
-c_link_args = [${ldargs%,}]
-cpp_args = [${cargs%,}]
-cpp_link_args = [${ldargs%,}]
+c_args = [$cargs]
+c_link_args = [$ldargs]
+cpp_args = [$cargs]
+cpp_link_args = [$ldargs]
 EOF
 }
 
 # build_libopus — Opus encode (BSD). Autotools; asm/rtcd/intrinsics off for the
 # portable C path (spec 0018).
 build_libopus() {
-  fetch_tarball /opus \
+  fetch_tarball /opus "$OPUS_SHA256" \
     "https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz" \
     "https://ftp.osuosl.org/pub/xiph/releases/opus/opus-${OPUS_VERSION}.tar.gz"
   cd /opus
@@ -120,7 +152,7 @@ build_libopus() {
 # build_libmp3lame — MP3 encode (LGPL). Old autotools; force the wasi-compat
 # shims and drop the frontend/gtk test.
 build_libmp3lame() {
-  fetch_tarball /lame \
+  fetch_tarball /lame "$LAME_SHA256" \
     "https://downloads.sourceforge.net/project/lame/lame/${LAME_VERSION}/lame-${LAME_VERSION}.tar.gz" \
     "https://ftp.osuosl.org/pub/blfs/conglomeration/lame/lame-${LAME_VERSION}.tar.gz"
   cd /lame
@@ -133,7 +165,7 @@ build_libmp3lame() {
 
 # build_libvorbis — Vorbis encode (BSD), on libogg (BSD). Two static archives.
 build_libvorbis() {
-  fetch_tarball /ogg \
+  fetch_tarball /ogg "$OGG_SHA256" \
     "https://downloads.xiph.org/releases/ogg/libogg-${OGG_VERSION}.tar.gz" \
     "https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-${OGG_VERSION}.tar.gz"
   cd /ogg
@@ -142,7 +174,7 @@ build_libvorbis() {
   make -j"$(nproc)" install
   echo "libogg built → $PREFIX"
 
-  fetch_tarball /vorbis \
+  fetch_tarball /vorbis "$VORBIS_SHA256" \
     "https://downloads.xiph.org/releases/vorbis/libvorbis-${VORBIS_VERSION}.tar.gz" \
     "https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-${VORBIS_VERSION}.tar.gz"
   cd /vorbis
@@ -156,7 +188,7 @@ build_libvorbis() {
 # configure); threads off (no pthreads), SIMD auto-disables for the wasm target.
 # Installs libwebp + libwebpmux/demux + libsharpyuv and their .pc files.
 build_libwebp() {
-  fetch_tarball /webp \
+  fetch_tarball /webp "$WEBP_SHA256" \
     "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-${WEBP_VERSION}.tar.gz" \
     "https://github.com/webmproject/libwebp/releases/download/v${WEBP_VERSION}/libwebp-${WEBP_VERSION}.tar.gz"
   cd /webp
@@ -188,7 +220,7 @@ build_libvpx() {
 # need only core glyph rendering, and harfbuzz would circular-dep with freetype.
 # freetype's real configure is in builds/unix, so its config.sub is refreshed too.
 build_freetype() {
-  fetch_tarball /freetype \
+  fetch_tarball /freetype "$FREETYPE_SHA256" \
     "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.gz" \
     "https://downloads.sourceforge.net/freetype/freetype-${FREETYPE_VERSION}.tar.gz"
   cd /freetype
@@ -206,7 +238,7 @@ build_freetype() {
 # uses it for shaping. C++ — links libc++ at the final engine link. Everything but
 # freetype integration is off. Slow to compile under -Oz (~5-8 min).
 build_harfbuzz() {
-  fetch_tarball /harfbuzz \
+  fetch_tarball /harfbuzz "$HARFBUZZ_SHA256" \
     "https://github.com/harfbuzz/harfbuzz/releases/download/${HARFBUZZ_VERSION}/harfbuzz-${HARFBUZZ_VERSION}.tar.xz"
   cd /harfbuzz
   # -DHB_NO_MT: single-threaded harfbuzz (no std::atomic). meson pulls the threads
@@ -225,7 +257,7 @@ build_harfbuzz() {
 # build_fribidi — Unicode bidi algorithm (LGPL), meson-built (spec 0029). Required
 # by libass.
 build_fribidi() {
-  fetch_tarball /fribidi \
+  fetch_tarball /fribidi "$FRIBIDI_SHA256" \
     "https://github.com/fribidi/fribidi/releases/download/v${FRIBIDI_VERSION}/fribidi-${FRIBIDI_VERSION}.tar.xz"
   cd /fribidi
   write_meson_cross
@@ -241,7 +273,7 @@ build_fribidi() {
 # all built above. fontconfig is off — the sandbox has no system fonts, so fonts
 # come from the mounted fs by path (D-0019-C); asm off for the portable path.
 build_libass() {
-  fetch_tarball /libass \
+  fetch_tarball /libass "$LIBASS_SHA256" \
     "https://github.com/libass/libass/releases/download/${LIBASS_VERSION}/libass-${LIBASS_VERSION}.tar.gz"
   cd /libass
   autotools_configure --disable-fontconfig --disable-require-system-font-provider \
@@ -265,8 +297,12 @@ build_zlib() {
 
 # build_x264 cross-compiles libx264 (GPL) to wasm32-wasi, static, no asm/cli.
 build_x264() {
-  git clone https://code.videolan.org/videolan/x264.git --depth=1 --branch "$X264_BRANCH" /x264
-  cd /x264
+  # Pin to an exact commit (x264 publishes no release tags): shallow-fetch just
+  # that SHA so the build is reproducible regardless of where `stable` points.
+  mkdir -p /x264 && cd /x264 && git init -q
+  git remote add origin https://code.videolan.org/videolan/x264.git
+  git fetch -q --depth=1 origin "$X264_COMMIT"
+  git checkout -q FETCH_HEAD
   # x264's configure wants a host triple to cross-compile; "x86-gnu" + --disable-asm
   # selects the portable C path. CC/CFLAGS come from toolchain.sh; clang links the
   # test programs (no raw wasm-ld), so unset LD for x264's checks.

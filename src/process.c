@@ -241,6 +241,10 @@ static int find_output_for_pad(Ctx *c, const char *label) {
 // the graph at the pad it feeds. sel selects a specific stream of the type
 // (spec 0024; -1 = best).
 static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int in_idx, int sel) {
+    if (c->n_gin >= MAX_GIN) {
+        fprintf(stderr, "ffmpeg-wasi: process: too many graph inputs (max %d)\n", MAX_GIN);
+        return AVERROR(EINVAL);
+    }
     if (in_idx < 0 || in_idx >= c->n_in) {
         fprintf(stderr, "ffmpeg-wasi: process: filter references input %d, only %d given\n", in_idx, c->n_in);
         return AVERROR(EINVAL);
@@ -257,11 +261,13 @@ static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int 
         return AVERROR_DECODER_NOT_FOUND;
     }
 
-    GIn *g = &c->gin[c->n_gin];
+    int idx = c->n_gin;
+    GIn *g = &c->gin[idx];
     g->in_idx = in_idx;
     g->st_idx = st;
     g->dec = avcodec_alloc_context3(dec_codec);
     if (!g->dec) return AVERROR(ENOMEM);
+    c->n_gin++; // count it now so the end-cleanup frees g->dec on any error below
     avcodec_parameters_to_context(g->dec, c->in[in_idx]->streams[st]->codecpar);
     g->dec->pkt_timebase = c->in[in_idx]->streams[st]->time_base;
     int ret = avcodec_open2(g->dec, dec_codec, NULL);
@@ -297,12 +303,11 @@ static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int 
     }
 
     char nm[32];
-    snprintf(nm, sizeof(nm), "src%d", c->n_gin);
+    snprintf(nm, sizeof(nm), "src%d", idx);
     ret = avfilter_graph_create_filter(&g->src, bufsrc, nm, args, NULL, c->graph);
     if (ret < 0) return ret;
     ret = avfilter_link(g->src, 0, pad->filter_ctx, pad->pad_idx);
     if (ret < 0) return ret;
-    c->n_gin++;
     return 0;
 }
 
@@ -434,6 +439,7 @@ static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
     if (ret < 0) return ret;
     int64_t cutoff = out_cutoff_us(c, out);
     AVPacket *pkt = av_packet_alloc();
+    if (!pkt) return AVERROR(ENOMEM);
     while (ret >= 0) {
         ret = avcodec_receive_packet(go->enc, pkt);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) { ret = 0; break; }
@@ -462,6 +468,7 @@ static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
 // pull_sinks drains every buffersink and encodes whatever frames are ready.
 static int pull_sinks(Ctx *c) {
     AVFrame *f = av_frame_alloc();
+    if (!f) return AVERROR(ENOMEM);
     int ret = 0;
     for (int i = 0; i < c->n_gout; i++) {
         while (1) {
@@ -604,6 +611,8 @@ static int parse_output(Out *o, const cJSON *spec) {
     if (!o->ofmt) {
         fprintf(stderr, "ffmpeg-wasi: process: cannot resolve output format for %s%s%s\n",
                 o->path, o->format ? " / " : "", o->format ? o->format : "");
+        av_dict_free(&o->enc_opts); // this Out is never counted in n_out, so free here
+        av_dict_free(&o->fmt_opts);
         return -1;
     }
     return 0;
@@ -860,8 +869,33 @@ static int setup_sub_stream(Ctx *c, Sub *su) {
 }
 
 // write_sub_pkt encodes one decoded AVSubtitle to the output subtitle stream and
-// muxes it, timing the packet from the subtitle's pts + display window (spec 0019).
+// muxes it (spec 0019). It applies the same seek/window semantics as the copy
+// lane (spec 0014): the event's source time is zero-based against the input's
+// seek start (unless copy_ts), and events starting past the output window are
+// dropped — so transcoded subtitles stay aligned with the seeked video/audio.
 static int write_sub_pkt(Ctx *c, Sub *su, AVSubtitle *sub) {
+    Out *out = &c->out[su->out_idx];
+
+    // Event start + duration on the source timeline (AV_TIME_BASE units):
+    // decode_subtitle2 sets sub->pts in AV_TIME_BASE; the display times are ms.
+    int64_t base_pts = sub->pts != AV_NOPTS_VALUE ? sub->pts : 0;
+    int64_t start_us = base_pts + av_rescale_q(sub->start_display_time, (AVRational){1, 1000}, AV_TIME_BASE_Q);
+    int64_t dur_us = av_rescale_q((int64_t)sub->end_display_time - sub->start_display_time,
+                                  (AVRational){1, 1000}, AV_TIME_BASE_Q);
+
+    int64_t seek = c->seek_us[su->in_idx];       // AV_NOPTS_VALUE when the input isn't seeked
+    int64_t seek0 = seek != AV_NOPTS_VALUE ? seek : 0;
+
+    // Output window on the source timeline — mirrors write_copy_pkt.
+    int64_t cutoff = INT64_MAX;
+    if (out->duration > 0) cutoff = seek0 + (int64_t)(out->duration * AV_TIME_BASE);
+    else if (out->end > 0) cutoff = (out->copy_ts ? 0 : seek0) + (int64_t)(out->end * AV_TIME_BASE);
+    if (start_us >= cutoff) return 0;
+
+    // Zero-base against the seek start unless copy_ts preserves the source timeline.
+    int64_t out_us = out->copy_ts ? start_us : start_us - seek0;
+    if (out_us < 0) out_us = 0;
+
     const int bufsize = 1 << 16; // one subtitle event; ample for text formats
     uint8_t *buf = av_malloc(bufsize); // heap, not the wasm stack
     if (!buf) return AVERROR(ENOMEM);
@@ -874,14 +908,11 @@ static int write_sub_pkt(Ctx *c, Sub *su, AVSubtitle *sub) {
     memcpy(pkt->data, buf, n);
     av_free(buf);
 
-    int64_t pts = sub->pts != AV_NOPTS_VALUE ? sub->pts : 0; // AV_TIME_BASE units
-    pkt->pts = av_rescale_q(pts, AV_TIME_BASE_Q, su->ost->time_base)
-             + av_rescale_q(sub->start_display_time, (AVRational){1, 1000}, su->ost->time_base);
+    pkt->pts = av_rescale_q(out_us, AV_TIME_BASE_Q, su->ost->time_base);
     pkt->dts = pkt->pts;
-    pkt->duration = av_rescale_q((int64_t)sub->end_display_time - sub->start_display_time,
-                                 (AVRational){1, 1000}, su->ost->time_base);
+    pkt->duration = av_rescale_q(dur_us, AV_TIME_BASE_Q, su->ost->time_base);
     pkt->stream_index = su->ost->index;
-    ret = av_interleaved_write_frame(c->out[su->out_idx].ofmt, pkt);
+    ret = av_interleaved_write_frame(out->ofmt, pkt);
     av_packet_free(&pkt);
     return ret;
 }
@@ -1191,8 +1222,11 @@ int op_process(const cJSON *spec) {
         // Wire a buffersrc onto each graph input pad.
         for (AVFilterInOut *p = gin; p; p = p->next) {
             int in_idx, sel; enum AVMediaType type;
-            if (parse_input_pad(p->name, &in_idx, &type, &sel) < 0) {
-                fprintf(stderr, "ffmpeg-wasi: process: cannot map graph input pad %s (expected N:v / N:a / N:v:K)\n", p->name);
+            // An unlabelled open input pad (name == NULL) can't be routed to a
+            // source stream — reject it cleanly rather than deref it in sscanf.
+            if (!p->name || parse_input_pad(p->name, &in_idx, &type, &sel) < 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: cannot map graph input pad %s (expected N:v / N:a / N:v:K)\n",
+                        p->name ? p->name : "(unlabelled)");
                 rc = AVERROR(EINVAL); avfilter_inout_free(&gin); avfilter_inout_free(&gout); goto end;
             }
             if ((rc = add_buffersrc(&c, p, type, in_idx, sel)) < 0) {

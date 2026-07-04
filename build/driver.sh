@@ -28,6 +28,7 @@ dep_rank() {
     webpmux|webpdemux) echo 10 ;;   # → webp
     vorbisenc)         echo 10 ;;   # → vorbis → ogg
     ass)               echo 15 ;;   # → freetype, fribidi, harfbuzz
+    vorbisfile)        echo 15 ;;   # → vorbis → ogg (unreferenced today, ordered anyway)
     vorbis)            echo 20 ;;
     webp)              echo 30 ;;   # → sharpyuv
     harfbuzz)          echo 40 ;;   # → freetype (consumed by ass + drawtext)

@@ -121,13 +121,28 @@ static void describe_stream(cJSON *streams, unsigned index, const AVStream *st) 
     cJSON_AddItemToArray(streams, js);
 }
 
-// probe_input opens one input and appends its container/stream info.
-static void probe_input(cJSON *out_inputs, const char *path) {
+// probe_input opens one input and appends its container/stream info. It honours a
+// forced `format` (demuxer) and `options` (demuxer dict), so a raw/headerless
+// input — openable only with those (spec 0024) — is probeable too.
+static void probe_input(cJSON *out_inputs, const cJSON *in) {
+    const char *path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(in, "path"));
     cJSON *ji = cJSON_CreateObject();
     cJSON_AddStringToObject(ji, "path", path ? path : "");
 
+    const AVInputFormat *ifmt = NULL;
+    const char *fmt_name = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(in, "format"));
+    if (fmt_name) ifmt = av_find_input_format(fmt_name);
+    AVDictionary *opts = NULL;
+    const cJSON *od = cJSON_GetObjectItemCaseSensitive(in, "options"), *kv = NULL;
+    if (cJSON_IsObject(od)) {
+        cJSON_ArrayForEach(kv, od) {
+            if (cJSON_IsString(kv)) av_dict_set(&opts, kv->string, kv->valuestring, 0);
+        }
+    }
+
     AVFormatContext *fmt = NULL;
-    int rc = avformat_open_input(&fmt, path, NULL, NULL);
+    int rc = avformat_open_input(&fmt, path, ifmt, &opts);
+    av_dict_free(&opts);
     if (rc < 0) {
         cJSON_AddStringToObject(ji, "error", "could not open input");
         cJSON_AddItemToArray(out_inputs, ji);
@@ -181,8 +196,7 @@ static int op_probe(const cJSON *spec) {
 
     const cJSON *in = NULL;
     cJSON_ArrayForEach(in, inputs) {
-        const cJSON *p = cJSON_GetObjectItemCaseSensitive(in, "path");
-        probe_input(out_inputs, cJSON_GetStringValue(p));
+        probe_input(out_inputs, in);
     }
 
     char *json = cJSON_PrintUnformatted(out);
