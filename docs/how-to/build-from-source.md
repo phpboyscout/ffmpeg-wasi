@@ -106,15 +106,18 @@ decoders:
 
 ## What the build does
 
-Three small scripts under `build/`, orchestrated by `build/Dockerfile`:
+Four small scripts under `build/`, orchestrated by `build/Dockerfile`:
 
-1. **`libav.sh`** — clones FFmpeg, configures it single-threaded for `wasm32-wasi`
+1. **`deps.sh`** — clones/cross-compiles the external codec libraries into `$PREFIX`: openh264
+   (+ libx264 on gpl), and for the intermediate/full profiles Opus/MP3/Vorbis/WebP/VP8-9,
+   freetype/harfbuzz/libass, **AV1 decode (libdav1d)**, and — native full only — x265 / SVT-AV1.
+2. **`libav.sh`** — clones FFmpeg, configures it single-threaded for `wasm32-wasi`
    (libraries only), and `make`s the `libav*` archives.
-2. **`driver.sh`** — links the engine (`src/driver.c`) + the wasi compat shims against those
+3. **`driver.sh`** — links the engine (`src/driver.c`) + the wasi compat shims against those
    archives into one `.wasm` command module.
-3. **`toolchain.sh`** — the shared wasi-sdk/clang cross-compile environment.
+4. **`toolchain.sh`** — the shared wasi-sdk/clang cross-compile environment.
 
-All three branch on `TARGET` (`wasm` by default, `native` for the driver), so one build system
+All four branch on `TARGET` (`wasm` by default, `native` for the driver), so one build system
 produces both artifacts. See [The build](../explanation/the-build.md) for what makes it work
 (single-threaded config, setjmp/longjmp lowering, the POSIX/WASI compat shims) and
 [The native driver](../explanation/the-build.md#the-native-driver-spec-0028) for the `TARGET=native`

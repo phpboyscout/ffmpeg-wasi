@@ -161,6 +161,13 @@ the requested pattern.
 On success the engine prints what it wrote, one entry per output file, e.g.
 `{"outputs":[{"path":"loud.mp4","streams":[{"type":"audio","codec":"aac"}]},{"path":"quiet.mp4","streams":[{"type":"audio","codec":"aac"}]}]}`.
 
+If the graph ran an **analysis filter** (`cropdetect`, `blackdetect`, `silencedetect`, `ebur128`,
+`signalstats`, `astats`, …), the reply also carries an **`analysis`** array of the `lavfi.*`
+measurements those filters attach to frames — objects of `{ "t": <seconds>, "key": <name>, "value":
+<string> }`, consecutive-deduplicated per key (spec 0017 §Q). It is omitted when no analysis filter
+ran. (`ebur128`/`astats` need their `metadata=1` option to populate it.) afmpeg surfaces it as
+`ProcessResult.Analysis`.
+
 ### `probe` — report stream information
 
 ```jsonc

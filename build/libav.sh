@@ -68,8 +68,8 @@ LEAN_ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,fl
 # (prores/dnxhd/dv), and legacy/broadcast video (mpeg2/mpeg4/vc1/wmv3/theora).
 # Encoders: ac3, alac, the PCM tail, and bmp/tiff (so those images round-trip).
 # AV1/HEVC and the external-lib encoders are elsewhere (0023 / 0018). AV1 *decode*
-# needs libdav1d (FFmpeg's in-tree `av1` decoder is hwaccel-only) → native-only,
-# added below (dav1d needs threads, so a wasm build is a separate spike).
+# needs libdav1d (FFmpeg's in-tree `av1` decoder is hwaccel-only); it is added below
+# for BOTH targets (deps.sh builds dav1d single-threaded for wasm too).
 INTERMEDIATE_ENABLE="\
 --enable-demuxer=mpegts,flv,avi,gif,caf,aiff,au \
 --enable-muxer=mpegts,hls,dash,flv,avi,gif,ogg,adts,caf,aiff,au,segment,stream_segment \

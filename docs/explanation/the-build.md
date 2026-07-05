@@ -8,8 +8,10 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 # The build
 
-How `libav*` becomes a `.wasm`. The pipeline is three small scripts under `build/`,
-orchestrated by a Dockerfile; this page explains the parts that aren't obvious.
+How `libav*` becomes a `.wasm`. The pipeline is four small scripts under `build/` —
+`toolchain.sh` (the shared cross env), `deps.sh` (the external codec libraries), `libav.sh`
+(FFmpeg's `libav*`), and `driver.sh` (the final link) — orchestrated by a Dockerfile; this page
+explains the parts that aren't obvious.
 
 ## The toolchain (`build/toolchain.sh`)
 
@@ -111,7 +113,10 @@ for `full`), and `driver.sh` links a native ELF (`-DAFMPEG_NATIVE`, `--start-gro
 The native driver serves its filesystem I/O over an **IPC bridge** instead of WASI syscalls:
 `src/nativeio.c` installs a custom seekable `AVIOContext` whose read/write/seek callbacks speak a
 framed protocol over a Unix socket, so the driver's I/O crosses the caller's `afero.Fs` (in
-afmpeg's `pkg/afmpeg/native`) exactly as the wasm build's WASI calls do — no host disk. This is
+afmpeg's `pkg/afmpeg/native`) exactly as the wasm build's WASI calls do — no host disk. Even the
+concat demuxer's per-segment opens route over the bridge: `build/ffmpeg-concat-ioopen.patch` (a
+two-line FFmpeg patch applied in `libav.sh`) forwards the demuxer's `io_open` into its sub-contexts,
+so a concat join of afero-only segments never touches host disk either. This is
 ["Backend B"](https://afmpeg.phpboyscout.uk/how-to/use-the-native-backend/): threads + SIMD give
 **48–58× faster software encode**, and the **full** profile adds the HEVC/AV1 encoders that are
 impractical in wasm. The native artifact is `dist/driver`, published as
@@ -128,3 +133,8 @@ docker build -f build/Dockerfile.native --build-arg VARIANT=gpl --build-arg PROF
 Inputs are pinned in `build/versions.lock` (the FFmpeg tag, the wasi-sdk image). A release
 tag is `<FFMPEG_VERSION>-<build-rev>` (e.g. `n8.1.2-1`); the build revision bumps when the
 toolchain or config changes for the same upstream FFmpeg.
+
+A **size-budget gate** (spec 0022) guards against accidental bloat: `build/size-budget.txt` sets a
+per-artifact byte ceiling, and the `size-budget` CI job (`build/check-size-budget.sh`) prints each
+artifact's size vs its budget on every tag and flags an overage. It is advisory (`allow_failure`)
+until the ceilings are calibrated from real builds.
