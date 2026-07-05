@@ -1,0 +1,25 @@
+# Build FFmpeg's libav* + the libav-direct engine → a NATIVE driver binary
+# (spec 0028 Backend B, the hardware-acceleration / native-speed escape hatch).
+# The wasm build is build/Dockerfile; this shares the same scripts via TARGET=native.
+#
+# Usage: docker build -f build/Dockerfile.native --target artifact -o dist .
+#        → dist/driver  (a native ELF the afmpeg pkg/afmpeg/native host drives)
+FROM debian:bookworm-slim AS build
+ARG FFMPEG_VERSION=n8.1.2
+ARG VARIANT=lgpl
+ARG PROFILE=lean
+ENV TARGET=native
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git make pkg-config ca-certificates build-essential nasm zlib1g-dev \
+        && rm -rf /var/lib/apt/lists/*
+WORKDIR /work
+# libav* first (cached across engine edits): the native host build — threads +
+# SIMD, no cross machinery. The beachhead builds the lean profile.
+COPY build/ /work/build/
+RUN FFMPEG_VERSION="$FFMPEG_VERSION" VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/libav.sh
+COPY src/ /work/src/
+RUN OUT=/dist/driver sh build/driver.sh
+
+# Export just the native driver binary.
+FROM scratch AS artifact
+COPY --from=build /dist/ /

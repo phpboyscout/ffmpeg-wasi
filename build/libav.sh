@@ -99,40 +99,60 @@ case "$PROFILE" in
   *) echo "libav.sh: unknown PROFILE '$PROFILE' (want lean|intermediate)" >&2; exit 2 ;;
 esac
 
-# Use clang as the linker (--ld=clang), not raw wasm-ld: clang understands
-# --target/--sysroot and links a WASI command (crt1/_start) automatically, so
-# configure's link probe just works. (The engine link in driver.sh is also clang.)
-#
-# --pkg-config-flags=--static: our deps are static archives, so configure's dep
-#   probes need pkg-config's transitive Requires.private libs (e.g. vorbisenc →
-#   vorbis → ogg), which plain --libs omits.
-# --extra-libs: -lsetjmp for libvpx's encoder setjmp/longjmp (clang's wasm SjLj
-#   lowering → __wasm_setjmp/__wasm_longjmp in the sysroot's libsetjmp.a); and
-#   -lc++/-lc++abi so configure's dep probes resolve harfbuzz's C++ symbols
-#   (libass → harfbuzz). Without these the probes fail to link and silently
-#   soft-disable the lib (libav's own code is C).
-# shellcheck disable=SC2086  # $ENABLE/$GPL_FLAGS/$OPENH264_FLAGS are deliberately split into args
-LDFLAGS="--target=wasm32-wasip1 --sysroot=$WASI_SYSROOT $SJLJ -L$PREFIX/lib $WASI_EMULATED_LIBS" \
-./configure \
-  --cc="$CC" --cxx="$CXX" --ld="$CC" --nm="$NM" --ar="$AR" --ranlib="$RANLIB" --strip="$STRIP" \
-  --pkg-config-flags=--static \
-  --extra-libs="-lsetjmp -lc++ -lc++abi" \
-  --extra-cflags="-include $HERE_LIBAV/wasi-compat.h -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-function-pointer-types" \
-  --enable-cross-compile --arch=x86_32 --target-os=none \
-  --disable-shared --enable-static --enable-small --disable-stripping \
-  --disable-programs --disable-doc --disable-debug --disable-network \
-  --disable-pthreads --disable-w32threads --disable-os2threads \
-  --disable-runtime-cpudetect --disable-asm --disable-x86asm \
-  --enable-zlib \
-  --disable-everything $ENABLE $OPENH264_FLAGS $GPL_FLAGS \
-  || { echo "configure failed"; tail -40 ffbuild/config.log; exit 1; }
+if [ "$TARGET" = native ]; then
+  # --- TARGET=native (spec 0028 Backend B) ---------------------------------
+  # The host build: threads + SIMD on (the whole point of native), no cross
+  # machinery, no wasi shims, no HAVE_* fixups. The beachhead builds the lean
+  # profile from the same allowlist as wasm, minus the external encoder libs
+  # (openh264/x264) — native H.264 encode via those is a deps.sh-native
+  # follow-up, so the two targets are otherwise capability-identical (0022).
+  [ "$PROFILE" = lean ] || { echo "libav.sh: native build supports PROFILE=lean only (for now)" >&2; exit 2; }
+  # shellcheck disable=SC2086  # $ENABLE is deliberately split into args
+  ./configure \
+    --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" \
+    --pkg-config-flags=--static \
+    --disable-shared --enable-static --enable-small --disable-stripping \
+    --disable-programs --disable-doc --disable-debug --disable-network \
+    --enable-zlib \
+    --disable-everything $ENABLE \
+    || { echo "configure failed"; tail -40 ffbuild/config.log; exit 1; }
+else
+  # --- TARGET=wasm (default) -----------------------------------------------
+  # Use clang as the linker (--ld=clang), not raw wasm-ld: clang understands
+  # --target/--sysroot and links a WASI command (crt1/_start) automatically, so
+  # configure's link probe just works. (The engine link in driver.sh is also clang.)
+  #
+  # --pkg-config-flags=--static: our deps are static archives, so configure's dep
+  #   probes need pkg-config's transitive Requires.private libs (e.g. vorbisenc →
+  #   vorbis → ogg), which plain --libs omits.
+  # --extra-libs: -lsetjmp for libvpx's encoder setjmp/longjmp (clang's wasm SjLj
+  #   lowering → __wasm_setjmp/__wasm_longjmp in the sysroot's libsetjmp.a); and
+  #   -lc++/-lc++abi so configure's dep probes resolve harfbuzz's C++ symbols
+  #   (libass → harfbuzz). Without these the probes fail to link and silently
+  #   soft-disable the lib (libav's own code is C).
+  # shellcheck disable=SC2086  # $ENABLE/$GPL_FLAGS/$OPENH264_FLAGS are deliberately split into args
+  LDFLAGS="--target=wasm32-wasip1 --sysroot=$WASI_SYSROOT $SJLJ -L$PREFIX/lib $WASI_EMULATED_LIBS" \
+  ./configure \
+    --cc="$CC" --cxx="$CXX" --ld="$CC" --nm="$NM" --ar="$AR" --ranlib="$RANLIB" --strip="$STRIP" \
+    --pkg-config-flags=--static \
+    --extra-libs="-lsetjmp -lc++ -lc++abi" \
+    --extra-cflags="-include $HERE_LIBAV/wasi-compat.h -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-function-pointer-types" \
+    --enable-cross-compile --arch=x86_32 --target-os=none \
+    --disable-shared --enable-static --enable-small --disable-stripping \
+    --disable-programs --disable-doc --disable-debug --disable-network \
+    --disable-pthreads --disable-w32threads --disable-os2threads \
+    --disable-runtime-cpudetect --disable-asm --disable-x86asm \
+    --enable-zlib \
+    --disable-everything $ENABLE $OPENH264_FLAGS $GPL_FLAGS \
+    || { echo "configure failed"; tail -40 ffbuild/config.log; exit 1; }
 
-# wasm has no sysctl/mkstemp/gethrtime/setrlimit — force the portable fallbacks.
-# (Missing function declarations like dup/tempnam are handled by the force-included
-# build/wasi-compat.h, baked into config.mak via --extra-cflags above.)
-for d in HAVE_SYSCTL HAVE_MKSTEMP HAVE_GETHRTIME HAVE_SETRLIMIT; do
-  sed -i "s|#define $d 1|#define $d 0|" config.h || true
-done
+  # wasm has no sysctl/mkstemp/gethrtime/setrlimit — force the portable fallbacks.
+  # (Missing function declarations like dup/tempnam are handled by the force-included
+  # build/wasi-compat.h, baked into config.mak via --extra-cflags above.)
+  for d in HAVE_SYSCTL HAVE_MKSTEMP HAVE_GETHRTIME HAVE_SETRLIMIT; do
+    sed -i "s|#define $d 1|#define $d 0|" config.h || true
+  done
+fi
 
 make -j"$(nproc)"
-echo "libav* built ($PROFILE, $VARIANT, FFmpeg $FFMPEG_VERSION)"
+echo "libav* built ($TARGET, $PROFILE, $VARIANT, FFmpeg $FFMPEG_VERSION)"

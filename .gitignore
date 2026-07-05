@@ -16,3 +16,6 @@
 # stray go build output
 /run
 dist-test  # local build output
+
+# native driver build output (spec 0028)
+/dist-native/
