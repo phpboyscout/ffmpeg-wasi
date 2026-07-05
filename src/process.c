@@ -347,13 +347,18 @@ static int add_buffersink(Ctx *c, AVFilterInOut *pad) {
     go->sink = avfilter_graph_alloc_filter(c->graph, bufsink, nm);
     if (!go->sink) return AVERROR(ENOMEM);
 
+    // Pin the sink to the encoder's first format so the graph auto-inserts the
+    // needed conversion. Use FFmpeg 8's counted-array options ("pixel_formats" /
+    // "sample_formats"); the older "pix_fmts"/"sample_fmts" binary options are
+    // deprecated and feed a malformed list into format negotiation that crashes on
+    // an -O2 native build (merge_formats_internal), though -Oz wasm tolerated it.
     int ret = 0;
     if (type == AVMEDIA_TYPE_VIDEO && enc_codec->pix_fmts) {
-        enum AVPixelFormat pf[] = {enc_codec->pix_fmts[0], AV_PIX_FMT_NONE};
-        ret = av_opt_set_bin(go->sink, "pix_fmts", (const uint8_t *)pf, sizeof(pf[0]) * 2, AV_OPT_SEARCH_CHILDREN);
+        enum AVPixelFormat pf = enc_codec->pix_fmts[0];
+        ret = av_opt_set_array(go->sink, "pixel_formats", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_PIXEL_FMT, &pf);
     } else if (type == AVMEDIA_TYPE_AUDIO && enc_codec->sample_fmts) {
-        enum AVSampleFormat sf[] = {enc_codec->sample_fmts[0], AV_SAMPLE_FMT_NONE};
-        ret = av_opt_set_bin(go->sink, "sample_fmts", (const uint8_t *)sf, sizeof(sf[0]) * 2, AV_OPT_SEARCH_CHILDREN);
+        enum AVSampleFormat sf = enc_codec->sample_fmts[0];
+        ret = av_opt_set_array(go->sink, "sample_formats", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_SAMPLE_FMT, &sf);
     }
     if (ret < 0) return ret;
     ret = avfilter_init_str(go->sink, NULL);

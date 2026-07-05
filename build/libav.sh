@@ -102,19 +102,19 @@ esac
 if [ "$TARGET" = native ]; then
   # --- TARGET=native (spec 0028 Backend B) ---------------------------------
   # The host build: threads + SIMD on (the whole point of native), no cross
-  # machinery, no wasi shims, no HAVE_* fixups. The beachhead builds the lean
-  # profile from the same allowlist as wasm, minus the external encoder libs
-  # (openh264/x264) — native H.264 encode via those is a deps.sh-native
-  # follow-up, so the two targets are otherwise capability-identical (0022).
+  # machinery, no wasi shims, no HAVE_* fixups. The lean profile is built from the
+  # same allowlist as wasm plus the native openh264 (both variants) / libx264 (gpl)
+  # H.264 encoders from deps.sh — so H.264 encode runs at native speed. The
+  # intermediate profile (the rest of the external libs, native) is a follow-up.
   [ "$PROFILE" = lean ] || { echo "libav.sh: native build supports PROFILE=lean only (for now)" >&2; exit 2; }
-  # shellcheck disable=SC2086  # $ENABLE is deliberately split into args
+  # shellcheck disable=SC2086  # $ENABLE/$OPENH264_FLAGS/$GPL_FLAGS are deliberately split into args
   ./configure \
     --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" \
     --pkg-config-flags=--static \
     --disable-shared --enable-static --enable-small --disable-stripping \
     --disable-programs --disable-doc --disable-debug --disable-network \
     --enable-zlib \
-    --disable-everything $ENABLE \
+    --disable-everything $ENABLE $OPENH264_FLAGS $GPL_FLAGS \
     || { echo "configure failed"; tail -40 ffbuild/config.log; exit 1; }
 else
   # --- TARGET=wasm (default) -----------------------------------------------

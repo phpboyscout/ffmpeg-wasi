@@ -161,9 +161,11 @@ static int build_graph(Frames *f, const AVCodec *enc, const char *chain) {
     f->sink = avfilter_graph_alloc_filter(f->graph, avfilter_get_by_name("buffersink"), "out");
     if (!f->sink) { fprintf(stderr, "ffmpeg-wasi: frames: buffersink alloc failed\n"); return AVERROR(ENOMEM); }
     if (enc->pix_fmts) {
-        enum AVPixelFormat pf[] = {enc->pix_fmts[0], AV_PIX_FMT_NONE};
-        if ((rc = av_opt_set_bin(f->sink, "pix_fmts", (const uint8_t *)pf,
-                                 sizeof(pf[0]) * 2, AV_OPT_SEARCH_CHILDREN)) < 0)
+        // FFmpeg 8's counted-array option (the deprecated "pix_fmts" binary option
+        // crashes native format negotiation — see process.c add_buffersink).
+        enum AVPixelFormat pf = enc->pix_fmts[0];
+        if ((rc = av_opt_set_array(f->sink, "pixel_formats", AV_OPT_SEARCH_CHILDREN,
+                                   0, 1, AV_OPT_TYPE_PIXEL_FMT, &pf)) < 0)
             return rc;
     }
     if ((rc = avfilter_init_str(f->sink, NULL)) < 0) {

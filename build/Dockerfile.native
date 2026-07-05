@@ -13,10 +13,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git make pkg-config ca-certificates build-essential nasm zlib1g-dev \
         && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
-# libav* first (cached across engine edits): the native host build — threads +
-# SIMD, no cross machinery. The beachhead builds the lean profile.
-COPY build/ /work/build/
+# External encoders (openh264, + libx264 on gpl) first — cached across engine
+# edits, so iterating on the driver reuses the deps + libav layers. Native builds
+# them with real asm + threads.
+COPY build/toolchain.sh build/deps.sh build/config.sub /work/build/
+RUN VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/deps.sh
+COPY build/libav.sh /work/build/
 RUN FFMPEG_VERSION="$FFMPEG_VERSION" VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/libav.sh
+COPY build/ /work/build/
 COPY src/ /work/src/
 RUN OUT=/dist/driver sh build/driver.sh
 

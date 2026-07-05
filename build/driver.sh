@@ -63,9 +63,12 @@ if [ "$TARGET" = native ]; then
   # external encoders land; -lm/-lpthread/-lz are libav*'s system deps.
   # -DAFMPEG_NATIVE turns on the seekable AVIO-over-IPC media I/O (src/nativeio.c),
   # so the driver serves inputs/outputs through the afmpeg native host's socket.
-  # shellcheck disable=SC2086  # $ENGINE_SRC/$LIBAV_* are deliberately split
+  # $DEP_LIBS are the native external encoders from deps.sh (openh264, + x264 on
+  # gpl); --start-group covers the libav*↔codec interdependencies.
+  # shellcheck disable=SC2086  # $ENGINE_SRC/$LIBAV_*/$DEP_LIBS are deliberately split
   $CC $CFLAGS -DAFMPEG_NATIVE -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
-    $LIBAV_L -Wl,--start-group $LIBAV_l -Wl,--end-group \
+    $LIBAV_L -L"$PREFIX/lib" \
+    -Wl,--start-group $LIBAV_l $DEP_LIBS -Wl,--end-group \
     -lz -lm -lpthread -lstdc++
 else
   # clang links a WASI command (crt1/_start) itself for wasm32-wasip1 + main();

@@ -364,6 +364,55 @@ EOF
   echo "openh264 built → $PREFIX"
 }
 
+# build_openh264_native — openh264 for the native driver (spec 0028): real x86
+# asm + real pthreads, none of the wasm patches/shims. A static archive + pkg-config.
+build_openh264_native() {
+  git clone https://github.com/cisco/openh264.git --depth=1 --branch "$OPENH264_VERSION" /openh264
+  cd /openh264
+  make -j"$(nproc)" V=No OS=linux CC="$CC" CXX="$CXX" AR="$AR" libopenh264.a \
+    || { echo "openh264 (native) build failed"; exit 1; }
+  mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include/wels"
+  cp libopenh264.a "$PREFIX/lib/"
+  cp codec/api/wels/*.h "$PREFIX/include/wels/"
+  cat > "$PREFIX/lib/pkgconfig/openh264.pc" <<EOF
+prefix=$PREFIX
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: OpenH264
+Description: Cisco OpenH264 — H.264 codec (native)
+Version: ${OPENH264_VERSION#v}
+Libs: -L\${libdir} -lopenh264
+Libs.private: -lstdc++ -lm
+Cflags: -I\${includedir}
+EOF
+  echo "openh264 (native) built → $PREFIX"
+}
+
+# build_x264_native — libx264 (GPL) for the native driver: real asm, static, PIC.
+build_x264_native() {
+  mkdir -p /x264 && cd /x264 && git init -q
+  git remote add origin https://code.videolan.org/videolan/x264.git
+  git fetch -q --depth=1 origin "$X264_COMMIT"
+  git checkout -q FETCH_HEAD
+  ./configure --prefix="$PREFIX" --enable-static --enable-pic --disable-cli \
+    --disable-opencl --disable-avs --disable-gpac --disable-lsmash --bit-depth=8 \
+    || { echo "x264 (native) configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install-lib-static
+  echo "libx264 (native) built → $PREFIX"
+}
+
+if [ "$TARGET" = native ]; then
+  # Native software encoders (spec 0028): openh264 for both variants, libx264 for
+  # gpl. zlib comes from the system (zlib1g-dev); the intermediate external-lib
+  # batch is a follow-up. This gives the native driver H.264 encode with threads +
+  # SIMD — recovering the wasm encode gap the 0008 rig measured.
+  build_openh264_native
+  [ "$VARIANT" = gpl ] && build_x264_native
+  echo "native deps built ($VARIANT) → $PREFIX"
+  exit 0
+fi
+
 build_zlib       # both variants (PNG)
 build_openh264   # both variants (H.264 encode)
 
