@@ -8,6 +8,7 @@ repo_name = "ffmpeg-wasi"
 copyright = "Copyright &copy; 2026 Matt Cockayne"
 
 [project.theme]
+logo = "images/branding/logo_transparent.svg"
 language = "en"
 features = [
     "content.code.annotate",
