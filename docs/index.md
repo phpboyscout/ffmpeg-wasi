@@ -25,9 +25,10 @@ libraries directly and going under the FFmpeg-7.0 CLI threading wall that stops 
 
 </div>
 
-> **Status: released.** The first release — [`n8.1.2-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n8.1.2-1) —
-> ships current FFmpeg (n8.1.2) as **lgpl** and **gpl** WASI modules, each in a **lean** and an
-> **intermediate** profile. The engine **transcodes** (decode → filter → encode → mux) over a
-> virtual filesystem: the `probe`, `process` (full `filter_complex`), `frames`, and `version`
-> ops all work today. Design: afmpeg
+> **Status: released.** Releases ship current FFmpeg (n8.1.2) as **lgpl** and **gpl** builds, in a
+> **lean** and an **intermediate** profile — both as portable **WASI modules** and as **native
+> drivers** (spec 0028, threads + SIMD, driven by afmpeg's native backend for 48–58× faster software
+> encode). The native driver adds a third **full** profile with HEVC (x265) and AV1 (SVT-AV1) encode.
+> The engine **transcodes** (decode → filter → encode → mux) over a virtual filesystem: the `probe`,
+> `process` (full `filter_complex`), `frames`, and `version` ops all work today. Design: afmpeg
 > [spec 0007](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).

@@ -57,3 +57,9 @@ all in-tree, LGPL-clean, no external library:
   `drawtext=fontfile=/font.ttf:…`; for `subtitles`/`ass`, point libass at a mounted directory
   (`subtitles=filename=sub.srt:fontsdir=/fonts:force_style='FontName=…'`). The libs
   (freetype/harfbuzz/libass) cross-compile via the meson toolchain of spec 0029.
+
+## Full (native)
+
+The native-only **full** profile ([0022](https://afmpeg.phpboyscout.uk/development/specs/0022-build-size-matrix/))
+adds the heavy HEVC/AV1 *encoders* (see [codecs](codecs.md)) but **no new filters** — the filter
+set is identical to intermediate.

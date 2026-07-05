@@ -8,8 +8,9 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 # Build from source
 
-You don't need to build — every release [ships both variants in two profiles](choose-a-variant.md).
-But the whole pipeline is MIT and reproducible, so building it yourself is easy.
+You don't need to build — every release [ships both variants across the profiles](choose-a-variant.md),
+as WASM modules and native drivers. But the whole pipeline is MIT and reproducible, so building it
+yourself is easy.
 
 ## Prerequisites
 
@@ -58,6 +59,24 @@ just build lgpl              # lean (default)
 just build lgpl intermediate # intermediate profile
 ```
 
+## Build the native driver (Backend B)
+
+The same engine also builds to a **native ELF** (spec 0028) via `build/Dockerfile.native` — the
+subprocess afmpeg's [native backend](https://afmpeg.phpboyscout.uk/how-to/use-the-native-backend/)
+drives for native-speed encode. It takes the same `VARIANT`/`PROFILE` args, and adds a third
+profile, **`full`** (native-only): intermediate + AV1 (SVT-AV1, both variants) and HEVC (x265,
+**gpl only**).
+
+```sh
+docker build -f build/Dockerfile.native \
+  --build-arg VARIANT=gpl --build-arg PROFILE=full \
+  --target artifact -o dist-native .
+```
+
+It lands at `dist-native/driver`, published as `ffmpeg-wasi-driver-linux-amd64-full-gpl`. Use
+`PROFILE=lean` or `intermediate` for the lighter native drivers; `lgpl` full builds AV1 but not
+HEVC (x265 is GPL). linux/amd64 only for now.
+
 ## Run it
 
 The repo bundles a tiny wazero harness that loads the module and runs it (it provides the
@@ -95,5 +114,8 @@ Three small scripts under `build/`, orchestrated by `build/Dockerfile`:
    archives into one `.wasm` command module.
 3. **`toolchain.sh`** — the shared wasi-sdk/clang cross-compile environment.
 
-See [The build](../explanation/the-build.md) for what makes it work (single-threaded config,
-setjmp/longjmp lowering, the POSIX/WASI compat shims).
+All three branch on `TARGET` (`wasm` by default, `native` for the driver), so one build system
+produces both artifacts. See [The build](../explanation/the-build.md) for what makes it work
+(single-threaded config, setjmp/longjmp lowering, the POSIX/WASI compat shims) and
+[The native driver](../explanation/the-build.md#the-native-driver-spec-0028) for the `TARGET=native`
+path.

@@ -8,8 +8,11 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 # Choose & verify a variant
 
-Every release ships **four** modules — two **licence variants**, each in two capability
-**profiles**. Pick by **licence** and **profile**, then **verify** before you trust it.
+Every release ships along three axes: a **runtime** (portable **WASM** modules, or native
+**drivers**), a **licence variant** (LGPL/GPL), and a capability **profile** (lean/intermediate/
+full). That's four WASM modules (2 variants × {lean, intermediate}) plus six native drivers (2
+variants × {lean, intermediate, full}). Pick by **runtime**, **licence**, and **profile**, then
+**verify** before you trust it.
 
 ## Which one?
 
@@ -29,17 +32,31 @@ graph TD
 When in doubt, start with **LGPL**. See [the licensing model](../explanation/licensing.md) for
 the full picture (and why shipping both together is clean).
 
+## Which runtime?
+
+- **WASM** (`ffmpeg-wasi-<…>.wasm`) — the default: a sandboxed, portable, arch-independent,
+  single-threaded module. Run it anywhere via [afmpeg](https://afmpeg.phpboyscout.uk) + wazero.
+- **Native driver** (`ffmpeg-wasi-driver-linux-amd64-<…>`) — the same engine as a native ELF with
+  threads + SIMD (spec 0028), driven out-of-process by afmpeg's
+  [native backend](https://afmpeg.phpboyscout.uk/how-to/use-the-native-backend/). Reach for it when
+  you are encode- or throughput-bound (**48–58× faster** software encode), or need HEVC/AV1 (the
+  full profile). linux/amd64 only for now.
+
 ## Which profile?
 
-Each variant comes in two profiles (spec [0022](https://afmpeg.phpboyscout.uk/development/specs/0022-build-size-matrix/)):
+Each build comes in a capability profile (spec [0022](https://afmpeg.phpboyscout.uk/development/specs/0022-build-size-matrix/)):
 
 - **lean** (default, `ffmpeg-wasi-<variant>.wasm`) — web-delivery essentials at the smallest size.
 - **intermediate** (`ffmpeg-wasi-intermediate-<variant>.wasm`) — lean **+ every practical software
   codec/format/filter**: the LGPL encoders (Opus/MP3/Vorbis/VP8-9/WebP), the native codec and
   container batches, and text/subtitle burn-in. Larger, but no separate build.
+- **full** (`ffmpeg-wasi-driver-linux-amd64-full-<variant>`) — intermediate **+ the heavy
+  encoders**: AV1 (SVT-AV1, both variants) and HEVC (x265, **gpl only**). These need threads/SIMD, so
+  full is **native-only** — there is no WASM full module.
 
 Start with **lean**; reach for **intermediate** when you need a codec, container, or filter it
-doesn't carry — see the [capability tables](../reference/variants.md#profiles-capability-classes).
+doesn't carry, and **full** (native) for HEVC/AV1 encode — see the
+[capability tables](../reference/variants.md#profiles-capability-classes).
 
 !!! warning "H.264 and AVC patents"
     Both variants encode H.264, and both are self-compiled — so neither rides under Cisco's

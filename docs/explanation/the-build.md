@@ -97,6 +97,32 @@ matter, not a build one.
 a single WASI **command** module. clang adds the `_start`/crt1 entry automatically; no
 wasm-ld-only flags are needed. The result is `dist/ffmpeg-wasi-<variant>.wasm`.
 
+## The native driver (spec 0028)
+
+The *same* engine also compiles to a **native ELF** — one build system, two targets, selected
+by the `TARGET` env var. The wasm path above is `TARGET=wasm` (the default, byte-identical to
+before the split). `TARGET=native` (`build/Dockerfile.native`) drops the wasi machinery — no
+wasi-sdk target/sysroot, no SjLj lowering, no emulated libs, no single-thread shims — and instead
+uses the host clang/gcc with **real threads + SIMD** and asm enabled. `build/toolchain.sh`,
+`build/deps.sh`, `build/libav.sh`, and `build/driver.sh` each branch on `TARGET`; the deps are
+built native (openh264/x264 with real asm, and per profile the software batch, plus x265/SVT-AV1
+for `full`), and `driver.sh` links a native ELF (`-DAFMPEG_NATIVE`, `--start-group`, no wasm shims).
+
+The native driver serves its filesystem I/O over an **IPC bridge** instead of WASI syscalls:
+`src/nativeio.c` installs a custom seekable `AVIOContext` whose read/write/seek callbacks speak a
+framed protocol over a Unix socket, so the driver's I/O crosses the caller's `afero.Fs` (in
+afmpeg's `pkg/afmpeg/native`) exactly as the wasm build's WASI calls do — no host disk. This is
+["Backend B"](https://afmpeg.phpboyscout.uk/how-to/use-the-native-backend/): threads + SIMD give
+**48–58× faster software encode**, and the **full** profile adds the HEVC/AV1 encoders that are
+impractical in wasm. The native artifact is `dist/driver`, published as
+`ffmpeg-wasi-driver-linux-amd64-[<profile>-]<variant>` and signed alongside the wasm modules.
+
+```sh
+# The native full/gpl driver (HEVC via x265 + AV1 via SVT-AV1):
+docker build -f build/Dockerfile.native --build-arg VARIANT=gpl --build-arg PROFILE=full \
+  --target artifact -o dist-native .
+```
+
 ## Reproducibility
 
 Inputs are pinned in `build/versions.lock` (the FFmpeg tag, the wasi-sdk image). A release
