@@ -135,6 +135,25 @@ cpp_link_args = [$ldargs]
 EOF
 }
 
+# --- native build helpers (spec 0028) --------------------------------------
+# The native-target equivalents of autotools_configure / write_meson_cross: no
+# cross host, no wasm flags, real asm + threads. Each intermediate lib's build
+# function branches on TARGET to reuse the shared fetch above.
+native_configure() {
+  ./configure --prefix="$PREFIX" --enable-static --disable-shared "$@" \
+    || { echo "native configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+  make -j"$(nproc)" install
+}
+
+native_meson() {
+  # --libdir=lib pins the pkgconfig/.pc + .a under $PREFIX/lib (meson defaults to
+  # the Debian multiarch lib/x86_64-linux-gnu, which our PKG_CONFIG_PATH doesn't
+  # scan — so a downstream lib, e.g. libass looking for fribidi, wouldn't find it).
+  meson setup build --prefix="$PREFIX" --libdir=lib --default-library=static --buildtype=release "$@" \
+    || { echo "native meson setup failed"; tail -40 build/meson-logs/meson-log.txt 2>/dev/null; exit 1; }
+  ninja -C build install
+}
+
 # build_libopus — Opus encode (BSD). Autotools; asm/rtcd/intrinsics off for the
 # portable C path (spec 0018).
 build_libopus() {
@@ -142,10 +161,14 @@ build_libopus() {
     "https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz" \
     "https://ftp.osuosl.org/pub/xiph/releases/opus/opus-${OPUS_VERSION}.tar.gz"
   cd /opus
-  autotools_configure --disable-asm --disable-rtcd --disable-intrinsics \
-    --disable-doc --disable-extra-programs \
-    || { echo "opus configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
-  make -j"$(nproc)" install
+  if [ "$TARGET" = native ]; then
+    native_configure --disable-doc --disable-extra-programs
+  else
+    autotools_configure --disable-asm --disable-rtcd --disable-intrinsics \
+      --disable-doc --disable-extra-programs \
+      || { echo "opus configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+    make -j"$(nproc)" install
+  fi
   echo "libopus built → $PREFIX"
 }
 
@@ -156,10 +179,14 @@ build_libmp3lame() {
     "https://downloads.sourceforge.net/project/lame/lame/${LAME_VERSION}/lame-${LAME_VERSION}.tar.gz" \
     "https://ftp.osuosl.org/pub/blfs/conglomeration/lame/lame-${LAME_VERSION}.tar.gz"
   cd /lame
-  CFLAGS="$CFLAGS -include $HERE_DEPS/wasi-compat.h" \
-  autotools_configure --disable-frontend --disable-gtktest --disable-decoder \
-    || { echo "lame configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
-  make -j"$(nproc)" install
+  if [ "$TARGET" = native ]; then
+    native_configure --disable-frontend --disable-gtktest --disable-decoder
+  else
+    CFLAGS="$CFLAGS -include $HERE_DEPS/wasi-compat.h" \
+    autotools_configure --disable-frontend --disable-gtktest --disable-decoder \
+      || { echo "lame configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+    make -j"$(nproc)" install
+  fi
   echo "libmp3lame built → $PREFIX"
 }
 
@@ -169,18 +196,26 @@ build_libvorbis() {
     "https://downloads.xiph.org/releases/ogg/libogg-${OGG_VERSION}.tar.gz" \
     "https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-${OGG_VERSION}.tar.gz"
   cd /ogg
-  autotools_configure \
-    || { echo "libogg configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
-  make -j"$(nproc)" install
+  if [ "$TARGET" = native ]; then
+    native_configure
+  else
+    autotools_configure \
+      || { echo "libogg configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+    make -j"$(nproc)" install
+  fi
   echo "libogg built → $PREFIX"
 
   fetch_tarball /vorbis "$VORBIS_SHA256" \
     "https://downloads.xiph.org/releases/vorbis/libvorbis-${VORBIS_VERSION}.tar.gz" \
     "https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-${VORBIS_VERSION}.tar.gz"
   cd /vorbis
-  autotools_configure --disable-oggtest \
-    || { echo "libvorbis configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
-  make -j"$(nproc)" install
+  if [ "$TARGET" = native ]; then
+    native_configure --disable-oggtest
+  else
+    autotools_configure --disable-oggtest \
+      || { echo "libvorbis configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+    make -j"$(nproc)" install
+  fi
   echo "libvorbis built → $PREFIX"
 }
 
@@ -192,9 +227,13 @@ build_libwebp() {
     "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-${WEBP_VERSION}.tar.gz" \
     "https://github.com/webmproject/libwebp/releases/download/v${WEBP_VERSION}/libwebp-${WEBP_VERSION}.tar.gz"
   cd /webp
-  autotools_configure --disable-threading \
-    || { echo "libwebp configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
-  make -j"$(nproc)" install
+  if [ "$TARGET" = native ]; then
+    native_configure
+  else
+    autotools_configure --disable-threading \
+      || { echo "libwebp configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+    make -j"$(nproc)" install
+  fi
   echo "libwebp built → $PREFIX"
 }
 
@@ -205,13 +244,28 @@ build_libwebp() {
 build_libvpx() {
   git clone https://github.com/webmproject/libvpx.git --depth=1 --branch "$VPX_VERSION" /libvpx
   cd /libvpx
-  LD="$CC" CROSS='' \
-  ./configure --target=generic-gnu --prefix="$PREFIX" \
-    --enable-static --disable-shared --enable-vp8 --enable-vp9 \
-    --disable-examples --disable-tools --disable-docs --disable-unit-tests \
-    --disable-runtime-cpu-detect --disable-multithread \
-    || { echo "libvpx configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
-  make -j"$(nproc)" install
+  if [ "$TARGET" = native ]; then
+    # libvpx pulls no external deps, so keep $PREFIX/include OFF its own compile
+    # line (the global CFLAGS carries it): the vp8_ratectrl_rtc.cc C++ unit does
+    # #include "vpx/vp8.h", and with $PREFIX/include on the path a parallel
+    # `make install` feeds it a half-installed header whose "./vpx_image.h" isn't
+    # copied yet — a build race. Clean flags + a separate install step both close it.
+    CFLAGS="-O2 -g0 -fPIC" CXXFLAGS="-O2 -g0 -fPIC" \
+    ./configure --target=x86_64-linux-gcc --prefix="$PREFIX" \
+      --enable-static --disable-shared --enable-pic --enable-vp8 --enable-vp9 \
+      --disable-examples --disable-tools --disable-docs --disable-unit-tests \
+      || { echo "libvpx (native) configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+    make -j"$(nproc)"
+    make install
+  else
+    LD="$CC" CROSS='' \
+    ./configure --target=generic-gnu --prefix="$PREFIX" \
+      --enable-static --disable-shared --enable-vp8 --enable-vp9 \
+      --disable-examples --disable-tools --disable-docs --disable-unit-tests \
+      --disable-runtime-cpu-detect --disable-multithread \
+      || { echo "libvpx configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+    make -j"$(nproc)" install
+  fi
   echo "libvpx built → $PREFIX"
 }
 
@@ -224,12 +278,16 @@ build_freetype() {
     "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.gz" \
     "https://downloads.sourceforge.net/freetype/freetype-${FREETYPE_VERSION}.tar.gz"
   cd /freetype
-  fetch_config_sub
-  [ -f builds/unix/config.sub ] && cp "$FRESH_CONFIG_SUB" builds/unix/config.sub
-  autotools_configure --without-harfbuzz --without-brotli --without-png \
-    --without-bzip2 --without-zlib \
-    || { echo "freetype configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
-  make -j"$(nproc)" install
+  if [ "$TARGET" = native ]; then
+    native_configure --without-harfbuzz --without-brotli --without-png --without-bzip2 --without-zlib
+  else
+    fetch_config_sub
+    [ -f builds/unix/config.sub ] && cp "$FRESH_CONFIG_SUB" builds/unix/config.sub
+    autotools_configure --without-harfbuzz --without-brotli --without-png \
+      --without-bzip2 --without-zlib \
+      || { echo "freetype configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+    make -j"$(nproc)" install
+  fi
   echo "freetype built → $PREFIX"
 }
 
@@ -241,16 +299,21 @@ build_harfbuzz() {
   fetch_tarball /harfbuzz "$HARFBUZZ_SHA256" \
     "https://github.com/harfbuzz/harfbuzz/releases/download/${HARFBUZZ_VERSION}/harfbuzz-${HARFBUZZ_VERSION}.tar.xz"
   cd /harfbuzz
-  # -DHB_NO_MT: single-threaded harfbuzz (no std::atomic). meson pulls the threads
-  # dep, so without this clang emits wasm atomic ops (i32.atomic.store) that
-  # wazero rejects (the threads feature is off). Safe — the engine is single-threaded.
-  CFLAGS="$CFLAGS -DHB_NO_MT" write_meson_cross
-  meson setup build --cross-file /tmp/wasi-cross.txt --prefix="$PREFIX" \
-    --default-library=static --buildtype=minsize \
-    -Dfreetype=enabled -Dglib=disabled -Dgobject=disabled -Dcairo=disabled \
-    -Dicu=disabled -Dtests=disabled -Ddocs=disabled -Dutilities=disabled \
-    || { echo "harfbuzz setup failed"; tail -40 build/meson-logs/meson-log.txt 2>/dev/null; exit 1; }
-  ninja -C build install
+  if [ "$TARGET" = native ]; then
+    native_meson -Dfreetype=enabled -Dglib=disabled -Dgobject=disabled -Dcairo=disabled \
+      -Dicu=disabled -Dtests=disabled -Ddocs=disabled -Dutilities=disabled
+  else
+    # -DHB_NO_MT: single-threaded harfbuzz (no std::atomic). meson pulls the threads
+    # dep, so without this clang emits wasm atomic ops (i32.atomic.store) that
+    # wazero rejects (the threads feature is off). Safe — the engine is single-threaded.
+    CFLAGS="$CFLAGS -DHB_NO_MT" write_meson_cross
+    meson setup build --cross-file /tmp/wasi-cross.txt --prefix="$PREFIX" \
+      --default-library=static --buildtype=minsize \
+      -Dfreetype=enabled -Dglib=disabled -Dgobject=disabled -Dcairo=disabled \
+      -Dicu=disabled -Dtests=disabled -Ddocs=disabled -Dutilities=disabled \
+      || { echo "harfbuzz setup failed"; tail -40 build/meson-logs/meson-log.txt 2>/dev/null; exit 1; }
+    ninja -C build install
+  fi
   echo "harfbuzz built → $PREFIX"
 }
 
@@ -260,11 +323,15 @@ build_fribidi() {
   fetch_tarball /fribidi "$FRIBIDI_SHA256" \
     "https://github.com/fribidi/fribidi/releases/download/v${FRIBIDI_VERSION}/fribidi-${FRIBIDI_VERSION}.tar.xz"
   cd /fribidi
-  write_meson_cross
-  meson setup build --cross-file /tmp/wasi-cross.txt --prefix="$PREFIX" \
-    --default-library=static --buildtype=minsize -Ddocs=false -Dtests=false -Dbin=false \
-    || { echo "fribidi setup failed"; tail -40 build/meson-logs/meson-log.txt 2>/dev/null; exit 1; }
-  ninja -C build install
+  if [ "$TARGET" = native ]; then
+    native_meson -Ddocs=false -Dtests=false -Dbin=false
+  else
+    write_meson_cross
+    meson setup build --cross-file /tmp/wasi-cross.txt --prefix="$PREFIX" \
+      --default-library=static --buildtype=minsize -Ddocs=false -Dtests=false -Dbin=false \
+      || { echo "fribidi setup failed"; tail -40 build/meson-logs/meson-log.txt 2>/dev/null; exit 1; }
+    ninja -C build install
+  fi
   echo "fribidi built → $PREFIX"
 }
 
@@ -276,10 +343,14 @@ build_libass() {
   fetch_tarball /libass "$LIBASS_SHA256" \
     "https://github.com/libass/libass/releases/download/${LIBASS_VERSION}/libass-${LIBASS_VERSION}.tar.gz"
   cd /libass
-  autotools_configure --disable-fontconfig --disable-require-system-font-provider \
-    --disable-libunibreak --disable-asm \
-    || { echo "libass configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
-  make -j"$(nproc)" install
+  if [ "$TARGET" = native ]; then
+    native_configure --disable-fontconfig --disable-require-system-font-provider --disable-libunibreak
+  else
+    autotools_configure --disable-fontconfig --disable-require-system-font-provider \
+      --disable-libunibreak --disable-asm \
+      || { echo "libass configure failed"; tail -40 config.log 2>/dev/null; exit 1; }
+    make -j"$(nproc)" install
+  fi
   echo "libass built → $PREFIX"
 }
 
@@ -403,13 +474,25 @@ build_x264_native() {
 }
 
 if [ "$TARGET" = native ]; then
-  # Native software encoders (spec 0028): openh264 for both variants, libx264 for
-  # gpl. zlib comes from the system (zlib1g-dev); the intermediate external-lib
-  # batch is a follow-up. This gives the native driver H.264 encode with threads +
-  # SIMD — recovering the wasm encode gap the 0008 rig measured.
+  # Native external codec libraries (spec 0028): openh264 for both variants, libx264
+  # for gpl. zlib comes from the system (zlib1g-dev). The intermediate profile adds
+  # the full software-codec batch native (threads + SIMD): Opus/MP3/Vorbis/WebP/VP8-9
+  # + the subtitle/burn-in libs — the same set as the wasm intermediate (0022 parity).
+  # No .pc pthread strip here: native wants real pthreads.
   build_openh264_native
   [ "$VARIANT" = gpl ] && build_x264_native
-  echo "native deps built ($VARIANT) → $PREFIX"
+  if [ "$PROFILE" = intermediate ]; then
+    build_libopus
+    build_libmp3lame
+    build_libvorbis
+    build_libwebp
+    build_libvpx
+    build_freetype
+    build_harfbuzz
+    build_fribidi
+    build_libass
+  fi
+  echo "native deps built ($VARIANT, $PROFILE) → $PREFIX"
   exit 0
 fi
 

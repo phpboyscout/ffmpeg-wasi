@@ -102,15 +102,20 @@ esac
 if [ "$TARGET" = native ]; then
   # --- TARGET=native (spec 0028 Backend B) ---------------------------------
   # The host build: threads + SIMD on (the whole point of native), no cross
-  # machinery, no wasi shims, no HAVE_* fixups. The lean profile is built from the
-  # same allowlist as wasm plus the native openh264 (both variants) / libx264 (gpl)
-  # H.264 encoders from deps.sh — so H.264 encode runs at native speed. The
-  # intermediate profile (the rest of the external libs, native) is a follow-up.
-  [ "$PROFILE" = lean ] || { echo "libav.sh: native build supports PROFILE=lean only (for now)" >&2; exit 2; }
+  # machinery, no wasi shims, no HAVE_* fixups. Built from the same allowlist as
+  # wasm (lean, or lean + the intermediate batch) plus the native openh264 (both
+  # variants) / libx264 (gpl) H.264 encoders from deps.sh — encode at native speed.
+  # The intermediate profile links the native Opus/MP3/Vorbis/WebP/VP8-9 + subtitle/
+  # burn-in libs, matching the wasm intermediate capability (0022 parity).
+  # --extra-cflags/--extra-ldflags anchor $PREFIX on the include + link paths.
+  # pkg-config libs (openh264/x264/opus/vorbis/webp/vpx/freetype/harfbuzz/fribidi/
+  # ass) carry their own -I/-L via .pc, but libmp3lame ships no pkg-config file, so
+  # ffmpeg link-tests a bare -lmp3lame — which needs -L$PREFIX/lib to resolve.
   # shellcheck disable=SC2086  # $ENABLE/$OPENH264_FLAGS/$GPL_FLAGS are deliberately split into args
   ./configure \
     --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" \
     --pkg-config-flags=--static \
+    --extra-cflags="-I$PREFIX/include" --extra-ldflags="-L$PREFIX/lib" \
     --disable-shared --enable-static --enable-small --disable-stripping \
     --disable-programs --disable-doc --disable-debug --disable-network \
     --enable-zlib \

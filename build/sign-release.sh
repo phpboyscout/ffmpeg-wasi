@@ -38,7 +38,9 @@ cat > provenance.json <<PROV
     "intermediate-lgpl": { "file": "ffmpeg-wasi-intermediate-lgpl.wasm", "license": "LGPL-2.1-or-later", "h264_encode": "openh264", "profile": "intermediate" },
     "intermediate-gpl":  { "file": "ffmpeg-wasi-intermediate-gpl.wasm",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "intermediate" },
     "driver-linux-amd64-lgpl": { "file": "ffmpeg-wasi-driver-linux-amd64-lgpl", "license": "LGPL-2.1-or-later", "h264_encode": "openh264", "profile": "lean" },
-    "driver-linux-amd64-gpl":  { "file": "ffmpeg-wasi-driver-linux-amd64-gpl",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "lean" }
+    "driver-linux-amd64-gpl":  { "file": "ffmpeg-wasi-driver-linux-amd64-gpl",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "lean" },
+    "driver-linux-amd64-intermediate-lgpl": { "file": "ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl", "license": "LGPL-2.1-or-later", "h264_encode": "openh264", "profile": "intermediate" },
+    "driver-linux-amd64-intermediate-gpl":  { "file": "ffmpeg-wasi-driver-linux-amd64-intermediate-gpl",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "intermediate" }
   },
   "h264_patent_note": "Both variants encode H.264 from self-compiled sources (openh264/libx264), outside Cisco's binary patent grant; shipped under the AVC pool's royalty-free volume tier. See docs/explanation/licensing.md.",
   "tooling_license": "MIT"
@@ -54,6 +56,8 @@ sha256sum ffmpeg-wasi-lgpl.wasm ffmpeg-wasi-lgpl.wasm.gz \
   ffmpeg-wasi-intermediate-gpl.wasm ffmpeg-wasi-intermediate-gpl.wasm.gz \
   ffmpeg-wasi-driver-linux-amd64-lgpl ffmpeg-wasi-driver-linux-amd64-lgpl.gz \
   ffmpeg-wasi-driver-linux-amd64-gpl ffmpeg-wasi-driver-linux-amd64-gpl.gz \
+  ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl.gz \
+  ffmpeg-wasi-driver-linux-amd64-intermediate-gpl ffmpeg-wasi-driver-linux-amd64-intermediate-gpl.gz \
   provenance.json > checksums.txt
 
 # 3. Mint the OpenPGP public key from KMS. Fixed name/email/created → deterministic
