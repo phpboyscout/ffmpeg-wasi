@@ -20,6 +20,10 @@ HERE_DEPS="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # there), first-class native. git-pinned like the other native encoders.
 : "${X265_VERSION:=3.6}"            # libx265 (GPL) — HEVC encode; full/gpl only
 : "${SVTAV1_VERSION:=v2.3.0}"       # SVT-AV1 (BSD) — AV1 encode; full, both variants
+# libdav1d (BSD) — AV1 *decode* (spec 0023 D-0023-C). Native-only: dav1d is
+# thread-architected, and FFmpeg's in-tree `av1` decoder is hwaccel-only, so
+# software AV1 decode needs this lib. meson build, real asm + threads.
+: "${DAV1D_VERSION:=1.5.0}"         # dav1d (BSD) — AV1 decode; intermediate + full, both variants
 # External LGPL/BSD encoder libs (spec 0018) — intermediate profile only. Each
 # tarball is pinned by SHA-256 (verified in fetch_tarball); bump version + digest
 # together.
@@ -507,6 +511,18 @@ build_svtav1_native() {
   echo "SVT-AV1 (native) built → $PREFIX"
 }
 
+# build_libdav1d_native — AV1 *decode* (BSD) for the native driver (spec 0023
+# D-0023-C, intermediate + full, both variants — royalty-free). meson, static, real
+# asm + threads. Software AV1 decode needs this: FFmpeg's in-tree `av1` decoder is a
+# hwaccel-only frontend. Native-only — dav1d is thread-architected, so a wasm build
+# is a separate spike.
+build_libdav1d_native() {
+  git clone https://code.videolan.org/videolan/dav1d.git --depth=1 --branch "$DAV1D_VERSION" /dav1d
+  cd /dav1d
+  native_meson -Denable_tools=false -Denable_tests=false
+  echo "dav1d (native) built → $PREFIX"
+}
+
 if [ "$TARGET" = native ]; then
   # Native external codec libraries (spec 0028): openh264 for both variants, libx264
   # for gpl. zlib comes from the system (zlib1g-dev). The intermediate profile adds
@@ -527,6 +543,7 @@ if [ "$TARGET" = native ]; then
     build_harfbuzz
     build_fribidi
     build_libass
+    build_libdav1d_native   # AV1 decode (spec 0023) — native only
   fi
   if [ "$PROFILE" = full ]; then
     build_svtav1_native

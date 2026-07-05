@@ -164,6 +164,93 @@ static void afio_ipc_close(AVIOContext **ppb) {
     avio_context_free(&pb);
     *ppb = NULL;
 }
+
+// --- concat over IPC ------------------------------------------------------
+// The concat demuxer opens each segment through AVFormatContext.io_open; we route
+// that to a per-file IPC AVIO. The playlist itself is read from an in-memory buffer
+// (plsrc) via a custom AVIO, so no scratch file touches the caller's fs.
+
+struct plsrc { uint8_t *data; int len; int pos; };
+
+static int pl_read(void *o, uint8_t *buf, int n) {
+    struct plsrc *m = o;
+    int k = m->len - m->pos;
+    if (k <= 0) return AVERROR_EOF;
+    if (k > n) k = n;
+    memcpy(buf, m->data + m->pos, (size_t)k);
+    m->pos += k;
+    return k;
+}
+
+static int64_t pl_seek(void *o, int64_t off, int whence) {
+    struct plsrc *m = o;
+    if (whence == AVSEEK_SIZE) return m->len;
+    int64_t np = whence == SEEK_CUR ? m->pos + off : whence == SEEK_END ? m->len + off : off;
+    if (np < 0 || np > m->len) return AVERROR(EINVAL);
+    m->pos = (int)np;
+    return np;
+}
+
+static int concat_io_open(AVFormatContext *s, AVIOContext **pb, const char *url,
+                          int flags, AVDictionary **options) {
+    (void)s; (void)flags; (void)options;
+    AVIOContext *c = afio_ipc_open(url, 0);
+    if (!c) return AVERROR(EIO);
+    *pb = c;
+    return 0;
+}
+
+static int concat_io_close(AVFormatContext *s, AVIOContext *pb) {
+    (void)s;
+    afio_ipc_close(&pb);
+    return 0;
+}
+
+// afio_concat_is_mem reports whether a context is one we opened with an in-memory
+// playlist (so afio_close_input frees the plsrc AVIO instead of an IPC close).
+static int afio_concat_is_mem(AVFormatContext *ic) {
+    return ic && ic->iformat && ic->iformat->name &&
+           strcmp(ic->iformat->name, "concat") == 0 &&
+           ic->io_open == concat_io_open;
+}
+
+// afio_open_concat_ipc builds the in-memory ffconcat playlist, wires the memory
+// playlist AVIO + the per-segment IPC io_open, and opens the concat demuxer.
+static int afio_open_concat_ipc(AVFormatContext **out, const AVInputFormat *cf,
+                                const char *const *segments, int n) {
+    // Size the "ffconcat version 1.0\n" header + "file '<seg>'\n" per segment.
+    size_t len = strlen("ffconcat version 1.0\n");
+    for (int i = 0; i < n; i++) len += strlen("file '") + strlen(segments[i]) + strlen("'\n");
+
+    uint8_t *text = av_malloc(len + 1);
+    if (!text) return AVERROR(ENOMEM);
+
+    size_t off = 0;
+    off += (size_t)snprintf((char *)text + off, len + 1 - off, "ffconcat version 1.0\n");
+    for (int i = 0; i < n; i++)
+        off += (size_t)snprintf((char *)text + off, len + 1 - off, "file '%s'\n", segments[i]);
+
+    struct plsrc *src = av_mallocz(sizeof *src);
+    uint8_t *iobuf = av_malloc(4096);
+    AVFormatContext *ic = avformat_alloc_context();
+    if (!src || !iobuf || !ic) { av_free(text); av_free(src); av_free(iobuf); if (ic) avformat_free_context(ic); return AVERROR(ENOMEM); }
+
+    src->data = text;
+    src->len = (int)off;
+    ic->pb = avio_alloc_context(iobuf, 4096, 0, src, pl_read, NULL, pl_seek);
+    if (!ic->pb) { av_free(text); av_free(src); av_free(iobuf); avformat_free_context(ic); return AVERROR(ENOMEM); }
+
+    ic->flags |= AVFMT_FLAG_CUSTOM_IO;
+    ic->io_open = concat_io_open;
+    ic->io_close2 = concat_io_close;
+
+    AVDictionary *opts = NULL;
+    av_dict_set(&opts, "safe", "0", 0);
+    *out = ic;
+    int rc = avformat_open_input(out, NULL, cf, &opts);
+    av_dict_free(&opts);
+    return rc;
+}
 #endif // AFMPEG_NATIVE
 
 int afio_open_input(AVFormatContext **out, const char *path,
@@ -184,8 +271,56 @@ int afio_open_input(AVFormatContext **out, const char *path,
     return avformat_open_input(out, path, ifmt, opts);
 }
 
+int afio_open_concat(AVFormatContext **out, const char *const *segments, int n, int idx) {
+    const AVInputFormat *cf = av_find_input_format("concat");
+    if (!cf) {
+        fprintf(stderr, "ffmpeg-wasi: process: concat demuxer not built\n");
+        return AVERROR_DEMUXER_NOT_FOUND;
+    }
+
+#ifdef AFMPEG_NATIVE
+    if (afio_active()) return afio_open_concat_ipc(out, cf, segments, n);
+#endif
+
+    // Fallback (wasm, or native without the bridge): an ffconcat list in the /tmp
+    // scratch overlay, segments opened on their real (WASI-mounted) paths.
+    char listpath[64];
+    snprintf(listpath, sizeof listpath, "/tmp/afmpeg-concat-%d.txt", idx);
+
+    FILE *lf = fopen(listpath, "w");
+    if (!lf) {
+        fprintf(stderr, "ffmpeg-wasi: process: cannot create concat list\n");
+        return AVERROR(EIO);
+    }
+    for (int i = 0; i < n; i++)
+        fprintf(lf, "file '/%s'\n", segments[i][0] == '/' ? segments[i] + 1 : segments[i]);
+    fclose(lf);
+
+    AVDictionary *opts = NULL;
+    av_dict_set(&opts, "safe", "0", 0);
+    av_dict_set(&opts, "protocol_whitelist", "file,pipe", 0);
+    int rc = avformat_open_input(out, listpath, cf, &opts);
+    av_dict_free(&opts);
+    return rc;
+}
+
 void afio_close_input(AVFormatContext **out) {
 #ifdef AFMPEG_NATIVE
+    if (out && *out && afio_concat_is_mem(*out)) {
+        // A concat context we opened with an in-memory playlist: free the plsrc AVIO
+        // ourselves (the per-segment IPC AVIOs are closed by concat via io_close2).
+        AVIOContext *pb = (*out)->pb;
+        (*out)->pb = NULL;
+        avformat_close_input(out);
+        if (pb) {
+            struct plsrc *src = pb->opaque;
+            if (src) av_free(src->data);
+            av_free(src);
+            av_freep(&pb->buffer);
+            avio_context_free(&pb);
+        }
+        return;
+    }
     if (out && *out && ((*out)->flags & AVFMT_FLAG_CUSTOM_IO) && (*out)->pb) {
         AVIOContext *pb = (*out)->pb;
         (*out)->pb = NULL; // detach so avformat_close_input leaves the custom pb alone

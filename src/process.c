@@ -943,39 +943,28 @@ static int sub_packet(Ctx *c, int in_idx, const AVPacket *pkt) {
 }
 
 // open_concat_input joins a playlist of like-codec files as one continuous input
-// via the concat *demuxer* (distinct from the concat filter, which re-encodes).
-// It materialises an ffconcat list in the /tmp scratch overlay referencing each
-// segment by absolute path, then opens it with the concat demuxer (spec 0013 §3.2).
-// safe=0 permits the absolute paths — the playlist comes from the trusted job
-// spec, not the untrusted media.
+// via the concat *demuxer* (distinct from the concat filter, which re-encodes),
+// spec 0013 §3.2. The playlist + every segment open route through afio_open_concat:
+// over the IPC bridge on the native backend (nothing touches host disk), or a /tmp
+// scratch list opened on real paths on wasm. safe=0 permits the segment paths — the
+// playlist comes from the trusted job spec, not the untrusted media.
 static int open_concat_input(AVFormatContext **out, const cJSON *concat, int idx) {
-    char listpath[64];
-    snprintf(listpath, sizeof(listpath), "/tmp/afmpeg-concat-%d.txt", idx);
+    int n = cJSON_GetArraySize(concat);
+    if (n <= 0) return AVERROR(EINVAL);
 
-    FILE *lf = fopen(listpath, "w");
-    if (!lf) {
-        fprintf(stderr, "ffmpeg-wasi: process: cannot create concat list\n");
-        return AVERROR(EIO);
-    }
+    const char **segs = av_calloc((size_t)n, sizeof(*segs));
+    if (!segs) return AVERROR(ENOMEM);
+
+    int i = 0;
     const cJSON *seg = NULL;
     cJSON_ArrayForEach(seg, concat) {
         const char *s = cJSON_GetStringValue(seg);
-        if (!s) { fclose(lf); return AVERROR(EINVAL); }
-        fprintf(lf, "file '/%s'\n", s[0] == '/' ? s + 1 : s); // absolute → location-independent
-    }
-    fclose(lf);
-
-    const AVInputFormat *cf = av_find_input_format("concat");
-    if (!cf) {
-        fprintf(stderr, "ffmpeg-wasi: process: concat demuxer not built\n");
-        return AVERROR_DEMUXER_NOT_FOUND;
+        if (!s) { av_free(segs); return AVERROR(EINVAL); }
+        segs[i++] = s;
     }
 
-    AVDictionary *opts = NULL;
-    av_dict_set(&opts, "safe", "0", 0);
-    av_dict_set(&opts, "protocol_whitelist", "file,pipe", 0);
-    int rc = avformat_open_input(out, listpath, cf, &opts);
-    av_dict_free(&opts);
+    int rc = afio_open_concat(out, segs, n, idx);
+    av_free(segs);
     if (rc < 0) {
         fprintf(stderr, "ffmpeg-wasi: process: cannot open concat playlist\n");
         return rc;

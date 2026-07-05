@@ -14,6 +14,11 @@ HERE_LIBAV="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 git clone https://github.com/FFmpeg/FFmpeg --depth=1 --branch "$FFMPEG_VERSION" "$FFMPEG_SRC"
 cd "$FFMPEG_SRC"
 
+# Forward the concat demuxer's custom io_open into its per-segment sub-context so a
+# concat segment routes through the native IPC bridge (spec 0028), not the `file`
+# protocol. A no-op for wasm (default io_open); see build/ffmpeg-concat-ioopen.patch.
+git apply "$HERE_LIBAV/ffmpeg-concat-ioopen.patch"
+
 # The only GPL trigger in our set is libx264 (the GPL variant). The LGPL variant
 # enables no GPL components, so libav* stays LGPL. With --disable-everything the
 # encoder must be enabled explicitly, not just the library.
@@ -62,7 +67,9 @@ LEAN_ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,fl
 # (alac/wmav2), the PCM tail, images (bmp/tiff), editing intermediates
 # (prores/dnxhd/dv), and legacy/broadcast video (mpeg2/mpeg4/vc1/wmv3/theora).
 # Encoders: ac3, alac, the PCM tail, and bmp/tiff (so those images round-trip).
-# AV1/HEVC and the external-lib encoders are elsewhere (0023 / 0018).
+# AV1/HEVC and the external-lib encoders are elsewhere (0023 / 0018). AV1 *decode*
+# needs libdav1d (FFmpeg's in-tree `av1` decoder is hwaccel-only) → native-only,
+# added below (dav1d needs threads, so a wasm build is a separate spike).
 INTERMEDIATE_ENABLE="\
 --enable-demuxer=mpegts,flv,avi,gif,caf,aiff,au \
 --enable-muxer=mpegts,hls,dash,flv,avi,gif,ogg,adts,caf,aiff,au,segment,stream_segment \
@@ -102,12 +109,19 @@ INTERMEDIATE_ENABLE="\
 FULL_ENABLE="--enable-libsvtav1 --enable-encoder=libsvtav1"
 [ "$VARIANT" = "gpl" ] && FULL_ENABLE="$FULL_ENABLE --enable-libx265 --enable-encoder=libx265"
 
+# AV1 software decode (spec 0023 D-0023-C): libdav1d. FFmpeg's in-tree `av1` decoder
+# is hwaccel-only, so software AV1 decode needs the lib; dav1d is thread-architected,
+# so it is **native only** (a wasm build is a separate threads spike). LGPL-clean →
+# both variants. Rides intermediate + full; the deps come from build/deps.sh (native).
+NATIVE_AV1_DECODE=""
+[ "$TARGET" = native ] && NATIVE_AV1_DECODE="--enable-libdav1d --enable-decoder=libdav1d --enable-parser=av1"
+
 case "$PROFILE" in
   lean)         ENABLE="$LEAN_ENABLE" ;;
-  intermediate) ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE" ;;
+  intermediate) ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE $NATIVE_AV1_DECODE" ;;
   full)
     [ "$TARGET" = native ] || { echo "libav.sh: PROFILE=full is native-only (0022 §4 — no WASM-full)" >&2; exit 2; }
-    ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE $FULL_ENABLE" ;;
+    ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE $FULL_ENABLE $NATIVE_AV1_DECODE" ;;
   *) echo "libav.sh: unknown PROFILE '$PROFILE' (want lean|intermediate|full)" >&2; exit 2 ;;
 esac
 

@@ -22,8 +22,16 @@ struct AVDictionary;
 int afio_open_input(struct AVFormatContext **out, const char *path,
                     const struct AVInputFormat *ifmt, struct AVDictionary **opts);
 
-// afio_close_input closes a context opened by afio_open_input, freeing the custom
-// AVIO if one was installed.
+// afio_open_concat opens the concat demuxer over `n` segment paths joined as one
+// continuous input (spec 0013 §3.2). Native bridge active: the playlist is built in
+// memory and every segment open is routed through IPC (so nothing touches host disk);
+// otherwise it materialises an ffconcat list in the /tmp scratch overlay and opens
+// each segment on its real path. Closed by afio_close_input like any input.
+int afio_open_concat(struct AVFormatContext **out, const char *const *segments,
+                     int n, int idx);
+
+// afio_close_input closes a context opened by afio_open_input or afio_open_concat,
+// freeing the custom AVIO if one was installed.
 void afio_close_input(struct AVFormatContext **out);
 
 // afio_open_output installs the muxer's pb for writing (custom AVIO over IPC when

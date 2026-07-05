@@ -1,0 +1,14 @@
+--- a/libavformat/concatdec.c
++++ b/libavformat/concatdec.c
+@@ -349,6 +349,11 @@ static int open_file(AVFormatContext *avf, unsigned fileno)
+
+     cat->avf->flags |= avf->flags & ~AVFMT_FLAG_CUSTOM_IO;
+     cat->avf->interrupt_callback = avf->interrupt_callback;
++
++    /* afmpeg (spec 0028): forward custom I/O so a segment opened by the concat
++     * demuxer routes through the native IPC bridge, not the file protocol. */
++    cat->avf->io_open   = avf->io_open;
++    cat->avf->io_close2 = avf->io_close2;
+
+     if ((ret = ff_copy_whiteblacklists(cat->avf, avf)) < 0)
+         return ret;

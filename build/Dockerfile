@@ -18,7 +18,7 @@ WORKDIR /work
 COPY build/toolchain.sh build/deps.sh build/config.sub build/wasi-compat.h \
      build/openh264-wasi.patch build/openh264-threads.c /work/build/
 RUN VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/deps.sh
-COPY build/libav.sh /work/build/
+COPY build/libav.sh build/ffmpeg-concat-ioopen.patch /work/build/
 RUN FFMPEG_VERSION="$FFMPEG_VERSION" VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/libav.sh
 COPY build/ /work/build/
 COPY src/ /work/src/

@@ -73,8 +73,10 @@ timed-text codec.)
 - **DTS is decode-only** (`dca`) — the encoder is experimental in FFmpeg and left out
   (D-0016-B). TrueHD/AMR are not in this batch.
 - **`eq`** is not a codec — see [filters](filters.md).
-- **HEVC/AV1 encode** live in the **full** profile below (native only); **AV1 decode (dav1d)** is
-  not yet built — the native `av1` decoder covers playback.
+- **HEVC/AV1 encode** live in the **full** profile below (native only). **AV1 *decode*** is via
+  **libdav1d** (spec 0023 D-0023-C) — **native only** (dav1d is thread-architected, and FFmpeg's
+  in-tree `av1` decoder is hwaccel-only, so software AV1 decode needs the lib), in the intermediate
+  and full native drivers, both variants. WASM cannot decode AV1 (a separate threads spike).
 - **Patent posture** — AC-3, DTS, MPEG-2/4, VC-1 carry codec patents, the same class as the
   H.264/HEVC the engine already decodes; see the [licensing explanation](../explanation/licensing.md).
 - The **decode-only** codecs (prores, dnxhd, mpeg2video, vc1, …) are enabled in the build but
