@@ -74,9 +74,11 @@ timed-text codec.)
   (D-0016-B). TrueHD/AMR are not in this batch.
 - **`eq`** is not a codec — see [filters](filters.md).
 - **HEVC/AV1 encode** live in the **full** profile below (native only). **AV1 *decode*** is via
-  **libdav1d** (spec 0023 D-0023-C) — **native only** (dav1d is thread-architected, and FFmpeg's
-  in-tree `av1` decoder is hwaccel-only, so software AV1 decode needs the lib), in the intermediate
-  and full native drivers, both variants. WASM cannot decode AV1 (a separate threads spike).
+  **libdav1d** (spec 0023 D-0023-C) — in the **intermediate** profile (and full), **both variants,
+  both runtimes**. FFmpeg's in-tree `av1` decoder is hwaccel-only, so software AV1 decode needs the
+  lib. dav1d ships a threaded-wasm build by default; ours is built **single-threaded** for WASM (it
+  runs on wazero, which has no threads — decode is correct but slower than the threaded native
+  driver). So intermediate decodes AV1 identically on the `.wasm` module and the native driver.
 - **Patent posture** — AC-3, DTS, MPEG-2/4, VC-1 carry codec patents, the same class as the
   H.264/HEVC the engine already decodes; see the [licensing explanation](../explanation/licensing.md).
 - The **decode-only** codecs (prores, dnxhd, mpeg2video, vc1, …) are enabled in the build but

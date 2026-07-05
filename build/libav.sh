@@ -110,18 +110,17 @@ FULL_ENABLE="--enable-libsvtav1 --enable-encoder=libsvtav1"
 [ "$VARIANT" = "gpl" ] && FULL_ENABLE="$FULL_ENABLE --enable-libx265 --enable-encoder=libx265"
 
 # AV1 software decode (spec 0023 D-0023-C): libdav1d. FFmpeg's in-tree `av1` decoder
-# is hwaccel-only, so software AV1 decode needs the lib; dav1d is thread-architected,
-# so it is **native only** (a wasm build is a separate threads spike). LGPL-clean →
-# both variants. Rides intermediate + full; the deps come from build/deps.sh (native).
-NATIVE_AV1_DECODE=""
-[ "$TARGET" = native ] && NATIVE_AV1_DECODE="--enable-libdav1d --enable-decoder=libdav1d --enable-parser=av1"
+# is hwaccel-only, so software AV1 decode needs the lib. LGPL-clean → both variants;
+# rides intermediate + full. The lib is built single-threaded for wasm (deps.sh), so
+# both runtimes decode AV1. Deps come from build/deps.sh.
+AV1_DECODE="--enable-libdav1d --enable-decoder=libdav1d --enable-parser=av1"
 
 case "$PROFILE" in
   lean)         ENABLE="$LEAN_ENABLE" ;;
-  intermediate) ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE $NATIVE_AV1_DECODE" ;;
+  intermediate) ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE $AV1_DECODE" ;;
   full)
     [ "$TARGET" = native ] || { echo "libav.sh: PROFILE=full is native-only (0022 §4 — no WASM-full)" >&2; exit 2; }
-    ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE $FULL_ENABLE $NATIVE_AV1_DECODE" ;;
+    ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE $FULL_ENABLE $AV1_DECODE" ;;
   *) echo "libav.sh: unknown PROFILE '$PROFILE' (want lean|intermediate|full)" >&2; exit 2 ;;
 esac
 

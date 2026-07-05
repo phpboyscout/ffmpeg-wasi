@@ -511,16 +511,37 @@ build_svtav1_native() {
   echo "SVT-AV1 (native) built → $PREFIX"
 }
 
-# build_libdav1d_native — AV1 *decode* (BSD) for the native driver (spec 0023
-# D-0023-C, intermediate + full, both variants — royalty-free). meson, static, real
-# asm + threads. Software AV1 decode needs this: FFmpeg's in-tree `av1` decoder is a
-# hwaccel-only frontend. Native-only — dav1d is thread-architected, so a wasm build
-# is a separate spike.
-build_libdav1d_native() {
+# build_libdav1d — AV1 *decode* (BSD, spec 0023 D-0023-C, intermediate + full, both
+# variants — royalty-free). meson. Software AV1 decode needs this: FFmpeg's in-tree
+# `av1` decoder is a hwaccel-only frontend. Native: real asm + threads. wasm: built
+# SINGLE-THREADED with NO atomics — dav1d's meson pulls dependency('threads')
+# (→ -pthread → wasi-threads → wasm atomics wazero rejects) AND explicitly
+# force-enables atomics+bulk-memory for wasm; neuter both, and dav1d runs at
+# n_threads=1 against wasi-libc's pthread stubs while clang lowers its C11 atomics to
+# plain single-threaded ops (same class as the openh264 single-thread shim).
+build_libdav1d() {
   git clone https://code.videolan.org/videolan/dav1d.git --depth=1 --branch "$DAV1D_VERSION" /dav1d
   cd /dav1d
-  native_meson -Denable_tools=false -Denable_tests=false
-  echo "dav1d (native) built → $PREFIX"
+  if [ "$TARGET" = native ]; then
+    native_meson -Denable_tools=false -Denable_tests=false
+  else
+    sed -i "s/thread_dependency = dependency('threads')/thread_dependency = []/" meson.build
+    sed -i "/startswith('wasm')/,/endif/d" meson.build   # drop the wasm atomics-forcing block
+    # meson's has_function is systematically false-negative for wasi-libc functions
+    # under our cross setup (clock_gettime, aligned_alloc, posix_memalign all compile
+    # fine — verified — but the link-only cross probe misreports them). Drop the
+    # clock_gettime hard error and force the aligned-alloc HAVE_* dav1d's mem.h needs.
+    sed -i "/error('clock_gettime not found')/d" meson.build
+    sed -i "s/cdata.set10('HAVE_ALIGNED_ALLOC', have_aligned_alloc)/cdata.set10('HAVE_ALIGNED_ALLOC', true)/" meson.build
+    sed -i "s/cdata.set10('HAVE_POSIX_MEMALIGN', have_posix_memalign)/cdata.set10('HAVE_POSIX_MEMALIGN', true)/" meson.build
+    write_meson_cross
+    meson setup build --cross-file /tmp/wasi-cross.txt --prefix="$PREFIX" \
+      --default-library=static --buildtype=minsize \
+      -Denable_tools=false -Denable_tests=false -Denable_asm=false \
+      || { echo "dav1d setup failed"; tail -60 build/meson-logs/meson-log.txt 2>/dev/null; exit 1; }
+    ninja -C build install
+  fi
+  echo "dav1d built → $PREFIX"
 }
 
 if [ "$TARGET" = native ]; then
@@ -543,7 +564,7 @@ if [ "$TARGET" = native ]; then
     build_harfbuzz
     build_fribidi
     build_libass
-    build_libdav1d_native   # AV1 decode (spec 0023) — native only
+    build_libdav1d   # AV1 decode (spec 0023)
   fi
   if [ "$PROFILE" = full ]; then
     build_svtav1_native
@@ -576,6 +597,7 @@ if [ "$PROFILE" = intermediate ]; then
   build_harfbuzz
   build_fribidi
   build_libass
+  build_libdav1d   # AV1 decode (spec 0023) — single-threaded wasm build (the spike)
   # wasi has no pthreads and every lib here is built single-threaded, but some
   # .pc files still advertise it: libvpx lists -lpthread, harfbuzz (meson) lists
   # -pthread. FFmpeg probes deps with --static pkg-config, so either reaches the
