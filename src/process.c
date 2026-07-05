@@ -148,6 +148,13 @@ typedef struct {
     // time (us), captured on arrival and shared by every copied stream of the
     // pair so audio and video stay aligned. AV_NOPTS_VALUE until captured.
     int64_t cpy_rebase_us[MAX_INPUTS][MAX_OUTPUTS];
+
+    // Analysis-filter output (spec 0017 §Q): the `lavfi.*` frame metadata that
+    // cropdetect/blackdetect/silencedetect/ebur128/signalstats/astats/… attach,
+    // collected off the sink frames into a time-series (consecutive-deduplicated
+    // per key by `analysis_last`) and surfaced in the result JSON. Lazily built.
+    cJSON *analysis;
+    AVDictionary *analysis_last;
 } Ctx;
 
 // parse_input_pad reads a "N:v" / "N:a" graph input label into an input index +
@@ -471,6 +478,33 @@ static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
     return ret;
 }
 
+// collect_analysis harvests the `lavfi.*` metadata that an analysis filter
+// (cropdetect/blackdetect/silencedetect/ebur128/signalstats/astats/…) attaches to a
+// frame at the sink (spec 0017 §Q) into c->analysis — a time-series of {t, key,
+// value}, consecutive-deduplicated per key so a stable measurement records once while
+// discrete events (silence_start/end) each record. The "lavfi." prefix is dropped.
+// Advisory + best-effort: any allocation failure just skips, never blocking the job.
+static void collect_analysis(Ctx *c, const AVFrame *f, AVRational tb) {
+    const AVDictionaryEntry *e = NULL;
+    while ((e = av_dict_iterate(f->metadata, e))) {
+        if (strncmp(e->key, "lavfi.", 6) != 0) continue;
+
+        const AVDictionaryEntry *last = av_dict_get(c->analysis_last, e->key, NULL, 0);
+        if (last && strcmp(last->value, e->value) == 0) continue; // unchanged → skip
+        if (av_dict_set(&c->analysis_last, e->key, e->value, 0) < 0) return;
+
+        if (!c->analysis && !(c->analysis = cJSON_CreateArray())) return;
+        cJSON *ent = cJSON_CreateObject();
+        if (!ent) return;
+
+        double t = (f->pts == AV_NOPTS_VALUE) ? -1.0 : (double)f->pts * av_q2d(tb);
+        cJSON_AddNumberToObject(ent, "t", t);
+        cJSON_AddStringToObject(ent, "key", e->key + 6); // drop the "lavfi." prefix
+        cJSON_AddStringToObject(ent, "value", e->value);
+        cJSON_AddItemToArray(c->analysis, ent);
+    }
+}
+
 // pull_sinks drains every buffersink and encodes whatever frames are ready.
 static int pull_sinks(Ctx *c) {
     AVFrame *f = av_frame_alloc();
@@ -481,6 +515,8 @@ static int pull_sinks(Ctx *c) {
             ret = av_buffersink_get_frame(c->gout[i].sink, f);
             if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) { ret = 0; break; }
             if (ret < 0) goto done;
+            // Harvest any analysis-filter metadata riding on this frame (spec 0017 §Q).
+            collect_analysis(c, f, av_buffersink_get_time_base(c->gout[i].sink));
             // The buffersink already sets frame->pts in the sink's timebase
             // (which is the encoder's), so feed it as-is — overriding it (e.g.
             // with best_effort_timestamp, a decoder concept) breaks filters like
@@ -1366,6 +1402,9 @@ int op_process(const cJSON *spec) {
             }
             cJSON_AddItemToArray(outs, od);
         }
+        // Analysis-filter measurements (spec 0017 §Q), when any filter emitted them;
+        // transfer ownership to the result (cleared so the cleanup below won't double-free).
+        if (c.analysis) { cJSON_AddItemToObject(res, "analysis", c.analysis); c.analysis = NULL; }
         char *j = cJSON_PrintUnformatted(res);
         if (j) { printf("%s\n", j); free(j); }
         cJSON_Delete(res);
@@ -1393,5 +1432,7 @@ end:
     }
     if (c.graph) avfilter_graph_free(&c.graph);
     for (int i = 0; i < c.n_in; i++) afio_close_input(&c.in[i]);
+    cJSON_Delete(c.analysis); // NULL-safe; non-NULL only on an error path before emission
+    av_dict_free(&c.analysis_last);
     return rc < 0 ? 1 : 0;
 }

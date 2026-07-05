@@ -49,8 +49,13 @@ all in-tree, LGPL-clean, no external library:
   `[0:v]split[a][b];[a]palettegen[p];[b][p]paletteuse[v]`.
 - **`loudnorm`** resamples to 192 kHz internally; follow it with `aresample=<rate>` before an
   encoder that doesn't accept that rate (e.g. AAC).
-- **Analysis filters** (`cropdetect`, `ebur128`, …) currently emit their measurements to the log
-  (stderr), not as structured output — observe-only for now (spec 0017 Q-0017-1).
+- **Analysis filters** (`cropdetect`, `blackdetect`, `silencedetect`, `ebur128`, `signalstats`,
+  `astats`, …) surface their measurements as **structured output** (spec 0017 §Q): the `lavfi.*`
+  metadata they attach to frames is collected into the process result JSON's **`analysis`** array
+  — a time-series of `{t, key, value}`, deduplicated per key (a stable `cropdetect` records once;
+  discrete events like `silence_start`/`silence_end` each record). Filters that only log by default
+  (`ebur128`, `astats`) need their `metadata=1` option to populate it. afmpeg exposes it as
+  `ProcessResult.Analysis` via `ParseResult`.
 - **`eq`** (a GPL-only level/gamma filter) is **not enabled in either variant** — reach for
   `curves`, `colorbalance`, or `colorchannelmixer` for level adjustment instead.
 - **Fonts have no fontconfig** — the sandbox has no system fonts. Name the font by path:
