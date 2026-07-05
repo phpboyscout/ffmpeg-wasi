@@ -103,9 +103,10 @@ build:gpl:intermediate:
 # signed alongside the wasm modules, so a consumer can fetch a *certified* native
 # driver (afmpeg native.WithNativeRelease) for 48–58× faster software encode. It
 # runs the same build scripts as the wasm jobs, in a native toolchain image, in
-# both capability profiles: lean (H.264 encode + the native baseline) and
+# three capability profiles: lean (H.264 encode + the native baseline),
 # intermediate (lean + the native Opus/MP3/Vorbis/WebP/VP8-9 + subtitle/burn-in
-# batch — full native software-encode parity with the wasm intermediate module).
+# batch — parity with the wasm intermediate module), and full (intermediate + the
+# heavy native-only encoders x265/HEVC (gpl) + SVT-AV1 (both); HW-accel deferred).
 .build-native:
   stage: build
   image: debian:bookworm-slim
@@ -117,10 +118,9 @@ build:gpl:intermediate:
     TARGET: native
     PROFILE: lean
   before_script:
-    # curl/xz-utils/meson/ninja-build are only exercised by PROFILE=intermediate
-    # (its Opus/WebP/VP8-9/subtitle dep batch); harmless for lean. Mirrors the
-    # native Dockerfile toolchain.
-    - apt-get update && apt-get install -y --no-install-recommends git make pkg-config gzip ca-certificates build-essential nasm zlib1g-dev curl xz-utils meson ninja-build && rm -rf /var/lib/apt/lists/*
+    # curl/xz-utils/meson/ninja-build are the intermediate dep toolchain, cmake the
+    # full one (x265/SVT-AV1); harmless for lean. Mirrors the native Dockerfile.
+    - apt-get update && apt-get install -y --no-install-recommends git make cmake pkg-config gzip ca-certificates build-essential nasm zlib1g-dev curl xz-utils meson ninja-build && rm -rf /var/lib/apt/lists/*
   script:
     - export FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
     # Lean keeps the platform-only name; other profiles carry the profile before
@@ -163,6 +163,21 @@ build:native:gpl:intermediate:
     VARIANT: gpl
     PROFILE: intermediate
 
+# Native full: intermediate + the heavy native-only encoders (spec 0023) — SVT-AV1
+# (both variants) + x265/HEVC (gpl only). Published as
+# ffmpeg-wasi-driver-linux-amd64-full-<variant>.
+build:native:lgpl:full:
+  extends: .build-native
+  variables:
+    VARIANT: lgpl
+    PROFILE: full
+
+build:native:gpl:full:
+  extends: .build-native
+  variables:
+    VARIANT: gpl
+    PROFILE: full
+
 # Sign the release manifest. Tag-gated; uses GitLab OIDC to assume the
 # ffmpeg-wasi signer role, then `gtb` mints the OpenPGP public key from the KMS
 # key and signs checksums.txt with a detached OpenPGP signature (afmpeg spec
@@ -183,6 +198,8 @@ sign:
     - build:native:gpl
     - build:native:lgpl:intermediate
     - build:native:gpl:intermediate
+    - build:native:lgpl:full
+    - build:native:gpl:full
   id_tokens:
     AWS_WEB_IDENTITY_TOKEN:
       # The IAM OIDC provider hardcodes client_id_list=["sts.amazonaws.com"];
@@ -238,6 +255,8 @@ release:
     - build:native:gpl
     - build:native:lgpl:intermediate
     - build:native:gpl:intermediate
+    - build:native:lgpl:full
+    - build:native:gpl:full
     - sign
   variables:
     PKG: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/ffmpeg-wasi/${CI_COMMIT_TAG}"
@@ -256,6 +275,8 @@ release:
                ffmpeg-wasi-driver-linux-amd64-gpl ffmpeg-wasi-driver-linux-amd64-gpl.gz \
                ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl.gz \
                ffmpeg-wasi-driver-linux-amd64-intermediate-gpl ffmpeg-wasi-driver-linux-amd64-intermediate-gpl.gz \
+               ffmpeg-wasi-driver-linux-amd64-full-lgpl ffmpeg-wasi-driver-linux-amd64-full-lgpl.gz \
+               ffmpeg-wasi-driver-linux-amd64-full-gpl ffmpeg-wasi-driver-linux-amd64-full-gpl.gz \
                checksums.txt checksums.txt.sig provenance.json; do
         echo "uploading $f"
         curl --fail --silent --show-error \
@@ -266,7 +287,7 @@ release:
       release-cli create \
         --name "ffmpeg-wasi ${CI_COMMIT_TAG}" \
         --tag-name "${CI_COMMIT_TAG}" \
-        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI. Two licence variants — **lgpl** (default; H.264 encode via openh264) and **gpl** (libx264 H.264 encode) — each in two capability profiles: **lean** (web-delivery essentials, the \`ffmpeg-wasi-<variant>.wasm\` assets) and **intermediate** (lean + every practical software codec/filter — subtitles, LGPL encoders, native codec batch, text burn-in — the \`ffmpeg-wasi-intermediate-<variant>.wasm\` assets). Plus the **native Backend-B drivers** (\`ffmpeg-wasi-driver-linux-amd64-<variant>\` lean, \`ffmpeg-wasi-driver-linux-amd64-intermediate-<variant>\` intermediate, spec 0028): our engine compiled to a native ELF with threads + SIMD for **48–58× faster software encode** — the intermediate driver carries the full software-codec batch (Opus/MP3/Vorbis/WebP/VP8-9 + subtitles) at native speed. Driven by afmpeg's native backend (\`native.WithNativeRelease\`) over an in-memory IPC bridge — CGO-free, signature-verified through the same manifest. Both variants encode H.264; the self-compiled openh264 carries an AVC patent caveat (see the licensing docs). The manifest is signed: \`checksums.txt.sig\` is a detached OpenPGP signature over \`checksums.txt\` from a KMS-held key (afmpeg verifies it via the org signing module against a pinned key). Pin a module by its URL + SHA-256 from \`checksums.txt\`; see \`provenance.json\` for exactly what went in." \
+        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI. Two licence variants — **lgpl** (default; H.264 encode via openh264) and **gpl** (libx264 H.264 encode) — each in two capability profiles: **lean** (web-delivery essentials, the \`ffmpeg-wasi-<variant>.wasm\` assets) and **intermediate** (lean + every practical software codec/filter — subtitles, LGPL encoders, native codec batch, text burn-in — the \`ffmpeg-wasi-intermediate-<variant>.wasm\` assets). Plus the **native Backend-B drivers** (\`ffmpeg-wasi-driver-linux-amd64-<variant>\` lean, \`-intermediate-<variant>\`, \`-full-<variant>\`, spec 0028): our engine compiled to a native ELF with threads + SIMD for **48–58× faster software encode**. The intermediate driver carries the full software-codec batch (Opus/MP3/Vorbis/WebP/VP8-9 + subtitles) at native speed; the **full** driver adds the heavy native-only encoders — **SVT-AV1** (AV1, both variants) and **x265/HEVC** (gpl only) — codecs impractical in WASM. Driven by afmpeg's native backend (\`native.WithNativeRelease\`) over an in-memory IPC bridge — CGO-free, signature-verified through the same manifest. Both variants encode H.264; the self-compiled openh264 carries an AVC patent caveat (see the licensing docs). The manifest is signed: \`checksums.txt.sig\` is a detached OpenPGP signature over \`checksums.txt\` from a KMS-held key (afmpeg verifies it via the org signing module against a pinned key). Pin a module by its URL + SHA-256 from \`checksums.txt\`; see \`provenance.json\` for exactly what went in." \
         --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-gpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-gpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-lgpl.wasm\",\"link_type\":\"package\"}" \
@@ -279,6 +300,8 @@ release:
         --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-gpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-gpl\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-intermediate-gpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-intermediate-gpl\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-full-lgpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-full-lgpl\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-full-gpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-full-gpl\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"checksums.txt\",\"url\":\"${PKG}/checksums.txt\",\"link_type\":\"other\"}" \
         --assets-link "{\"name\":\"checksums.txt.sig\",\"url\":\"${PKG}/checksums.txt.sig\",\"link_type\":\"other\"}" \
         --assets-link "{\"name\":\"provenance.json\",\"url\":\"${PKG}/provenance.json\",\"link_type\":\"other\"}"

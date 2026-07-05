@@ -8,7 +8,7 @@ HERE_LIBAV="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 
 : "${FFMPEG_VERSION:?set FFMPEG_VERSION, e.g. n8.1.2}"
 : "${VARIANT:=lgpl}"                       # lgpl (default) | gpl
-: "${PROFILE:=lean}"                        # lean (default) | intermediate — spec 0022
+: "${PROFILE:=lean}"                        # lean (default) | intermediate | full — spec 0022 (full is native-only)
 : "${FFMPEG_SRC:=/ffmpeg}"
 
 git clone https://github.com/FFmpeg/FFmpeg --depth=1 --branch "$FFMPEG_VERSION" "$FFMPEG_SRC"
@@ -93,10 +93,22 @@ INTERMEDIATE_ENABLE="\
 --enable-demuxer=srt,ass,webvtt \
 --enable-protocol=file,pipe"
 
+# --- Full profile (spec 0022 §3/§6, spec 0023) -----------------------------
+# intermediate + the heavy native-only encoders. Threads + SIMD make these viable,
+# so full is Native only (0022 §4 — there is no WASM-full). SVT-AV1 (BSD, both
+# variants — royalty-free) + x265/HEVC (GPL → gpl variant only, riding the
+# --enable-gpl gate GPL_FLAGS already sets). The HW-accel encoders (nvenc/vaapi/
+# videotoolbox/qsv) are the remaining full members — deferred until a device exists.
+FULL_ENABLE="--enable-libsvtav1 --enable-encoder=libsvtav1"
+[ "$VARIANT" = "gpl" ] && FULL_ENABLE="$FULL_ENABLE --enable-libx265 --enable-encoder=libx265"
+
 case "$PROFILE" in
   lean)         ENABLE="$LEAN_ENABLE" ;;
   intermediate) ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE" ;;
-  *) echo "libav.sh: unknown PROFILE '$PROFILE' (want lean|intermediate)" >&2; exit 2 ;;
+  full)
+    [ "$TARGET" = native ] || { echo "libav.sh: PROFILE=full is native-only (0022 §4 — no WASM-full)" >&2; exit 2; }
+    ENABLE="$LEAN_ENABLE $INTERMEDIATE_ENABLE $FULL_ENABLE" ;;
+  *) echo "libav.sh: unknown PROFILE '$PROFILE' (want lean|intermediate|full)" >&2; exit 2 ;;
 esac
 
 if [ "$TARGET" = native ]; then

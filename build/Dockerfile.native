@@ -11,9 +11,10 @@ ARG PROFILE=lean
 ENV TARGET=native
 # build-essential + nasm give native asm/threads; curl/xz-utils/meson/ninja-build
 # are the intermediate-profile dep toolchain (same set as the wasm image), only
-# exercised when PROFILE=intermediate pulls the Opus/WebP/VP8-9/subtitle libs.
+# exercised when PROFILE=intermediate pulls the Opus/WebP/VP8-9/subtitle libs; cmake
+# is the full-profile toolchain (x265/SVT-AV1 are cmake builds).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git make pkg-config ca-certificates build-essential nasm zlib1g-dev \
+        git make cmake pkg-config ca-certificates build-essential nasm zlib1g-dev \
         curl xz-utils meson ninja-build \
         && rm -rf /var/lib/apt/lists/*
 WORKDIR /work

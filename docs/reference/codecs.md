@@ -73,9 +73,24 @@ timed-text codec.)
 - **DTS is decode-only** (`dca`) — the encoder is experimental in FFmpeg and left out
   (D-0016-B). TrueHD/AMR are not in this batch.
 - **`eq`** is not a codec — see [filters](filters.md).
-- **HEVC/AV1 encode and AV1 decode (dav1d)** are *not* here — they belong to spec 0023.
+- **HEVC/AV1 encode** live in the **full** profile below (native only); **AV1 decode (dav1d)** is
+  not yet built — the native `av1` decoder covers playback.
 - **Patent posture** — AC-3, DTS, MPEG-2/4, VC-1 carry codec patents, the same class as the
   H.264/HEVC the engine already decodes; see the [licensing explanation](../explanation/licensing.md).
 - The **decode-only** codecs (prores, dnxhd, mpeg2video, vc1, …) are enabled in the build but
   need a licence-clean media corpus to exercise end-to-end (spec 0016 §8) — the codecs with an
   encoder are verified by an encode→decode round-trip.
+
+## Full (native only, + over intermediate)
+
+The **heavy next-generation encoders** (spec 0023). They are thread- and SIMD-hungry — impractical
+in WASM — so they ship **only in the native driver's `full` profile**
+(`ffmpeg-wasi-driver-linux-amd64-full-<variant>`, spec 0028), never in any `.wasm`.
+
+| | Encode (name) | Produces | Variant | Notes |
+|---|---|---|---|---|
+| **AV1** | `libsvtav1` | av1 | both | SVT-AV1 (BSD); **royalty-free**; `preset` 0–13 (higher = faster) |
+| **HEVC/H.265** | `libx265` | hevc | **gpl only** | libx265 (GPL); **active HEVC patent pool** — see [licensing](../explanation/licensing.md) |
+
+HEVC **decode** needs no full profile — the native `hevc` decoder is in every build (lean and up).
+HW-accel encoders (NVENC/VAAPI/…) are the remaining full members, deferred until a GPU is available.

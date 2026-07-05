@@ -29,17 +29,28 @@ class from [afmpeg spec 0022](https://afmpeg.phpboyscout.uk/development/specs/00
   libs (spec 0019): **freetype** + **harfbuzz** (the `drawtext` filter) and **libass** (the
   `subtitles`/`ass` filters), the meson-built ones via spec 0029. Its artifact is named
   `ffmpeg-wasi-intermediate-<variant>.wasm`.
+- **`full`** — intermediate **+ the heavy native-only encoders** (spec 0023): **AV1** via
+  [SVT-AV1](https://gitlab.com/AOMediaCodec/SVT-AV1) (`libsvtav1`, both variants — BSD, royalty-free)
+  and **HEVC/H.265** via [libx265](https://bitbucket.org/multicoreware/x265_git) (`libx265`, **gpl
+  variant only** — GPL + an active HEVC patent pool, see [licensing](../explanation/licensing.md)).
+  These are thread- and SIMD-hungry, so **full is native-only** — there is no WASM full module; it
+  ships as the native driver `ffmpeg-wasi-driver-linux-amd64-full-<variant>` (spec 0028). Hardware
+  encoders (NVENC/VAAPI/…) are the remaining full members, deferred until a GPU is available.
 
-Build a profile locally with the `PROFILE` build-arg (or `just build <variant> <profile>`):
+Build a profile locally with the `PROFILE` build-arg (or `just build <variant> <profile>`); the WASM
+build accepts `lean`/`intermediate`, the native driver (`build/Dockerfile.native`) accepts all three:
 
 ```sh
 docker build -f build/Dockerfile --build-arg VARIANT=lgpl --build-arg PROFILE=intermediate \
   --target artifact -o dist .
+# the native full driver (HEVC via x265 needs the gpl variant):
+docker build -f build/Dockerfile.native --build-arg VARIANT=gpl --build-arg PROFILE=full \
+  --target artifact -o dist-native .
 ```
 
 The load-bearing guarantee (0022 D-0022-B): **intermediate is identical across the WASM and the
-future native runtimes** — the same codec set, so a consumer moves between them with no
-capability change, only a performance/security-posture shift.
+native runtimes** — the same codec set, so a consumer moves between them with no capability change,
+only a performance/security-posture shift. Full then extends the native runtime past what WASM can do.
 
 ## The two variants
 
@@ -84,6 +95,9 @@ release (`nX.Y.Z-N`) publishes:
 | `ffmpeg-wasi-gpl.wasm` / `.gz` | the GPL **lean** module (and gzipped) |
 | `ffmpeg-wasi-intermediate-lgpl.wasm` / `.gz` | the LGPL **intermediate** module — lean + subtitles, LGPL encoders, native codec batch, burn-in |
 | `ffmpeg-wasi-intermediate-gpl.wasm` / `.gz` | the GPL **intermediate** module |
+| `ffmpeg-wasi-driver-linux-amd64-{lgpl,gpl}` / `.gz` | the **native Backend-B driver** (linux/amd64), lean profile — threads + SIMD, 48–58× faster software encode; driven by afmpeg's native backend (spec 0028) |
+| `ffmpeg-wasi-driver-linux-amd64-intermediate-{lgpl,gpl}` / `.gz` | the native driver, **intermediate** profile — the full software-codec batch at native speed |
+| `ffmpeg-wasi-driver-linux-amd64-full-{lgpl,gpl}` / `.gz` | the native driver, **full** profile — intermediate + AV1 (SVT-AV1) + HEVC (x265, gpl only) |
 | `checksums.txt` | SHA-256 of every artifact (incl. `provenance.json`) — [verify before use](../how-to/choose-a-variant.md) |
 | `checksums.txt.sig` | a **detached OpenPGP signature** over `checksums.txt` from a release-signing key held in AWS KMS, signable only by this project's tag pipeline (GitLab OIDC). [afmpeg](https://gitlab.com/phpboyscout/afmpeg) verifies it (via `gitlab.com/phpboyscout/signing`) against a pinned key |
 | `provenance.json` | the exact FFmpeg version, build tag, and commit, plus a per-variant record (file, licence, H.264 encoder, profile) |

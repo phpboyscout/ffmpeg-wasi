@@ -8,12 +8,18 @@ HERE_DEPS="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "$HERE_DEPS/toolchain.sh"
 
 : "${VARIANT:=lgpl}"
-: "${PROFILE:=lean}"                # lean | intermediate — spec 0022; 0018 libs are intermediate
+: "${PROFILE:=lean}"                # lean | intermediate | full — spec 0022; 0018 libs are intermediate, 0023 heavy encoders are full (native)
 # x264 has no release tags; pin an exact commit for a reproducible build (fetched
 # by SHA — the branch is only a hint). Bump X264_COMMIT to advance it.
 : "${X264_COMMIT:=b35605ace3ddf7c1a5d67a2eb553f034aef41d55}"
 : "${ZLIB_VERSION:=v1.3.1}"
 : "${OPENH264_VERSION:=v2.6.0}"     # H.264 encode for both variants (BSD source)
+# Heavy native-only encoders (spec 0023, the full profile). x265 is GPL → the gpl
+# variant only; SVT-AV1 is BSD-3-Clause-Clear + AOM patent grant → both variants.
+# Both are cmake, thread- + asm-hungry — impractical in wasm (0023 deferred them
+# there), first-class native. git-pinned like the other native encoders.
+: "${X265_VERSION:=3.6}"            # libx265 (GPL) — HEVC encode; full/gpl only
+: "${SVTAV1_VERSION:=v2.3.0}"       # SVT-AV1 (BSD) — AV1 encode; full, both variants
 # External LGPL/BSD encoder libs (spec 0018) — intermediate profile only. Each
 # tarball is pinned by SHA-256 (verified in fetch_tarball); bump version + digest
 # together.
@@ -473,15 +479,45 @@ build_x264_native() {
   echo "libx264 (native) built → $PREFIX"
 }
 
+# build_x265_native — libx265 (GPL) HEVC encode for the native driver (spec 0023,
+# full profile, gpl variant only). cmake, static, 8-bit, no CLI. Real asm + threads
+# — this is x265's home turf (why 0023 kept it out of wasm). PATENT CAVEAT mirrors
+# openh264/x264: self-compiled → outside any binary patent grant; HEVC pools are
+# active (no AVC-style sunset), so ship comply-on-demand (docs/explanation/licensing.md).
+build_x265_native() {
+  git clone https://bitbucket.org/multicoreware/x265_git.git --depth=1 --branch "$X265_VERSION" /x265
+  # cmake root is source/; -DENABLE_PIC for the static-into-shared-driver link.
+  cmake -S /x265/source -B /x265/build -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_PIC=ON \
+    || { echo "x265 (native) cmake failed"; exit 1; }
+  cmake --build /x265/build -j"$(nproc)" --target install
+  echo "libx265 (native) built → $PREFIX"
+}
+
+# build_svtav1_native — SVT-AV1 (BSD-3-Clause-Clear + AOM patent grant) AV1 encode
+# for the native driver (spec 0023, full profile, both variants — royalty-free, no
+# patent caveat). cmake, static, encoder-only. Thread-pool architected → its whole
+# point needs real threads, so native only.
+build_svtav1_native() {
+  git clone https://gitlab.com/AOMediaCodec/SVT-AV1.git --depth=1 --branch "$SVTAV1_VERSION" /svtav1
+  cmake -S /svtav1 -B /svtav1/build -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_APPS=OFF -DBUILD_DEC=OFF \
+    || { echo "SVT-AV1 (native) cmake failed"; exit 1; }
+  cmake --build /svtav1/build -j"$(nproc)" --target install
+  echo "SVT-AV1 (native) built → $PREFIX"
+}
+
 if [ "$TARGET" = native ]; then
   # Native external codec libraries (spec 0028): openh264 for both variants, libx264
   # for gpl. zlib comes from the system (zlib1g-dev). The intermediate profile adds
   # the full software-codec batch native (threads + SIMD): Opus/MP3/Vorbis/WebP/VP8-9
   # + the subtitle/burn-in libs — the same set as the wasm intermediate (0022 parity).
-  # No .pc pthread strip here: native wants real pthreads.
+  # The full profile adds the heavy native-only encoders (spec 0023): SVT-AV1 (both
+  # variants) + x265/HEVC (gpl only). No .pc pthread strip here: native wants real pthreads.
   build_openh264_native
   [ "$VARIANT" = gpl ] && build_x264_native
-  if [ "$PROFILE" = intermediate ]; then
+  # full ⊃ intermediate — build the software batch for both.
+  if [ "$PROFILE" = intermediate ] || [ "$PROFILE" = full ]; then
     build_libopus
     build_libmp3lame
     build_libvorbis
@@ -491,6 +527,10 @@ if [ "$TARGET" = native ]; then
     build_harfbuzz
     build_fribidi
     build_libass
+  fi
+  if [ "$PROFILE" = full ]; then
+    build_svtav1_native
+    [ "$VARIANT" = gpl ] && build_x265_native
   fi
   echo "native deps built ($VARIANT, $PROFILE) → $PREFIX"
   exit 0

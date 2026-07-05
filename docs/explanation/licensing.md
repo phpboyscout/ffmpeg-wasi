@@ -83,6 +83,31 @@ Both variants can encode H.264 — the **LGPL** variant via [openh264](https://g
     [AVC/H.264 patent list](https://www.via-la.com/licensing-2/avc-h-264/) (the "Attachment 1" PDF,
     updated periodically) rather than any copy we could let go stale here.
 
+## HEVC & AV1 encode — the *full* native profile only
+
+The heavy next-generation encoders ship **only in the native driver's `full` profile** (spec 0023);
+they are absent from every `.wasm` and from the lean/intermediate profiles. Their licence posture
+differs sharply from each other.
+
+- **HEVC/H.265 via [libx265](https://bitbucket.org/multicoreware/x265_git)** — **GPL-2.0-or-later**,
+  so it enters the **gpl variant only** (behind `--enable-gpl`, exactly like libx264), never the LGPL
+  default. And its **patent** exposure is *harder than AVC's*, not softer.
+
+    !!! danger "HEVC patents are active and pooled — with no sunset"
+        H.265/HEVC is covered by **multiple, fragmented patent pools** (Via LA, Access Advance, plus
+        unaffiliated holders) with **no expiry on the horizon** — unlike the AVC pool that sunsets
+        2027-11-29. We compile libx265 from source, so — as with x264 — **GPL conveys no patent
+        rights** and our binary sits under no pool's grant. We mirror the AVC posture (self-compiled,
+        low volume, **comply-on-demand — we pull HEVC encode promptly from the gpl full driver if any
+        HEVC rights-holder asks**), but because the pools are active with no sunset, **HEVC encode is
+        the most patent-exposed thing we ship** and is offered only on deliberate, bounded demand.
+        Decode is unaffected (the native `hevc` decoder needs no pool licence to *play* HEVC).
+
+- **AV1 via [SVT-AV1](https://gitlab.com/AOMediaCodec/SVT-AV1)** — **BSD-3-Clause-Clear + the Alliance
+  for Open Media patent grant**. It is LGPL-clean, so it rides **both variants** of the full profile,
+  and AV1 is **royalty-free by design** (AOMedia's patent commitment) — **no patent caveat applies**.
+  This is the decisive advantage that makes AV1 the comfortable heavy codec to ship.
+
 ## Why shipping both variants is clean
 
 Every release publishes **both** `ffmpeg-wasi-lgpl.wasm` and `ffmpeg-wasi-gpl.wasm`, so you
