@@ -30,6 +30,7 @@
 #include <libavfilter/buffersink.h>
 
 #include "frames.h"
+#include "nativeio.h"
 
 // A runaway interval over a long input needs a bound; `count` caps output but is
 // optional, so an uncapped interval falls back to this (spec 0021 §6 open q).
@@ -109,7 +110,7 @@ static int open_video(Frames *f, const cJSON *in) {
             if (cJSON_IsString(kv)) av_dict_set(&opts, kv->string, kv->valuestring, 0);
         }
     }
-    int rc = avformat_open_input(&f->fmt, path, ifmt, &opts);
+    int rc = afio_open_input(&f->fmt, path, ifmt, &opts);
     av_dict_free(&opts);
     if (rc < 0) {
         fprintf(stderr, "ffmpeg-wasi: frames: cannot open input %s\n", path ? path : "(null)");
@@ -214,10 +215,9 @@ static int write_frame(Frames *f, AVFrame *frame, const char *path, double t_sec
         fprintf(stderr, "ffmpeg-wasi: frames: encoder produced no packet for %s\n", path);
         goto done;
     }
-    FILE *fp = fopen(path, "wb");
-    if (!fp) { fprintf(stderr, "ffmpeg-wasi: frames: cannot write %s\n", path); rc = AVERROR(EIO); goto done; }
-    fwrite(pkt->data, 1, pkt->size, fp);
-    fclose(fp);
+    if ((rc = afio_write_file(path, pkt->data, (size_t)pkt->size)) < 0) {
+        fprintf(stderr, "ffmpeg-wasi: frames: cannot write %s\n", path); goto done;
+    }
 
     cJSON *jf = cJSON_CreateObject();
     cJSON_AddStringToObject(jf, "path", path);
@@ -492,7 +492,7 @@ end:
     avcodec_free_context(&f.enc);
     avcodec_free_context(&f.dec);
     avfilter_graph_free(&f.graph);
-    avformat_close_input(&f.fmt);
+    afio_close_input(&f.fmt);
     cJSON_Delete(f.result);
     return rc < 0 ? 1 : 0;
 }

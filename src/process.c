@@ -29,6 +29,7 @@
 
 #include "process.h"
 #include "meta.h"
+#include "nativeio.h"
 
 #define MAX_INPUTS 32
 #define MAX_GIN 32
@@ -1010,7 +1011,7 @@ static int open_one_input(AVFormatContext **out, const cJSON *in, int idx) {
         }
     }
 
-    int rc = avformat_open_input(out, p, ifmt, &opts);
+    int rc = afio_open_input(out, p, ifmt, &opts);
     if (rc < 0) {
         fprintf(stderr, "ffmpeg-wasi: process: cannot open input %s\n", p ? p : "(null)");
         av_dict_free(&opts);
@@ -1269,7 +1270,7 @@ int op_process(const cJSON *spec) {
         // Thread metadata/chapters/per-stream tags into the muxer first (0020).
         if ((rc = apply_output_metadata(&c, i)) < 0) goto end;
         if (!(c.out[i].ofmt->oformat->flags & AVFMT_NOFILE)) {
-            if ((rc = avio_open(&c.out[i].ofmt->pb, c.out[i].path, AVIO_FLAG_WRITE)) < 0) {
+            if ((rc = afio_open_output(c.out[i].ofmt, c.out[i].path)) < 0) {
                 fprintf(stderr, "ffmpeg-wasi: process: cannot open output %s\n", c.out[i].path); goto end;
             }
         }
@@ -1384,7 +1385,7 @@ end:
     }
     for (int i = 0; i < c.n_out; i++) {
         if (c.out[i].ofmt && c.out[i].ofmt->pb && !(c.out[i].ofmt->oformat->flags & AVFMT_NOFILE))
-            avio_closep(&c.out[i].ofmt->pb);
+            afio_close_output(c.out[i].ofmt);
         if (c.out[i].ofmt) avformat_free_context(c.out[i].ofmt);
         av_dict_free(&c.out[i].enc_opts);
         av_dict_free(&c.out[i].fmt_opts);
@@ -1397,6 +1398,6 @@ end:
         avcodec_free_context(&c.sub[i].enc);
     }
     if (c.graph) avfilter_graph_free(&c.graph);
-    for (int i = 0; i < c.n_in; i++) avformat_close_input(&c.in[i]);
+    for (int i = 0; i < c.n_in; i++) afio_close_input(&c.in[i]);
     return rc < 0 ? 1 : 0;
 }

@@ -32,6 +32,7 @@
 #include "process.h"
 #include "frames.h"
 #include "meta.h"
+#include "nativeio.h"
 
 // AFMPEG_VOCAB_VERSION is the highest job-spec vocabulary version this engine
 // understands (spec 0007 §4 contract; afmpeg roadmap Phase 1 version-gating).
@@ -141,7 +142,7 @@ static void probe_input(cJSON *out_inputs, const cJSON *in) {
     }
 
     AVFormatContext *fmt = NULL;
-    int rc = avformat_open_input(&fmt, path, ifmt, &opts);
+    int rc = afio_open_input(&fmt, path, ifmt, &opts);
     av_dict_free(&opts);
     if (rc < 0) {
         cJSON_AddStringToObject(ji, "error", "could not open input");
@@ -180,7 +181,7 @@ static void probe_input(cJSON *out_inputs, const cJSON *in) {
         describe_stream(streams, i, fmt->streams[i]);
     }
 
-    avformat_close_input(&fmt);
+    afio_close_input(&fmt);
     cJSON_AddItemToArray(out_inputs, ji);
 }
 

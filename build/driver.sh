@@ -12,9 +12,9 @@ HERE="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 : "${OUT:=/dist/ffmpeg-wasi.wasm}"
 mkdir -p "$(dirname -- "$OUT")"
 
-# Engine sources: the driver + operations and the vendored JSON parser. The wasi
-# compat shim is wasm-only (native has a real libc).
-ENGINE_SRC="$DRIVER_SRC $SRC_DIR/process.c $SRC_DIR/frames.c $SRC_DIR/meta.c $SRC_DIR/third_party/cJSON/cJSON.c"
+# Engine sources: the driver + operations, the I/O abstraction, and the vendored
+# JSON parser. The wasi compat shim is wasm-only (native has a real libc).
+ENGINE_SRC="$DRIVER_SRC $SRC_DIR/process.c $SRC_DIR/frames.c $SRC_DIR/meta.c $SRC_DIR/nativeio.c $SRC_DIR/third_party/cJSON/cJSON.c"
 [ "$TARGET" = native ] || ENGINE_SRC="$ENGINE_SRC $HERE/wasi-compat.c"
 
 # External codec libraries the libav* archives depend on (e.g. libx264 in the GPL
@@ -61,8 +61,10 @@ if [ "$TARGET" = native ]; then
   # the linker resolve the libav* interdependencies without hand-ordering (native
   # ld has it; wasm-ld does not). -lstdc++ covers openh264's C++ runtime when the
   # external encoders land; -lm/-lpthread/-lz are libav*'s system deps.
+  # -DAFMPEG_NATIVE turns on the seekable AVIO-over-IPC media I/O (src/nativeio.c),
+  # so the driver serves inputs/outputs through the afmpeg native host's socket.
   # shellcheck disable=SC2086  # $ENGINE_SRC/$LIBAV_* are deliberately split
-  $CC $CFLAGS -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
+  $CC $CFLAGS -DAFMPEG_NATIVE -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
     $LIBAV_L -Wl,--start-group $LIBAV_l -Wl,--end-group \
     -lz -lm -lpthread -lstdc++
 else
