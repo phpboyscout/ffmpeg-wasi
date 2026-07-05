@@ -36,7 +36,9 @@ cat > provenance.json <<PROV
     "lgpl": { "file": "ffmpeg-wasi-lgpl.wasm", "license": "LGPL-2.1-or-later", "h264_encode": "openh264", "profile": "lean" },
     "gpl":  { "file": "ffmpeg-wasi-gpl.wasm",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "lean" },
     "intermediate-lgpl": { "file": "ffmpeg-wasi-intermediate-lgpl.wasm", "license": "LGPL-2.1-or-later", "h264_encode": "openh264", "profile": "intermediate" },
-    "intermediate-gpl":  { "file": "ffmpeg-wasi-intermediate-gpl.wasm",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "intermediate" }
+    "intermediate-gpl":  { "file": "ffmpeg-wasi-intermediate-gpl.wasm",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "intermediate" },
+    "driver-linux-amd64-lgpl": { "file": "ffmpeg-wasi-driver-linux-amd64-lgpl", "license": "LGPL-2.1-or-later", "h264_encode": "openh264", "profile": "lean" },
+    "driver-linux-amd64-gpl":  { "file": "ffmpeg-wasi-driver-linux-amd64-gpl",  "license": "GPL-2.0-or-later",  "h264_encode": "libx264",  "profile": "lean" }
   },
   "h264_patent_note": "Both variants encode H.264 from self-compiled sources (openh264/libx264), outside Cisco's binary patent grant; shipped under the AVC pool's royalty-free volume tier. See docs/explanation/licensing.md.",
   "tooling_license": "MIT"
@@ -44,11 +46,14 @@ cat > provenance.json <<PROV
 PROV
 
 # 2. Checksums over every published asset — provenance.json included, so the one
-#    signature over checksums.txt transitively certifies the whole release set.
+#    signature over checksums.txt transitively certifies the whole release set
+#    (the wasm modules AND the native Backend-B drivers, spec 0028 D-0028-D).
 sha256sum ffmpeg-wasi-lgpl.wasm ffmpeg-wasi-lgpl.wasm.gz \
   ffmpeg-wasi-gpl.wasm ffmpeg-wasi-gpl.wasm.gz \
   ffmpeg-wasi-intermediate-lgpl.wasm ffmpeg-wasi-intermediate-lgpl.wasm.gz \
   ffmpeg-wasi-intermediate-gpl.wasm ffmpeg-wasi-intermediate-gpl.wasm.gz \
+  ffmpeg-wasi-driver-linux-amd64-lgpl ffmpeg-wasi-driver-linux-amd64-lgpl.gz \
+  ffmpeg-wasi-driver-linux-amd64-gpl ffmpeg-wasi-driver-linux-amd64-gpl.gz \
   provenance.json > checksums.txt
 
 # 3. Mint the OpenPGP public key from KMS. Fixed name/email/created → deterministic
