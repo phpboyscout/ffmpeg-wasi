@@ -6,6 +6,7 @@ site_url = "https://ffmpeg-wasi.phpboyscout.uk"
 repo_url = "https://gitlab.com/phpboyscout/ffmpeg-wasi"
 repo_name = "ffmpeg-wasi"
 copyright = "Copyright &copy; 2026 Matt Cockayne"
+extra_css = ["stylesheets/extra.css"]
 
 [project.theme]
 logo = "images/branding/logo_transparent.svg"

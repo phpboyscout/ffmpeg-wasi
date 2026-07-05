@@ -1,0 +1,43 @@
+/* ffmpeg-wasi docs — brand palette + homepage hero.
+ * The shared phpboyscout palette (see the Branding page): Petrol Teal + Amber —
+ * the logo's two halves stand for the two backends (WASM + native). Kept minimal;
+ * the Material theme defaults carry the rest. */
+
+:root {
+  --md-primary-fg-color: #14534f;        /* Petrol Teal */
+  --md-primary-fg-color--light: #1c6f69;
+  --md-primary-fg-color--dark: #0f3f3c;
+  --md-accent-fg-color: #e8912a;         /* Amber */
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #14534f;
+  --md-accent-fg-color: #e8912a;
+  /* Links need a lighter teal to stay readable on the dark background. */
+  --md-typeset-a-color: #4db3aa;
+}
+
+/* --- Homepage hero -------------------------------------------------------- */
+.md-typeset .hero {
+  text-align: center;
+  margin: 1.2rem auto 2.6rem;
+}
+
+.md-typeset .hero img {
+  width: 176px;
+  max-width: 42%;
+  height: auto;
+  margin-bottom: 0.5rem;
+}
+
+.md-typeset .hero h1 {
+  margin: 0.2rem 0 0.4rem;
+  font-weight: 700;
+}
+
+.md-typeset .hero .hero-tagline {
+  max-width: 42rem;
+  margin: 0 auto;
+  font-size: 1.05rem;
+  color: var(--md-default-fg-color--light);
+}

@@ -3,9 +3,15 @@ title: ffmpeg-wasi
 description: Current FFmpeg as a sandboxed WASI module — libav-direct, pure-Go-runnable, CGO-free.
 ---
 
+<div class="hero" markdown>
+
+![ffmpeg-wasi logo](images/branding/logo_transparent.svg)
+
 # ffmpeg-wasi
 
-**Current FFmpeg, as a sandboxed WebAssembly module — for the server, not the browser.**
+<p class="hero-tagline">Current FFmpeg as a sandboxed WebAssembly module — for the server, not the browser.</p>
+
+</div>
 
 ffmpeg-wasi builds FFmpeg's `libav*` libraries to `wasm32-wasi` and drives them with a small
 purpose-built engine, producing a single `.wasm` that runs media pipelines anywhere a WASI
