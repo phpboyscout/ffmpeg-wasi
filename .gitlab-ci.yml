@@ -178,6 +178,31 @@ build:native:gpl:full:
     VARIANT: gpl
     PROFILE: full
 
+# Size-budget gate (spec 0022): print each artifact's size vs its budget in
+# build/size-budget.txt and flag a profile that ballooned past its ceiling. Advisory
+# (allow_failure) — it reports without blocking a release, until the seeded budgets
+# are calibrated from a real build; flip allow_failure off to enforce.
+size-budget:
+  stage: sign
+  image: alpine:latest
+  tags: [saas-linux-medium-amd64]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+  needs:
+    - build:lgpl
+    - build:gpl
+    - build:lgpl:intermediate
+    - build:gpl:intermediate
+    - build:native:lgpl
+    - build:native:gpl
+    - build:native:lgpl:intermediate
+    - build:native:gpl:intermediate
+    - build:native:lgpl:full
+    - build:native:gpl:full
+  allow_failure: true
+  script:
+    - sh build/check-size-budget.sh
+
 # Sign the release manifest. Tag-gated; uses GitLab OIDC to assume the
 # ffmpeg-wasi signer role, then `gtb` mints the OpenPGP public key from the KMS
 # key and signs checksums.txt with a detached OpenPGP signature (afmpeg spec

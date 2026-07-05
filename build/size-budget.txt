@@ -1,0 +1,23 @@
+# build/size-budget.txt — per-artifact size ceilings, in bytes (spec 0022 size gate).
+# Checked by build/check-size-budget.sh in the `size-budget` CI job on each tag.
+#
+# The ceilings are deliberately generous (headroom over the current sizes) — the gate
+# is a tripwire for a profile ballooning, not a few-percent drift alarm. When a real
+# increase lands, bump the relevant line here in the same review. Format:
+#   <artifact-name>   <max-bytes>
+# Raw artifacts only (the .gz variants track them). Seeded 2026-07-05; tighten once an
+# n8.1.2-8 build reports the actual sizes (they print in the job log).
+
+# --- WASM modules -----------------------------------------------------------
+ffmpeg-wasi-lgpl.wasm                              6000000
+ffmpeg-wasi-gpl.wasm                               6500000
+ffmpeg-wasi-intermediate-lgpl.wasm                15000000
+ffmpeg-wasi-intermediate-gpl.wasm                 15500000
+
+# --- Native drivers (linux/amd64) -------------------------------------------
+ffmpeg-wasi-driver-linux-amd64-lgpl               20000000
+ffmpeg-wasi-driver-linux-amd64-gpl                22000000
+ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl  24000000
+ffmpeg-wasi-driver-linux-amd64-intermediate-gpl   26000000
+ffmpeg-wasi-driver-linux-amd64-full-lgpl          34000000
+ffmpeg-wasi-driver-linux-amd64-full-gpl           42000000
