@@ -14,7 +14,7 @@ mkdir -p "$(dirname -- "$OUT")"
 
 # Engine sources: the driver + operations, the I/O abstraction, and the vendored
 # JSON parser. The wasi compat shim is wasm-only (native has a real libc).
-ENGINE_SRC="$DRIVER_SRC $SRC_DIR/process.c $SRC_DIR/frames.c $SRC_DIR/meta.c $SRC_DIR/nativeio.c $SRC_DIR/third_party/cJSON/cJSON.c"
+ENGINE_SRC="$DRIVER_SRC $SRC_DIR/process.c $SRC_DIR/frames.c $SRC_DIR/meta.c $SRC_DIR/nativeio.c $SRC_DIR/progress.c $SRC_DIR/third_party/cJSON/cJSON.c"
 [ "$TARGET" = native ] || ENGINE_SRC="$ENGINE_SRC $HERE/wasi-compat.c"
 
 # External codec libraries the libav* archives depend on (e.g. libx264 in the GPL

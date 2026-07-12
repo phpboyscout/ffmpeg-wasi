@@ -30,6 +30,7 @@
 #include "process.h"
 #include "meta.h"
 #include "nativeio.h"
+#include "progress.h"
 
 #define MAX_INPUTS 32
 #define MAX_GIN 32
@@ -155,7 +156,29 @@ typedef struct {
     // per key by `analysis_last`) and surfaced in the result JSON. Lazily built.
     cJSON *analysis;
     AVDictionary *analysis_last;
+
+    // Progress side-channel (spec 0032): NULL/inert unless the job set
+    // "progress":true, in which case output packets are reported to the host via
+    // pmux() as they are muxed. Best-effort — never affects the encode.
+    Progress *prog;
 } Ctx;
+
+// pmux muxes one finished output packet, first reporting it to the progress
+// side-channel (spec 0032): the output pts (rescaled to µs) advances the media
+// clock, the packet size adds to the byte total, and a video packet counts a
+// frame. progress state is inert when the job did not ask for it. pkt is read
+// before the write consumes it.
+static int pmux(Ctx *c, AVFormatContext *ofmt, AVStream *ost, AVPacket *pkt) {
+    if (c->prog) {
+        int is_video = ost->codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
+        int64_t ot = pkt->pts != AV_NOPTS_VALUE
+                         ? av_rescale_q(pkt->pts, ost->time_base, AV_TIME_BASE_Q)
+                         : -1;
+        progress_note(c->prog, is_video, ot, pkt->size);
+    }
+
+    return av_interleaved_write_frame(ofmt, pkt);
+}
 
 // parse_input_pad reads a "N:v" / "N:a" graph input label into an input index +
 // media type, plus an optional "N:v:K" per-type stream index (spec 0024; -1 =
@@ -471,7 +494,7 @@ static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
         }
         av_packet_rescale_ts(pkt, go->enc->time_base, go->ost->time_base);
         pkt->stream_index = go->ost->index;
-        ret = av_interleaved_write_frame(ofmt, pkt);
+        ret = pmux(c, ofmt, go->ost, pkt);
         av_packet_unref(pkt);
     }
     av_packet_free(&pkt);
@@ -801,7 +824,7 @@ static int write_copy_pkt(Ctx *c, Cpy *cp, AVRational src_tb, AVPacket *pkt) {
     av_packet_rescale_ts(pkt, src_tb, ost->time_base);
     pkt->stream_index = ost->index;
     pkt->pos = -1;
-    return av_interleaved_write_frame(out->ofmt, pkt);
+    return pmux(c, out->ofmt, ost, pkt);
 }
 
 // copy_one passes one source packet to a single copy target: through its BSF (a
@@ -954,7 +977,7 @@ static int write_sub_pkt(Ctx *c, Sub *su, AVSubtitle *sub) {
     pkt->dts = pkt->pts;
     pkt->duration = av_rescale_q(dur_us, AV_TIME_BASE_Q, su->ost->time_base);
     pkt->stream_index = su->ost->index;
-    ret = av_interleaved_write_frame(out->ofmt, pkt);
+    ret = pmux(c, out->ofmt, su->ost, pkt);
     av_packet_free(&pkt);
     return ret;
 }
@@ -1311,6 +1334,11 @@ int op_process(const cJSON *spec) {
         }
     }
 
+    // Progress side-channel (spec 0032): the host serves /dev/afmpeg-progress and
+    // sets "progress":true only when it wants live progress (and the engine is
+    // v9+), so opening it is best-effort — an inert emitter otherwise.
+    c.prog = progress_open(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(spec, "progress")));
+
     // Seek-window state for each graph input (rebase captured on first frame).
     for (int i = 0; i < c.n_gin; i++) c.gseek[i].rebase = AV_NOPTS_VALUE;
 
@@ -1411,6 +1439,12 @@ int op_process(const cJSON *spec) {
     }
 
 end:
+    // Final progress record (spec 0032), then release the emitter. Both are
+    // NULL-safe and no-ops when progress was not requested; a final emit on an
+    // error path is harmless (best-effort).
+    progress_finish(c.prog);
+    progress_close(c.prog);
+
     if (rc < 0) {
         char buf[128];
         av_strerror(rc, buf, sizeof(buf));
