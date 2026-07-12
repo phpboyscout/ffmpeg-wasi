@@ -12,18 +12,30 @@ include:
   # Docs site → GitLab Pages (zensical), consistent with the other phpboyscout projects.
   - component: gitlab.com/phpboyscout/cicd/zensical-pages@v0.18.1
 
+  # Nightly Renovate scan (schedule-gated on $RENOVATE_TASK=scan). Keeps the
+  # pinned phpboyscout/cicd/zensical-pages ref (and build-script images) current
+  # via the cicd preset extended in renovate.json. Runs only on the
+  # renovate-daily schedule; validate/build/sign/release are MR/tag-gated and
+  # zensical-pages carries its own schedule-never guard.
+  - component: gitlab.com/phpboyscout/cicd/renovate-self@v0.21.1
+    inputs:
+      stage: renovate
+      repositories: "phpboyscout/ffmpeg-wasi"
+
 stages:
   - validate
   - build
   - sign
   - release
   - pages
+  - renovate
 
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_TAG'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
 
 validate:
   stage: validate
