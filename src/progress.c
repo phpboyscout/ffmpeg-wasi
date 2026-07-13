@@ -20,15 +20,17 @@ struct Progress {
     int64_t out_time_us;  // max output pts seen, in AV_TIME_BASE units (µs)
     int64_t total_size;   // bytes muxed so far
     int64_t frames;       // video packets muxed
+    int64_t duration_us;  // job's target media duration (µs), 0 when unknown
     int64_t last_emit_us; // out_time at the last emit
     int     emitted;      // whether any record has been written yet
 };
 
-Progress *progress_open(int enabled) {
+Progress *progress_open(int enabled, int64_t duration_us) {
     Progress *p = calloc(1, sizeof *p);
     if (!p) return NULL;
 
     p->fd = -1;
+    p->duration_us = duration_us > 0 ? duration_us : 0;
     if (enabled) {
         // Best-effort: an inert emitter (fd < 0) if the device is absent.
         p->fd = open(PROGRESS_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -40,11 +42,11 @@ Progress *progress_open(int enabled) {
 static void progress_emit(Progress *p) {
     if (!p || p->fd < 0) return;
 
-    char buf[96];
+    char buf[160];
     int n = snprintf(buf, sizeof buf,
-                     "{\"frame\":%lld,\"out_time_us\":%lld,\"total_size\":%lld}\n",
+                     "{\"frame\":%lld,\"out_time_us\":%lld,\"total_size\":%lld,\"duration_us\":%lld}\n",
                      (long long)p->frames, (long long)p->out_time_us,
-                     (long long)p->total_size);
+                     (long long)p->total_size, (long long)p->duration_us);
     if (n <= 0) return;
 
     // Ignore short writes / errors — progress is best-effort and must never

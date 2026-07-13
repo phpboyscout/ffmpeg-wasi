@@ -1334,10 +1334,32 @@ int op_process(const cJSON *spec) {
         }
     }
 
+    // Target media duration (µs) for the host's Fraction = out_time/duration,
+    // best-effort. An explicit output window (-t / -to) bounds it authoritatively —
+    // this is what gives a generative/lavfi input (no readable source file) a real
+    // fraction; otherwise fall back to the longest input container duration, less
+    // any seek start. 0 when nothing is known (the host then keeps its byte ratio).
+    int64_t prog_dur_us = 0;
+    for (int j = 0; j < c.n_out; j++) {
+        const Out *o = &c.out[j];
+        int64_t d = 0;
+        if (o->duration > 0) d = (int64_t)(o->duration * AV_TIME_BASE);
+        else if (o->end > 0) d = (int64_t)(o->end * AV_TIME_BASE);
+        if (d > prog_dur_us) prog_dur_us = d;
+    }
+    if (prog_dur_us <= 0) {
+        for (int i = 0; i < c.n_in; i++) {
+            if (!c.in[i] || c.in[i]->duration == AV_NOPTS_VALUE || c.in[i]->duration <= 0) continue;
+            int64_t seek = (c.seek_us[i] != AV_NOPTS_VALUE) ? c.seek_us[i] : 0;
+            int64_t eff = c.in[i]->duration - seek;
+            if (eff > prog_dur_us) prog_dur_us = eff;
+        }
+    }
+
     // Progress side-channel (spec 0032): the host serves /dev/afmpeg-progress and
     // sets "progress":true only when it wants live progress (and the engine is
     // v9+), so opening it is best-effort — an inert emitter otherwise.
-    c.prog = progress_open(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(spec, "progress")));
+    c.prog = progress_open(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(spec, "progress")), prog_dur_us);
 
     // Seek-window state for each graph input (rebase captured on first frame).
     for (int i = 0; i < c.n_gin; i++) c.gseek[i].rebase = AV_NOPTS_VALUE;

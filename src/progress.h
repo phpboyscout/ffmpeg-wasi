@@ -12,9 +12,12 @@
 typedef struct Progress Progress;
 
 // progress_open returns an emitter. When enabled is nonzero it opens the device;
-// on failure the emitter is inert. It never returns a value the other calls can't
-// accept (a NULL is tolerated by all of them).
-Progress *progress_open(int enabled);
+// on failure the emitter is inert. duration_us is the job's target media duration
+// in AV_TIME_BASE units (µs), or 0 when unknown — it is stamped on every record so
+// the host can form Fraction = out_time/duration (accurate even for a generative
+// input, which has no readable source file to measure). It never returns a value
+// the other calls can't accept (a NULL is tolerated by all of them).
+Progress *progress_open(int enabled, int64_t duration_us);
 
 // progress_note records one muxed output packet: is_video counts toward `frame`,
 // out_time_us (or -1 when unknown) advances the media clock, pkt_size adds to the
