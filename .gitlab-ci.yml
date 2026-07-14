@@ -17,7 +17,7 @@ include:
   # via the cicd preset extended in renovate.json. Runs only on the
   # renovate-daily schedule; validate/build/sign/release are MR/tag-gated and
   # zensical-pages carries its own schedule-never guard.
-  - component: gitlab.com/phpboyscout/cicd/renovate-self@v0.21.1
+  - component: gitlab.com/phpboyscout/cicd/renovate-self@v0.23.0
     inputs:
       stage: renovate
       repositories: "phpboyscout/ffmpeg-wasi"
