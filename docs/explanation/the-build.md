@@ -131,7 +131,7 @@ docker build -f build/Dockerfile.native --build-arg VARIANT=gpl --build-arg PROF
 ## Reproducibility
 
 Inputs are pinned in `build/versions.lock` (the FFmpeg tag, the wasi-sdk image). A release
-tag is `<FFMPEG_VERSION>-<build-rev>` (e.g. `n8.1.2-1`); the build revision bumps when the
+tag is `<FFMPEG_VERSION>-<build-rev>` (e.g. `n8.1.2-10`); the build revision bumps when the
 toolchain or config changes for the same upstream FFmpeg.
 
 A **size-budget gate** (spec 0022) guards against accidental bloat: `build/size-budget.txt` sets a

@@ -45,6 +45,7 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 | Field | Meaning |
 |---|---|
 | `version` | The job-spec **vocabulary version** the spec is written in (integer; absent == 0, the pre-gate baseline). The engine rejects a spec whose `version` exceeds what it supports — see [Versioning](#versioning). |
+| `progress` | *(v9)* Top-level opt-in. `true` makes the engine emit best-effort NDJSON progress records to `/dev/afmpeg-progress` as it muxes (see [the note below](#progress-side-channel)). Purely additive — absent/`false` behaves exactly as before. |
 | `inputs[]` | Each input's path (resolved against the mounted filesystem) + demuxer options. |
 | `inputs[].concat` | *(v2)* An array of like-codec file paths joined into one continuous input via the **concat demuxer** (a stream-copy join; distinct from the `concat` filter, which re-encodes). When set, replaces `path`. |
 | `inputs[].seek` | *(v3)* `{"start": seconds, "mode": "fast"\|"accurate"}` — start the input at a point instead of decoding from the beginning. **fast** (default) seeks the demuxer to the keyframe at-or-before `start`; **accurate** additionally decodes-and-discards to the exact frame. Accurate cannot feed a copied stream (a copy cuts on keyframes) — that is a hard error. |
@@ -168,6 +169,24 @@ measurements those filters attach to frames — objects of `{ "t": <seconds>, "k
 ran. (`ebur128`/`astats` need their `metadata=1` option to populate it.) afmpeg surfaces it as
 `ProcessResult.Analysis`.
 
+#### Progress side-channel
+
+**Progress (spec 0032).** A top-level `"progress": true` on a `process` job turns on a one-way,
+best-effort **progress emitter**. As the engine muxes, it writes throttled NDJSON records (one per
+~100 ms of *media* time, not per frame) to the device **`/dev/afmpeg-progress`**, plus a final
+record at completion:
+
+```json
+{"frame":420,"out_time_us":16800000,"total_size":2097152,"duration_us":30000000}
+```
+
+`frame` counts muxed video packets, `out_time_us` is the furthest output timestamp reached,
+`total_size` the bytes muxed so far, and `duration_us` the job's target media duration (0 when
+unknown). The device is served by afmpeg's virtual filesystem — afmpeg's own runtime parses each
+line and surfaces it on the `WithProgress` channel (afmpeg spec 0031 phase B). It is purely
+additive and opt-in: if the device is absent or `progress` is unset, every emit is a no-op and the
+encode is never blocked, slowed, or failed by progress I/O.
+
 ### `probe` — report stream information
 
 ```jsonc
@@ -233,7 +252,7 @@ stdout — the machine-readable channel a consumer preflights before running job
 input, so it works before any media is mounted:
 
 ```json
-{"vocab_version":8,"ffmpeg_version":"n8.1.2"}
+{"vocab_version":9,"ffmpeg_version":"n8.1.2"}
 ```
 
 This query carries no `version` of its own, so even an engine older than the consumer answers
@@ -268,6 +287,7 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | 6 | Frame extraction (afmpeg spec 0021): the new `op:"frames"` — pull stills by `select {timestamp \| timestamps \| interval \| scene}` to a templated `path`, with optional `codec`/`scale`/`count`. |
 | 7 | Metadata & chapters (afmpeg spec 0020): `outputs[].metadata` (container tags), `outputs[].chapters` (`"copy"`/index passthrough), `outputs[].stream_metadata` (per-map `language`/`disposition`/`tags`). Probe replies gain container `tags`/`chapters` and per-stream `tags`/`disposition`/`language` (additive). |
 | 8 | Subtitle streams (afmpeg spec 0019): `outputs[].subtitle_codec` (an encoder name or `"copy"`) + `N:s` subtitle map specifiers — extract/convert/copy subtitle tracks (the subtitle transcode lane). |
+| 9 | Progress side-channel (afmpeg spec 0031 phase B / spec 0032): top-level `"progress":true` on a `process` job emits NDJSON `{frame,out_time_us,total_size,duration_us}` records to `/dev/afmpeg-progress` as it muxes. Opt-in and additive — absent/`false` behaves exactly as v8. |
 
 **The gate (two sides):**
 

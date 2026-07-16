@@ -40,23 +40,33 @@ pure-Go-embeddable.
 
 ## What you get
 
-Each release publishes **four** ready-to-use modules — two licence **variants**, each in two
-capability **profiles** — **pick the licence that fits and skip building**:
+Every release ships the engine as **two runtime targets** — a portable **WASI module** and a
+**native driver** — in two licence **variants**, so you **pick the licence and the runtime that fit
+and skip building**:
 
 | Variant | Licence | H.264 encode | For |
 |---|---|---|---|
 | **`ffmpeg-wasi-lgpl.wasm`** | LGPL-2.1+ | openh264 (BSD) | the default — proprietary-compatible |
 | **`ffmpeg-wasi-gpl.wasm`** | GPL-2.0+ | libx264 (best quality) | when you want x264 and accept GPL |
 
-The **lean** profile above is web-delivery essentials at the smallest size; the **intermediate**
-profile (`ffmpeg-wasi-intermediate-<variant>.wasm`) adds every practical software codec/filter —
-the LGPL encoders, the native codec/container batches, and text/subtitle burn-in. See
-[variants & profiles](docs/reference/variants.md).
+**Profiles.** The **lean** profile above is web-delivery essentials at the smallest size; the
+**intermediate** profile (`ffmpeg-wasi-intermediate-<variant>.wasm`) adds every practical software
+codec/filter — the LGPL encoders, the native codec/container batches, and text/subtitle burn-in.
+See [variants & profiles](docs/reference/variants.md).
+
+**Native drivers (spec 0028).** Alongside the `.wasm` modules, each release publishes native ELF
+drivers (`ffmpeg-wasi-driver-<os>-<arch>-[<profile>-]<variant>`) built with real threads + SIMD.
+Driven out-of-process by [afmpeg](https://gitlab.com/phpboyscout/afmpeg)'s native backend over a
+seekable AVIO-over-IPC bridge — still no host disk, the caller's filesystem is served over the
+socket — they run software encode **48–58× faster** than the sandboxed module, and unlock a third
+**full** profile with **HEVC (x265)** and **AV1 (SVT-AV1)** encode. Same job-spec vocabulary, same
+signing chain — a drop-in speed tier, not a different API.
 
 Plus a checksum manifest (`checksums.txt`), a **detached OpenPGP signature** over it
 (`checksums.txt.sig` — KMS-held key, signable only by this project's tag pipeline via GitLab OIDC, verified
 offline by afmpeg), and a provenance manifest (the exact FFmpeg version, build tag, and commit,
-plus a per-variant record). Pin by URL + SHA-256. Both variants encode H.264; the self-compiled openh264 in the
+plus a per-variant record) — covering **every asset, the native drivers included**. Pin by URL +
+SHA-256. Both variants encode H.264; the self-compiled openh264 in the
 LGPL variant carries an AVC **patent** caveat — see [licensing](docs/explanation/licensing.md#h264-encode-and-the-avc-patent-pool).
 
 ## Quick start (consuming it from Go)
@@ -66,13 +76,13 @@ module over an in-memory filesystem:
 
 ```go
 rt, _ := afmpeg.New(ctx, afmpeg.WithModuleURL(
-    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n8.1.2-1/ffmpeg-wasi-lgpl.wasm",
-    afmpeg.WithSHA256("0f338dac4ed1be3819aaf26f1cdeef119e817b43103f1460ca19354ea56bacc9"),
+    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n8.1.2-10/ffmpeg-wasi-lgpl.wasm",
+    afmpeg.WithSHA256("160a91663696136940ebc48586ccc199f8b7c369c7a4502999174e790af8d19f"),
 ))
 // ... run a media job entirely in memory ...
 ```
 
-(That's the LGPL module from [`n8.1.2-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n8.1.2-1).
+(That's the LGPL module from [`n8.1.2-10`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n8.1.2-10).
 The LGPL module encodes H.264 via openh264; swap `lgpl` → `gpl` for libx264 instead. Every release
 lists each asset's URL + SHA-256.)
 

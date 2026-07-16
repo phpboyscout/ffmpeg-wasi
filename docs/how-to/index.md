@@ -10,7 +10,8 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 Goal-oriented recipes for specific problems.
 
-- **[Build from source](build-from-source.md)** — the clean-room Docker build (LGPL or GPL).
+- **[Build from source](build-from-source.md)** — the clean-room Docker build (LGPL or GPL, the
+  `wasm` module or the `native` driver).
 - **[Choose & verify a variant](choose-a-variant.md)** — pick the right artifact and check its
   checksum.
 

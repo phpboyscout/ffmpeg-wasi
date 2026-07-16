@@ -1,6 +1,6 @@
 ---
 title: ffmpeg-wasi
-description: Current FFmpeg as a sandboxed WASI module — libav-direct, pure-Go-runnable, CGO-free.
+description: Current FFmpeg, libav-direct — a sandboxed WASI module and a native driver. Pure-Go-runnable, CGO-free.
 ---
 
 <div class="hero" markdown>
@@ -9,18 +9,22 @@ description: Current FFmpeg as a sandboxed WASI module — libav-direct, pure-Go
 
 # ffmpeg-wasi
 
-<p class="hero-tagline">Current FFmpeg as a sandboxed WebAssembly module — for the server, not the browser.</p>
+<p class="hero-tagline">Current FFmpeg as a sandboxed WebAssembly module — and a native driver for speed. For the server, not the browser.</p>
 
 </div>
 
-ffmpeg-wasi builds FFmpeg's `libav*` libraries to `wasm32-wasi` and drives them with a small
-purpose-built engine, producing a single `.wasm` that runs media pipelines anywhere a WASI
-runtime does — designed for [wazero](https://wazero.io/), the pure-Go runtime, so Go programs
-can transcode/filter/mux **embedded, CGO-free, and sandboxed**.
+ffmpeg-wasi builds FFmpeg's `libav*` libraries and drives them with a small purpose-built engine,
+shipping the result as **two runtime targets**: a sandboxed `wasm32-wasi` module that runs media
+pipelines anywhere a WASI runtime does — designed for [wazero](https://wazero.io/), the pure-Go
+runtime, so Go programs can transcode/filter/mux **embedded, CGO-free, and sandboxed** — and a
+**native driver** (real threads + SIMD) that runs the same jobs at **48–58× the software-encode
+speed**.
 
 It is the **reference server-side FFmpeg for WebAssembly**: *current* (not the EOL build),
 *WASI-native* (not the browser one), and *pure-Go-runnable* (no CGO) — by linking the
-libraries directly and going under the FFmpeg-7.0 CLI threading wall that stops everyone else.
+libraries directly and going under the FFmpeg-7.0 CLI threading wall that stops everyone else. The
+native driver (spec 0028) is the same engine and the same job-spec, built for the host instead of
+the sandbox — a drop-in speed tier, driven out-of-process by afmpeg's native backend.
 
 <div class="grid cards" markdown>
 

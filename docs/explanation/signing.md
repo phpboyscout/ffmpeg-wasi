@@ -14,8 +14,9 @@ auditable.
 
 ## What is signed
 
-The release publishes `checksums.txt` — the SHA-256 of every asset, **including
-`provenance.json`** — and a detached signature over it, `checksums.txt.sig`. Because the
+The release publishes `checksums.txt` — the SHA-256 of every asset (the `.wasm` modules and the
+native drivers alike, **including `provenance.json`**) — and a detached signature over it,
+`checksums.txt.sig`. Because the
 signature covers `checksums.txt`, and `checksums.txt` covers everything else, **one signature
 certifies the whole release**: verify the signature, then check any asset against its line in
 `checksums.txt`.
