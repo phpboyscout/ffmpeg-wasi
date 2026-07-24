@@ -74,4 +74,31 @@ gtb keys mint --backend aws-kms --key-id "$SIGNING_KEY_ALIAS" --kms-region "$AWS
 gtb sign checksums.txt --backend aws-kms --key-id "$SIGNING_KEY_ALIAS" --kms-region "$AWS_REGION" \
   --public-key release.asc --output checksums.txt.sig
 
-echo "signed checksums.txt -> checksums.txt.sig (${SIGNING_KEY_EMAIL})"
+# 5. Dual-sign overlap window (2026-07-24 key rotation — infra spec
+#    2026-07-24-prod-rebuild-and-rekey D2a). When the secondary key env is
+#    present, mint its cert and merge a SECOND signature into the SAME armored
+#    checksums.txt.sig via `gtb sign --append` (gtb >= v0.33.0). Shipped afmpeg
+#    builds embed only the v1 key and skip signature packets from issuers they
+#    don't know, so the one .sig verifies for both afmpeg generations. The
+#    secondary signer role lives in the new prod account; AWS_ROLE_ARN is
+#    overridden per-invocation (the same web-identity token works for any role
+#    trusting this project's OIDC sub). Remove the _2 variables from
+#    .gitlab-ci.yml to close the window.
+if [ -n "${SIGNING_KEY_ALIAS_2:-}" ]; then
+  : "${SIGNING_KEY_EMAIL_2:?set SIGNING_KEY_EMAIL_2 when SIGNING_KEY_ALIAS_2 is set}"
+  : "${SIGNING_KEY_CREATED_2:?set SIGNING_KEY_CREATED_2 (RFC3339) when SIGNING_KEY_ALIAS_2 is set}"
+  : "${AWS_ROLE_ARN_2:?set AWS_ROLE_ARN_2 when SIGNING_KEY_ALIAS_2 is set}"
+
+  AWS_ROLE_ARN="$AWS_ROLE_ARN_2" gtb keys mint --backend aws-kms \
+    --key-id "$SIGNING_KEY_ALIAS_2" --kms-region "$AWS_REGION" \
+    --name "$SIGNING_KEY_NAME" --email "$SIGNING_KEY_EMAIL_2" \
+    --created "$SIGNING_KEY_CREATED_2" --output release-v2.asc
+
+  AWS_ROLE_ARN="$AWS_ROLE_ARN_2" gtb sign checksums.txt --backend aws-kms \
+    --key-id "$SIGNING_KEY_ALIAS_2" --kms-region "$AWS_REGION" \
+    --public-key release-v2.asc --output checksums.txt.sig --append
+
+  echo "dual-signed checksums.txt.sig (${SIGNING_KEY_EMAIL} + ${SIGNING_KEY_EMAIL_2})"
+else
+  echo "signed checksums.txt -> checksums.txt.sig (${SIGNING_KEY_EMAIL})"
+fi

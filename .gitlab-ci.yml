@@ -250,7 +250,20 @@ sign:
     SIGNING_KEY_NAME: ffmpeg-wasi Release Signing
     SIGNING_KEY_EMAIL: ffmpeg-wasi-release@phpboyscout.uk
     SIGNING_KEY_CREATED: "2026-06-30T00:00:00Z"
-    GTB_VERSION: v0.27.2
+    # --- Dual-sign overlap window (2026-07-24 key rotation) -----------
+    # Secondary v2 key in the new prod account; build/sign-release.sh
+    # merges its signature into the same checksums.txt.sig via `gtb sign
+    # --append`, so shipped afmpeg builds (trusting only v1) and new
+    # builds (trusting v1+v2) both verify. The v2 email/created pin
+    # reproduces fingerprint 4C96ECB35C7446619FF78EB1ED1344E576B7BBBF —
+    # the one afmpeg >= v0.12.0 pins. DELETE these four variables to
+    # close the window (see infra spec 2026-07-24-prod-rebuild-and-rekey
+    # D2a/D5 — the old account may only be closed after the window).
+    SIGNING_KEY_ALIAS_2: alias/ffmpeg-wasi-release-signing-v2
+    SIGNING_KEY_EMAIL_2: ffmpeg-wasi-release-v2@phpboyscout.uk
+    SIGNING_KEY_CREATED_2: "2026-07-24T11:43:51Z"
+    AWS_ROLE_ARN_2: arn:aws:iam::060730976733:role/ffmpeg-wasi-release-signing-v2-signer
+    GTB_VERSION: v0.33.0 # >= v0.33.0 for `gtb sign --append` (dual-sign window)
     GOPRIVATE: gitlab.com/phpboyscout/*
   before_script:
     # Install gtb from the private module registry (CI-token git auth), then
@@ -267,6 +280,7 @@ sign:
       - provenance.json
       - checksums.txt.sig
       - release.asc # the OpenPGP public key, for the operator to publish via WKD (0011)
+      - release-v2.asc # v2 public key (dual-sign window; published via WKD 2026-07-24)
     expire_in: 1 week
 
 release:
