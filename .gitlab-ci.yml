@@ -10,7 +10,7 @@
 
 include:
   # Docs site → GitLab Pages (zensical), consistent with the other phpboyscout projects.
-  - component: gitlab.com/phpboyscout/cicd/zensical-pages@v0.33.0
+  - component: gitlab.com/phpboyscout/cicd/zensical-pages@v0.34.0
 
   # Nightly Renovate scan (schedule-gated on $RENOVATE_TASK=scan). Keeps the
   # pinned phpboyscout/cicd/zensical-pages ref (and build-script images) current
