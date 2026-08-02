@@ -31,9 +31,14 @@ the sandbox — a drop-in speed tier, driven out-of-process by afmpeg's native b
 - :material-school: **[Tutorials](tutorials/index.md)** — learn by doing.
 - :material-wrench: **[How-to](how-to/index.md)** — solve a specific task.
 - :material-lightbulb: **[Explanation](explanation/index.md)** — how & why it works.
-- :material-book-open-variant: **[Reference](reference/index.md)** — the job-spec vocabulary, artifacts, codec matrix.
+- :material-book-open-variant: **[Reference](reference/index.md)** — the job-spec vocabulary, build options, codec matrix, errors.
 
 </div>
+
+**Before you start, check it does what you need.**
+[Limits & what is not supported](reference/limits.md) is the short list of things ffmpeg-wasi
+deliberately will not do — no `ffmpeg` command lines, no network inputs, no hardware acceleration,
+no HEVC or AV1 encode from the `.wasm` module, and a native driver for linux/amd64 only.
 
 > **Status: released.** Releases ship current FFmpeg (n8.1.2) as **lgpl** and **gpl** builds, in a
 > **lean** and an **intermediate** profile — both as portable **WASI modules** and as **native
