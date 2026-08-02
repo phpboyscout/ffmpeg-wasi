@@ -51,15 +51,18 @@ You'll see the engine report itself:
 
 ```
 ffmpeg-wasi engine
-vocab_version: 8
+vocab_version: 9
 ffmpeg: n8.1.2
 libavcodec 4070502  libavformat 4066406  libavfilter 724582
 encoders:
-  libx264    yes        # gpl variant only (no on lgpl)
-  aac        yes
+  libopenh264 yes
+  libx264     no          # gpl variant only
+  mjpeg       yes
+  aac         yes
   ...
 decoders:
   h264       yes
+  hevc       yes
   aac        yes
   ...
 ```

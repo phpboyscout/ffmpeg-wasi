@@ -48,7 +48,7 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 | `progress` | *(v9)* Top-level opt-in. `true` makes the engine emit best-effort NDJSON progress records to `/dev/afmpeg-progress` as it muxes (see [the note below](#progress-side-channel)). Purely additive — absent/`false` behaves exactly as before. |
 | `inputs[]` | Each input's path (resolved against the mounted filesystem) + demuxer options. |
 | `inputs[].concat` | *(v2)* An array of like-codec file paths joined into one continuous input via the **concat demuxer** (a stream-copy join; distinct from the `concat` filter, which re-encodes). When set, replaces `path`. |
-| `inputs[].seek` | *(v3)* `{"start": seconds, "mode": "fast"\|"accurate"}` — start the input at a point instead of decoding from the beginning. **fast** (default) seeks the demuxer to the keyframe at-or-before `start`; **accurate** additionally decodes-and-discards to the exact frame. Accurate cannot feed a copied stream (a copy cuts on keyframes) — that is a hard error. |
+| `inputs[].seek` | *(v3)* `{"start": seconds, "mode": "fast"}` — or `"mode": "accurate"`. Starts the input at a point instead of decoding from the beginning. **fast** (default) seeks the demuxer to the keyframe at-or-before `start`; **accurate** additionally decodes-and-discards to the exact frame. Accurate cannot feed a copied stream (a copy cuts on keyframes) — that is a hard error. |
 | `inputs[].format` | *(v4)* Force the demuxer by name (e.g. `"rawvideo"`, `"s16le"`, `"mp4"`) instead of auto-probing. Required for headerless/raw inputs. |
 | `inputs[].options` | *(v4)* Demuxer options passed as an AVDictionary — raw geometry rides here (`{"video_size":"1280x720","pixel_format":"yuv420p","framerate":"25"}` for rawvideo; `{"sample_rate":"48000","ch_layout":"mono"}` for PCM). An unconsumed key is a typed error. |
 | `filter` | The full ffmpeg `filter_complex` string — `[0:v]scale=…[vout];[1:a]…[aout]`. Optional (passthrough graph for input 0 if omitted). |
@@ -61,6 +61,10 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 | `outputs[].bitstream_filters` | *(v2)* Per copied stream, keyed by its `map` entry: a bitstream-filter name/chain (e.g. `{"0:v":"h264_mp4toannexb"}`), or `"none"` to force-disable. Absent → the muxer auto-inserts any container-required filter. |
 | `outputs[].duration` / `outputs[].end` | *(v3)* Stop the output after `duration` seconds (`-t`) or at position `end` (`-to`). **Mutually exclusive.** On the default zero-based timeline the two coincide; under `copy_ts`, `end` is an absolute source position. |
 | `outputs[].copy_ts` | *(v3)* `true` preserves source timestamps. Default `false` zero-bases the output — a fast-seeked clip starts at the keyframe actually landed on, an accurate one at the requested start. |
+
+A job is bounded: **32 inputs, 8 outputs, 32 graph input pads, 16 graph output pads, 32 stream
+copies and 16 subtitle streams**, all per job rather than per output. Crossing one fails the job —
+see [limits](limits.md#how-many-inputs-outputs-and-streams-can-one-job-have).
 
 Working examples (verified end-to-end):
 
@@ -238,8 +242,16 @@ frame is optionally scaled, encoded, and written; the engine owns the naming and
 {"frames":[{"path":"out/frame_000.png","index":0,"timestamp":12.5}],"count":1}
 ```
 
-`select` is a one-of (zero or multiple is rejected). `count` caps output — an uncapped `interval`
-falls back to a built-in bound. The image codecs are native (png/mjpeg); `webp` rides spec 0018.
+`select` is a one-of (zero or multiple is rejected). `codec` defaults to `png`; `png` and `mjpeg`
+are in every profile, `webp` needs the **intermediate** profile. `path` must contain **zero or one**
+integer conversion — `%s`, `%n` and any other conversion are refused outright, and a token-less path
+is only valid for a single frame.
+
+**The frame count is bounded twice.** `count` caps how many frames are emitted; with `count` absent
+it defaults to **1000**, so an uncapped `interval` over a long input cannot run away. Independently,
+the selector's target list is capped at **4096** timestamps, which `count` cannot raise — a
+finer-grained `interval` simply stops there. The `scene` selector streams rather than seeking, so
+`count` is its only bound. See [limits](limits.md#how-many-frames-can-one-frames-job-emit).
 
 ### `version` — report the vocabulary version
 
@@ -267,9 +279,14 @@ existing filtergraph knowledge transfers directly. Structured fields surround th
 
 ## Transport
 
-The spec is passed to the engine as a single argument (or read from the mounted filesystem).
-Results — the probe JSON, or process status — come back on stdout; errors on stderr with a
-non-zero exit code. afmpeg's runtime carries all of this over its filesystem bridge.
+The spec is passed to the engine as **`argv[1]` — one argument, the whole JSON document**. There is
+no other channel: the engine does not read a spec from a file, from stdin, or from an environment
+variable. Results — the probe JSON, or the process status — come back on stdout; errors on stderr
+with a non-zero exit code. Only the media named *inside* the spec crosses afmpeg's filesystem
+bridge.
+
+The full host contract is [Driver invocation & ABI](driver-invocation-abi.md), and the failure
+messages are in [errors & exit codes](errors.md).
 
 ## Versioning
 
@@ -284,7 +301,7 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | 3 | Seeking & time ranges (afmpeg spec 0014): `inputs[].seek {start, mode}`, `outputs[].duration` \| `end` (mutually exclusive), `outputs[].copy_ts`. Probe replies gain `start_sec`. |
 | 4 | Input options & formats (afmpeg spec 0024): `inputs[].format` (forced demuxer), `inputs[].options` (demuxer dict, incl. raw geometry), and `N:v:K` indexed graph-input stream selection. |
 | 5 | Container coverage (afmpeg spec 0015): `outputs[].format` (forced muxer), `outputs[].format_options` (muxer dict — segmenting/fragmentation); a `segmented` result marker. The container (de)muxer batch itself is a build-profile matter (intermediate), not a vocabulary one. |
-| 6 | Frame extraction (afmpeg spec 0021): the new `op:"frames"` — pull stills by `select {timestamp \| timestamps \| interval \| scene}` to a templated `path`, with optional `codec`/`scale`/`count`. |
+| 6 | Frame extraction (afmpeg spec 0021): the new `op:"frames"` — pull stills by `select` with one of `timestamp` \| `timestamps` \| `interval` \| `scene`, to a templated `path`, with optional `codec`/`scale`/`count`. |
 | 7 | Metadata & chapters (afmpeg spec 0020): `outputs[].metadata` (container tags), `outputs[].chapters` (`"copy"`/index passthrough), `outputs[].stream_metadata` (per-map `language`/`disposition`/`tags`). Probe replies gain container `tags`/`chapters` and per-stream `tags`/`disposition`/`language` (additive). |
 | 8 | Subtitle streams (afmpeg spec 0019): `outputs[].subtitle_codec` (an encoder name or `"copy"`) + `N:s` subtitle map specifiers — extract/convert/copy subtitle tracks (the subtitle transcode lane). |
 | 9 | Progress side-channel (afmpeg spec 0031 phase B / spec 0032): top-level `"progress":true` on a `process` job emits NDJSON `{frame,out_time_us,total_size,duration_us}` records to `/dev/afmpeg-progress` as it muxes. Opt-in and additive — absent/`false` behaves exactly as v8. |

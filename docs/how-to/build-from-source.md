@@ -92,17 +92,23 @@ codecs/muxers/filters — confirming it links and runs:
 
 ```
 ffmpeg-wasi engine
-vocab_version: 8
+vocab_version: 9
 ffmpeg: n8.1.2
 libavcodec 4070502  libavformat 4066406  libavfilter 724582
 encoders:
-  libx264    yes        # gpl variant only (no on lgpl)
-  aac        yes
+  libopenh264 yes
+  libx264     no          # gpl variant only
+  mjpeg       yes
+  aac         yes
   ...
 decoders:
   h264       yes
   ...
 ```
+
+The report probes a fixed handful of codecs — `libopenh264`, `libx264`, `mjpeg`, `aac`, `flac` and
+`pcm_s16le` for encode; `h264`, `hevc`, `vp9`, `aac`, `mp3`, `opus` and `flac` for decode. It is a
+build smoke test, not an inventory: for the full set see [codecs](../reference/codecs.md).
 
 ## What the build does
 
