@@ -34,11 +34,22 @@ We also `--disable-asm` (no wasm assembly path) and `--disable-network`.
 
 ## setjmp / longjmp
 
-FFmpeg's C uses `setjmp`/`longjmp` (notably in some codecs' error handling). clang lowers
-these for wasm with **`-mllvm -wasm-enable-sjlj`**, which emits two host imports —
-`env.__wasm_setjmp` and `env.__wasm_longjmp`. The runtime provides them; afmpeg implements
-them with wazero's snapshotter, and the bundled `tools/run` harness does the same. This is
-why a stock WASI runtime can't load the module but our setup can.
+FFmpeg's C uses `setjmp`/`longjmp` (notably in some codecs' error handling, and in libvpx's
+encoder). clang lowers these for wasm with **`-mllvm=-wasm-enable-sjlj
+-mllvm=-wasm-use-legacy-eh=false`**, which emits two host imports — `env.__wasm_setjmp` and
+`env.__wasm_longjmp` — resolved at link time against the sysroot's `libsetjmp.a`. The runtime
+provides the imports; afmpeg implements them with wazero's snapshotter, and the bundled `tools/run`
+harness does the same. This is why a stock WASI runtime can't load the module but our setup can.
+
+## Why the module asks for an 8 MB stack
+
+`build/driver.sh` links the wasm module with `-Wl,-z,stack-size=8388608`, lifting the data stack
+from wasi-sdk's 64 KB default to **8 MB**. Two things need it: the engine's `op_process` holds a
+large fixed-size context on the stack (it is sized for the
+[job caps](../reference/limits.md#how-many-inputs-outputs-and-streams-can-one-job-have)), and
+FFmpeg's native encoders recurse deeply — the mpegvideo/mjpeg path most of all. At 64 KB the stack
+overflows into a wasm trap rather than a clean error, which is a miserable failure to diagnose. The
+native driver needs no equivalent: it uses the host's stack.
 
 ## The wasi compatibility shims
 
@@ -130,9 +141,16 @@ docker build -f build/Dockerfile.native --build-arg VARIANT=gpl --build-arg PROF
 
 ## Reproducibility
 
-Inputs are pinned in `build/versions.lock` (the FFmpeg tag, the wasi-sdk image). A release
-tag is `<FFMPEG_VERSION>-<build-rev>` (e.g. `n8.1.2-10`); the build revision bumps when the
-toolchain or config changes for the same upstream FFmpeg.
+Every input is pinned: the wasi-sdk image and `FFMPEG_VERSION` default in each Dockerfile, and each
+codec library by tag, commit or SHA-256 digest in `build/deps.sh`. The tarball-fetched libraries are
+verified against a hard-coded digest and every mirror that disagrees is rejected, so an altered
+mirror cannot slip modified source into an artifact. `build/versions.lock` restates several of those
+pins in one place as a record — **no script reads it**, so it is a summary to keep in step rather
+than the mechanism. The [build options reference](../reference/build-options.md) lists every pin and
+where its authoritative value lives.
+
+A release tag is `<FFMPEG_VERSION>-<build-rev>` (e.g. `n8.1.2-10`); the build revision bumps when
+the toolchain or config changes for the same upstream FFmpeg.
 
 A **size-budget gate** (spec 0022) guards against accidental bloat: `build/size-budget.txt` sets a
 per-artifact byte ceiling, and the `size-budget` CI job (`build/check-size-budget.sh`) prints each

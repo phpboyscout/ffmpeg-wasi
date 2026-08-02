@@ -68,20 +68,24 @@ caveat — [licensing](../explanation/licensing.md#h264-encode-and-the-avc-paten
 
 ## The media baseline
 
-The enabled codecs/filters/muxers are a **general** baseline (not one consumer's set). The
-exact matrix is recorded per release in the provenance manifest; the intended baseline:
+The enabled codecs, filters and formats are a **general** baseline, not one consumer's set. Each
+tier has its own reference page with the exact per-profile list, taken from the build's allowlist:
 
-- **Decode** — H.264, HEVC, VP8/VP9, MJPEG, AAC, MP3, Opus, Vorbis, FLAC, PCM, and the common
-  image formats.
-- **Encode** — H.264 (per variant), AAC, MJPEG, FLAC, PCM (plus image and audio encoders as
-  dependencies land).
-- **Demux / mux** — MP4/MOV, Matroska/WebM, MP3, WAV, Ogg, image sequences.
-- **Filters** — `scale`, `crop`, `pad`, `overlay`, `concat`, `xfade`, `format`, `fps`, plus
-  the common audio filters (`amix`, `volume`, `afade`, `aresample`, …).
-- **Protocols** — `file` (over the mounted filesystem).
+| Tier | Page | `lean` in one line |
+|---|---|---|
+| Codecs | [Codecs](codecs.md) | H.264/HEVC/VP8/VP9/MJPEG/PNG decode; H.264 (per variant), MJPEG, PNG, AAC, FLAC and PCM encode |
+| Filters | [Filters](filters.md) | `scale`, `crop`, `pad`, `overlay`, `concat`, `xfade`, `format`, `fps`, plus the common audio filters (`amix`, `volume`, `afade`, `aresample`, …) |
+| Containers | [Containers](containers.md) | demux MP4/MOV, Matroska/WebM, MP3, WAV, Ogg, AAC, FLAC, image sequences and raw; **mux** MP4/MOV, Matroska/WebM, MP3, WAV and image sequences |
+| Protocols | [Containers](containers.md#protocols) | `file` and `pipe` — there is no network protocol in any build |
 
-External-dependency codecs (libx264, openh264, zlib for PNG, …) are added incrementally; each
-build's true set is authoritative in its provenance manifest.
+Two asymmetries catch people out: `lean` **reads** Ogg, AAC and FLAC but does not **write** them
+(those muxers are `intermediate`), and several `intermediate` codecs decode without an encoder. See
+[limits](limits.md#what-is-deliberately-left-out-of-the-codec-and-filter-sets).
+
+The authoritative source for any build is the allowlist in `build/libav.sh` at the commit named in
+that release's `provenance.json`. **`provenance.json` itself does not carry a codec matrix** — it
+records the FFmpeg version, build tag, commit, and a per-artifact file/licence/H.264-encoder/profile
+record. `--report` is a smoke test that probes a fixed handful of names, not an inventory either.
 
 ## Release artifacts
 
