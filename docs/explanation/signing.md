@@ -48,7 +48,9 @@ project, so no other project's pipeline can ever produce an ffmpeg-wasi signatur
 Two OpenPGP keys back the chain (the go-tool-base model):
 
 - the **signing key** (`ffmpeg-wasi-release@phpboyscout.uk`), minted from the KMS key — OpenPGP
-  fingerprint `710881C1DDAEABD138E53004A2166E59EB6060E1`. Signs every release.
+  fingerprint `710881C1DDAEABD138E53004A2166E59EB6060E1`. Signs every release. A second signing key
+  is currently in its rotation-overlap window, so releases made during it carry two signatures —
+  see [Rotation](#rotation-and-why-a-release-may-carry-two-signatures).
 - the **shared org rotation-authority key** (`release@phpboyscout.uk`,
   `2B26658409047ED08B56CEBDCF5B8DBB5D9F19C2`) — an offline break-glass key that certifies the
   signing key and authorises rotation. One per org, never used in normal operation, and never a
@@ -83,12 +85,30 @@ triggers the legitimate release pipeline, which would sign a malicious build wit
 a copy served from the `phpboyscout.uk` domain (a control plane independent of GitLab), so an
 attacker would have to compromise *both*. Stating the limit plainly is part of the posture.
 
-## Rotation
+## Rotation, and why a release may carry two signatures
 
-The key alias is versioned (`…-v1`). Rotation mints a new key, publishes the new public key via
-the WKD location above, and adds it to afmpeg's pinned set alongside the old one for an overlap
-window before the old key is retired — so there is no flag-day, and a compromised key can be
-dropped promptly.
+The key alias is versioned (`alias/ffmpeg-wasi-release-signing-v1`). Rotation mints a new key,
+publishes its public half via the WKD location above, and adds it to afmpeg's pinned set alongside
+the old one for an overlap window before the old key is retired — so there is no flag-day, and a
+compromised key can be dropped promptly.
+
+**An overlap window is currently open.** A second key
+(`alias/ffmpeg-wasi-release-signing-v2`, uid `ffmpeg-wasi-release-v2@phpboyscout.uk`, created
+2026-07-24) lives in a separate AWS account with its own signer role, and `build/sign-release.sh`
+appends its signature into the *same* armored `checksums.txt.sig`. So during the window:
+
+- **`checksums.txt.sig` carries two detached signatures, not one.** It is still one file over the
+  same `checksums.txt`.
+- **Verifying with either key succeeds.** An OpenPGP verifier skips signature packets from an issuer
+  it does not know, so an afmpeg build that pins only v1 verifies the release exactly as before, and
+  one that pins both verifies with whichever it holds.
+- **Neither key is preferred.** They certify identical bytes.
+
+The window closes by removing the secondary key's variables from the CI signing job, after which
+releases carry the v2 signature alone.
+
+If you verify by hand, expect `gpg --verify` to report an unknown-key signature alongside the one it
+can check. That is the overlap, not a tampered manifest.
 
 ## The tooling is MIT
 
