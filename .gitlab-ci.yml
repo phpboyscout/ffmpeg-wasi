@@ -38,7 +38,7 @@ validate:
   # The alpine variant ships a shell (the scratch shellcheck image sets shellcheck
   # as its entrypoint, which collides with GitLab's script runner).
   image:
-    name: koalaman/shellcheck-alpine:stable
+    name: koalaman/shellcheck-alpine:v0.11.0
     entrypoint: [""]
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -190,7 +190,7 @@ build:native:gpl:full:
 # are calibrated from a real build; flip allow_failure off to enforce.
 size-budget:
   stage: sign
-  image: alpine:latest
+  image: alpine:3.24.1
   rules:
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
   needs:
@@ -285,7 +285,7 @@ sign:
 
 release:
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  image: registry.gitlab.com/gitlab-org/release-cli:v0.24.0
   rules:
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
   needs:
