@@ -18,11 +18,18 @@ include:
   # renovate-daily schedule; validate/build/sign/release are MR/tag-gated and
   # zensical-pages carries its own schedule-never guard.
 
+  # Announce releases to the Discord announcements channel. Minor and
+  # major cuts only by default; the webhook comes from the
+  # DISCORD_RELEASE_WEBHOOK group variable, which is protected and so
+  # reaches this job because `v*` is a protected tag here.
+  - component: gitlab.com/phpboyscout/cicd/discord-release@v0.35.0
+
 stages:
   - validate
   - build
   - sign
   - release
+  - notify
   - pages
   - renovate
 
