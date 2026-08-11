@@ -47,3 +47,18 @@ no HEVC or AV1 encode from the `.wasm` module, and a native driver for linux/amd
 > The engine **transcodes** (decode → filter → encode → mux) over a virtual filesystem: the `probe`,
 > `process` (full `filter_complex`), `frames`, and `version` ops all work today. Design: afmpeg
 > [spec 0007](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
+
+## Further reading
+
+Everything written about the estate, including the curated guides, is on
+[the blog](https://phpboyscout.uk/topics/).
+
+!!! tip "Ask phpbotscout"
+
+    ![phpbotscout](https://phpboyscout.uk/images/projects/logo-phpbotscout.png){ width="84" align=left style="border-radius:10px;margin-right:1rem" }
+
+    He answers questions about the projects over on the Discord, citing the docs
+    where they already cover it, and offering to raise an issue where they don't.
+    Bring a bug, an idea, or a questionable engineering decision.
+
+    [Join the Discord](https://discord.gg/mQzGbmGyzZ){ .md-button .md-button--primary }
