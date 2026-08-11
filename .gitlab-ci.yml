@@ -270,6 +270,8 @@ sign:
     SIGNING_KEY_EMAIL_2: ffmpeg-wasi-release-v2@phpboyscout.uk
     SIGNING_KEY_CREATED_2: "2026-07-24T11:43:51Z"
     AWS_ROLE_ARN_2: arn:aws:iam::060730976733:role/ffmpeg-wasi-release-signing-v2-signer
+    # The >= below is a floor, not a ceiling — a Renovate bump above it is safe.
+    # renovate: datasource=gitlab-tags depName=phpboyscout/go-tool-base
     GTB_VERSION: v0.33.0 # >= v0.33.0 for `gtb sign --append` (dual-sign window)
     GOPRIVATE: gitlab.com/phpboyscout/*
   before_script:
