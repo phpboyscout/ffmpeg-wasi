@@ -1,6 +1,10 @@
-# Pinned inputs for a reproducible build. Bumping FFMPEG_VERSION tracks upstream
-# (the project's release tag is <FFMPEG_VERSION>-<build rev>).
-FFMPEG_VERSION=n8.1.2
+# Pinned inputs for a reproducible build. A record, not an input — no script
+# sources this file.
+#
+# FFMPEG_VERSION is deliberately NOT repeated here: build/ffmpeg-version.txt is
+# its single source of truth (spec 0035 D3), read by CI, both Dockerfiles and
+# build/sign-release.sh. A copy on this line could only ever drift from it.
+# The project's release tag is still <that version>-<build rev>.
 WASI_SDK_IMAGE=ghcr.io/webassembly/wasi-sdk:wasi-sdk-30
 # external codec dependencies (build/deps.sh):
 X264_BRANCH=stable       # GPL variant H.264 encode (x264 has no release tags; pin a commit for releases)

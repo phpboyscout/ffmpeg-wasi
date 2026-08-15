@@ -35,8 +35,10 @@ yourself is easy.
       --target artifact -o dist .
     ```
 
-The module lands at `dist/ffmpeg-wasi-<variant>.wasm`. To build a different upstream FFmpeg,
-add `--build-arg FFMPEG_VERSION=n8.1.2` (any FFmpeg release tag).
+The module lands at `dist/ffmpeg-wasi-<variant>.wasm`. The upstream FFmpeg it builds comes from
+`build/ffmpeg-version.txt`; to try a different one for a one-off experiment, add
+`--build-arg FFMPEG_VERSION=n9.0.1` (any FFmpeg release tag). Changing it for real means editing
+that file, which is what CI and both Dockerfiles read.
 
 ### Build the intermediate profile
 

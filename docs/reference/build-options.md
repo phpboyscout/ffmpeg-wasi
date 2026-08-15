@@ -25,7 +25,7 @@ the same three:
 |---|---|---|---|
 | `VARIANT` | `lgpl` | `lgpl`, `gpl` | `gpl` adds `--enable-gpl` + libx264 (and libx265 in the `full` profile). Sets the artifact's licence — see [licensing](../explanation/licensing.md). |
 | `PROFILE` | `lean` | `lean`, `intermediate`, `full` | The capability class. `full` is **native-only**. |
-| `FFMPEG_VERSION` | `n8.1.2` | any FFmpeg release tag | Which upstream FFmpeg is cloned and built. |
+| `FFMPEG_VERSION` | *(from `build/ffmpeg-version.txt`)* | any FFmpeg release tag | Which upstream FFmpeg is cloned and built. Unset means the file's value; pass it only to override for a one-off experiment. |
 
 ```sh
 docker build -f build/Dockerfile \
@@ -55,7 +55,9 @@ unprefixed name so existing consumers are unaffected:
 | `PROFILE` set to anything else | `build/libav.sh` exits `2`: `unknown PROFILE '<x>'`, naming the three it accepts |
 | `VARIANT` set to anything but `lgpl`/`gpl` | `build/deps.sh` exits `2`: `deps: unknown VARIANT <x>` |
 | `FFMPEG_VERSION` naming a tag that does not exist | the `git clone --branch` in `build/libav.sh` fails |
-| `FFMPEG_VERSION` unset when running `build/libav.sh` directly | the script aborts: `set FFMPEG_VERSION, e.g. n8.1.2` |
+| `FFMPEG_VERSION` unset when running `build/libav.sh` directly | the script aborts: `set FFMPEG_VERSION, e.g. n8.1.2`. Both Dockerfiles and CI supply it from `build/ffmpeg-version.txt`, so this only bites a hand-run script |
+| a release tag whose version disagrees with `build/ffmpeg-version.txt` | the `ffmpeg-version` CI job fails in the `validate` stage, before any build runs, naming both values |
+| `build/ffmpeg-version.txt` missing or empty | `build/ffmpeg-version.sh` exits `2` |
 
 `VARIANT` is validated in `deps.sh` only. `libav.sh` treats anything other than `gpl` as the LGPL
 path, so a typo reaching `libav.sh` alone would silently build an LGPL artifact — always run
@@ -71,7 +73,7 @@ path, so a typo reaching `libav.sh` alone would silently build an LGPL artifact 
 | `PREFIX` | `/opt/vendor` | all four | Where the external codec libraries install, and where `driver.sh` looks for them at link time. |
 | `WASI_SDK` | `/opt/wasi-sdk` | `toolchain.sh` (wasm only) | The wasi-sdk root; its `share/wasi-sysroot` becomes `WASI_SYSROOT`. |
 | `CC` / `CXX` | `cc` / `c++` (native), `clang` / `clang++` (wasm) | `toolchain.sh` | The compilers. Overridable on native only; the wasm path pins clang from the SDK. |
-| `FFMPEG_VERSION` | *(required)* | `libav.sh` | The upstream tag to clone. |
+| `FFMPEG_VERSION` | *(required; both Dockerfiles and CI resolve it via `build/ffmpeg-version.sh`)* | `libav.sh` | The upstream tag to clone. |
 | `VARIANT` | `lgpl` | `deps.sh`, `libav.sh` | The licence variant. |
 | `PROFILE` | `lean` | `deps.sh`, `libav.sh` | The capability profile. |
 | `FFMPEG_SRC` | `/ffmpeg` | `libav.sh`, `driver.sh` | Where FFmpeg is cloned to and where `driver.sh` finds the built `libav*` archives. |
@@ -82,7 +84,8 @@ path, so a typo reaching `libav.sh` alone would silently build an LGPL artifact 
 Running the scripts by hand is the same three steps CI takes:
 
 ```sh
-export FFMPEG_VERSION=n8.1.2 VARIANT=lgpl PROFILE=lean
+FFMPEG_VERSION="$(sh build/ffmpeg-version.sh)"
+export FFMPEG_VERSION VARIANT=lgpl PROFILE=lean
 sh build/deps.sh
 sh build/libav.sh
 OUT=dist/ffmpeg-wasi-lgpl.wasm sh build/driver.sh
@@ -144,16 +147,21 @@ digest and are pinned by tag or commit.
 
 ## `build/versions.lock` is a record, not an input
 
-`build/versions.lock` documents the pinned FFmpeg tag, the wasi-sdk image and several dependency
-versions in a shell-assignment format. **No script sources it.** The real values live in three
-places:
+`build/versions.lock` documents the wasi-sdk image and several dependency versions in a
+shell-assignment format. **No script sources it.** The real values live in two places:
 
-- the base image line and `ARG` defaults in each Dockerfile (the wasi-sdk image, `FFMPEG_VERSION`);
-- the `: "${VAR:=default}"` defaults in `build/deps.sh` (every codec library);
-- the release tag in CI, which sets `FFMPEG_VERSION` from `$CI_COMMIT_TAG` with the build revision
-  stripped (`n8.1.2-10` → `n8.1.2`).
+- the base image line in each Dockerfile (the wasi-sdk image);
+- the `: "${VAR:=default}"` defaults in `build/deps.sh` (every codec library).
 
 Treat it as a summary to keep in step, and change the authoritative file as well.
+
+`FFMPEG_VERSION` is the exception, and no longer appears in `versions.lock` at all.
+**`build/ffmpeg-version.txt` is its single source of truth**, resolved by `build/ffmpeg-version.sh`
+and read by CI, both Dockerfiles and `build/sign-release.sh`. On a release tag the two must agree:
+the tag's version prefix is checked against the file in the `validate` stage and a disagreement
+fails the pipeline before any build starts. So bumping FFmpeg is a merge request against that file
+— and because that merge request builds the whole matrix, the tag rests on evidence rather than on
+the first build ever attempted. See spec 0035.
 
 ## The size-budget gate
 

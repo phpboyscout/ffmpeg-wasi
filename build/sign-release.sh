@@ -24,7 +24,12 @@ set -eu
 : "${SIGNING_KEY_EMAIL:?set SIGNING_KEY_EMAIL}"
 : "${SIGNING_KEY_CREATED:?set SIGNING_KEY_CREATED (RFC3339)}"
 
-FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
+# Resolve from build/ffmpeg-version.txt rather than re-deriving from the tag, so
+# provenance.json records what was actually built and cannot disagree with it
+# (spec 0035 D3). The tag has already been reconciled against the file by the
+# `ffmpeg-version` job, so on a release the two agree by construction.
+HERE="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+FFMPEG_VERSION="$(sh "$HERE/ffmpeg-version.sh")"
 
 # 1. Provenance manifest. (Kept in lock-step with afmpeg's Provenance schema.)
 cat > provenance.json <<PROV

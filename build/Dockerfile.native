@@ -5,7 +5,8 @@
 # Usage: docker build -f build/Dockerfile.native --target artifact -o dist .
 #        → dist/driver  (a native ELF the afmpeg pkg/afmpeg/native host drives)
 FROM debian:bookworm-slim AS build
-ARG FFMPEG_VERSION=n8.1.2
+# Unset means "whatever build/ffmpeg-version.txt says" — see build/Dockerfile.
+ARG FFMPEG_VERSION=
 ARG VARIANT=lgpl
 ARG PROFILE=lean
 ENV TARGET=native
@@ -23,8 +24,10 @@ WORKDIR /work
 # them with real asm + threads.
 COPY build/toolchain.sh build/deps.sh build/config.sub /work/build/
 RUN VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/deps.sh
-COPY build/libav.sh build/ffmpeg-concat-ioopen.patch /work/build/
-RUN FFMPEG_VERSION="$FFMPEG_VERSION" VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/libav.sh
+COPY build/libav.sh build/ffmpeg-concat-ioopen.patch \
+     build/ffmpeg-version.sh build/ffmpeg-version.txt /work/build/
+RUN FFMPEG_VERSION="${FFMPEG_VERSION:-$(sh build/ffmpeg-version.sh)}" \
+    VARIANT="$VARIANT" PROFILE="$PROFILE" sh build/libav.sh
 COPY build/ /work/build/
 COPY src/ /work/src/
 RUN OUT=/dist/driver sh build/driver.sh
