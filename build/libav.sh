@@ -35,9 +35,19 @@ OPENH264_FLAGS="--enable-libopenh264 --enable-encoder=libopenh264"
 # majority of real jobs at the smallest size (roughly what shipped before 0022).
 # A general, dep-free native baseline; external deps (zlib, openh264, x264, …)
 # extend it in build/deps.sh.
+#
+# The image_*_pipe demuxers are not redundant with image2. image2 is AVFMT_NOFILE
+# — it opens files by name itself and ignores a custom AVIOContext — so it can
+# only be reached on the wasm target, where afio_open_input passes the real
+# (WASI-mounted) path. The native target routes media through the IPC AVIO and so
+# passes a NULL filename (src/nativeio.c), leaving demuxer selection to content
+# probing; without a stream-based image demuxer to probe into, *no* still image
+# opens on Backend B at all. Keep one _pipe demuxer per image decoder the profile
+# enables.
 LEAN_ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,flac,pcm_s16le,pcm_f32le,rawvideo \
 --enable-encoder=mjpeg,png,aac,flac,pcm_s16le \
 --enable-demuxer=mov,matroska,webm,mp3,wav,ogg,aac,flac,image2,concat,rawvideo,pcm_s16le,pcm_f32le \
+--enable-demuxer=image_png_pipe,image_jpeg_pipe \
 --enable-muxer=mp4,mov,matroska,webm,mp3,wav,image2 \
 --enable-filter=null,anull,split,asplit,scale,crop,pad,format,fps,settb,asettb,setsar,setpts,asetpts,trim,atrim,loop,transpose,overlay,concat,xfade,amix,adelay,volume,afade,aresample,aformat,alimiter \
 --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc,extract_extradata \
@@ -70,8 +80,13 @@ LEAN_ENABLE="--enable-decoder=h264,hevc,vp8,vp9,mjpeg,png,aac,mp3,opus,vorbis,fl
 # AV1/HEVC and the external-lib encoders are elsewhere (0023 / 0018). AV1 *decode*
 # needs libdav1d (FFmpeg's in-tree `av1` decoder is hwaccel-only); it is added below
 # for BOTH targets (deps.sh builds dav1d single-threaded for wasm too).
+# The image_*_pipe demuxers track this profile's added image decoders (gif/bmp/
+# tiff) — see the lean block for why image2 alone leaves Backend B unable to open
+# any still image. No image_webp_pipe: libwebp is enabled encode-only below, so
+# webp is not decodable here.
 INTERMEDIATE_ENABLE="\
 --enable-demuxer=mpegts,flv,avi,gif,caf,aiff,au \
+--enable-demuxer=image_gif_pipe,image_bmp_pipe,image_tiff_pipe \
 --enable-muxer=mpegts,hls,dash,flv,avi,gif,ogg,adts,caf,aiff,au,segment,stream_segment \
 --enable-decoder=gif,ac3,eac3,dca,alac,wmav2 \
 --enable-decoder=pcm_s24le,pcm_s32le,pcm_f64le,pcm_u8,pcm_s16be,pcm_s24be,pcm_mulaw,pcm_alaw \
