@@ -141,8 +141,9 @@ docker build -f build/Dockerfile.native --build-arg VARIANT=gpl --build-arg PROF
 
 ## Reproducibility
 
-Every input is pinned: the wasi-sdk image and `FFMPEG_VERSION` default in each Dockerfile, and each
-codec library by tag, commit or SHA-256 digest in `build/deps.sh`. The tarball-fetched libraries are
+Every input is pinned: the wasi-sdk image in each Dockerfile, the upstream FFmpeg tag in
+`build/ffmpeg-version.txt`, and each codec library by tag, commit or SHA-256 digest in
+`build/deps.sh`. The tarball-fetched libraries are
 verified against a hard-coded digest and every mirror that disagrees is rejected, so an altered
 mirror cannot slip modified source into an artifact. `build/versions.lock` restates several of those
 pins in one place as a record — **no script reads it**, so it is a summary to keep in step rather
@@ -150,9 +151,27 @@ than the mechanism. The [build options reference](../reference/build-options.md)
 where its authoritative value lives.
 
 A release tag is `<FFMPEG_VERSION>-<build-rev>` (e.g. `n8.1.2-10`); the build revision bumps when
-the toolchain or config changes for the same upstream FFmpeg.
+the toolchain or config changes for the same upstream FFmpeg. The tag's version half must match
+`build/ffmpeg-version.txt`, which is checked before any build job starts — a release cannot name an
+FFmpeg version that no merge request ever built (spec 0035).
+
+## What CI proves, and when
+
+A merge request that touches `build/**`, `src/**` or `.gitlab-ci.yml` builds the **whole**
+ten-artifact matrix, so an engine change is reviewed against artifacts rather than against a
+description of them. Everything else — a docs edit, a dependency bump — runs only the fast checks.
+
+Those builds share one project-scoped `resource_group`, so at most one engine compile runs at a
+time. A full matrix therefore takes roughly 95 minutes of wall clock rather than the ~17 it would
+take running wide. That is deliberate (spec 0035 D7): compiling FFmpeg ten times in parallel fills
+every slot on the shared runners and starves every other project in the fleet, and wall clock on an
+unattended pipeline is the cheaper thing to spend.
+
+Signing and release stay tag-only. A merge request can build and measure; it can never sign or
+publish.
 
 A **size-budget gate** (spec 0022) guards against accidental bloat: `build/size-budget.txt` sets a
 per-artifact byte ceiling, and the `size-budget` CI job (`build/check-size-budget.sh`) prints each
-artifact's size vs its budget on every tag and flags an overage. It is advisory (`allow_failure`)
-until the ceilings are calibrated from real builds.
+artifact's size vs its budget — on merge requests as well as tags, since a size regression is worth
+catching in review — and flags an overage. It is advisory (`allow_failure`) until the ceilings are
+calibrated from real builds.

@@ -1,12 +1,24 @@
 # ffmpeg-wasi — custom release pipeline.
 #
-#   merge_request → validate (shellcheck the build scripts; fast)
-#   tag nX.Y.Z-N  → build both variants → checksum + provenance → GitLab release
+#   merge_request → validate (shellcheck + the version guard; fast)
+#                 → build the full matrix, but only when build/**, src/** or this
+#                   file changed (spec 0035)
+#                 → size-budget over whatever was built
+#   tag nX.Y.Z-N  → the same builds → checksum + provenance + signature → release
 #
-# Releases are cut by tagging `<FFMPEG_VERSION>-<build-rev>` (e.g. n8.1.2-1); the
-# FFmpeg version is derived from the tag. The build is heavy (compiles FFmpeg);
-# it runs only on tags and needs a Docker-capable runner with adequate
-# CPU/disk/timeout.
+# Releases are cut by tagging `<FFMPEG_VERSION>-<build-rev>` (e.g. n8.1.2-1).
+# **build/ffmpeg-version.txt is authoritative for the FFmpeg version** (spec 0035
+# D3), not the tag: the `ffmpeg-version` job fails a tag that disagrees with it,
+# before any build starts. Bumping FFmpeg is therefore a merge request against
+# that file — and that merge request builds the new version.
+#
+# The build is heavy (it compiles FFmpeg) and needs a runner with adequate
+# CPU/disk/timeout. Every build job shares one project-scoped `resource_group`
+# (spec 0035 D7, following cicd 0045), so at most one engine compile runs at a
+# time and a ten-job matrix cannot fill every slot on the shared runners. That
+# trades wall clock — a full matrix is ~95 min rather than ~17 — for a fleet that
+# stays usable by everything else. Do not remove it to speed a release up
+# without reading that decision first.
 
 include:
   # Docs site → GitLab Pages (zensical), consistent with the other phpboyscout projects.
@@ -40,6 +52,23 @@ workflow:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
 
+# The rules every engine build job shares (spec 0035 D1/D2). A tag builds the
+# matrix as it always has; a merge request builds it too, but only when it touched
+# something that can change the artifact. Rules short-circuit on first match, so a
+# tag matches the first entry and each job still runs exactly once.
+#
+# `.gitlab-ci.yml` is in `changes:` deliberately: a pipeline edit is as capable of
+# breaking the build as a source edit, and it is the one file guaranteed to differ
+# on a merge request that rewires the build.
+.engine-build-rules: &engine-build-rules
+  - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+  - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    changes:
+      paths:
+        - build/**/*
+        - src/**/*
+        - .gitlab-ci.yml
+
 validate:
   stage: validate
   # The alpine variant ships a shell (the scratch shellcheck image sets shellcheck
@@ -47,10 +76,29 @@ validate:
   image:
     name: koalaman/shellcheck-alpine:v0.11.0
     entrypoint: [""]
+  interruptible: true
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     - shellcheck build/*.sh
+
+# Resolve — and on a tag, verify — the FFmpeg version, before anything expensive
+# runs (spec 0035 D3). This is a whole stage ahead of `build`, so a tag that
+# disagrees with build/ffmpeg-version.txt costs seconds instead of an hour of
+# serialised compiles. Deliberately outside the build resource_group: a check this
+# cheap must never queue behind a compile.
+ffmpeg-version:
+  stage: validate
+  image: alpine:3.24.1
+  interruptible: true
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    # Two statements, not `export FFMPEG_VERSION="$(...)"` — that reports export's
+    # exit status (always 0) and would swallow the guard's failure.
+    - version="$(sh build/ffmpeg-version.sh)"
+    - echo "This pipeline targets FFmpeg ${version}"
 
 # One job per licence variant; the FFmpeg version comes from the tag (strip the
 # build-revision suffix, e.g. n8.1.2-1 -> n8.1.2). The job runs *in* the wasi-sdk
@@ -59,10 +107,16 @@ validate:
 .build:
   stage: build
   image: ghcr.io/webassembly/wasi-sdk:wasi-sdk-30
-  rules:
-    # Only FFmpeg-version tags (e.g. n8.1.2-1) build artifacts; repo-meta tags
-    # like 0.1.0 do not trigger an FFmpeg build.
-    - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+  # Only FFmpeg-version tags (e.g. n8.1.2-1) build artifacts; repo-meta tags like
+  # 0.1.0 do not trigger an FFmpeg build. Plus engine-touching merge requests.
+  rules: *engine-build-rules
+  # At most one engine compile at a time, project-scoped (spec 0035 D7).
+  resource_group: "$CI_PROJECT_PATH_SLUG-engine-build"
+  # A superseded merge-request pipeline must release that group rather than hold
+  # it building an artifact nobody will read (spec 0035 D8). Safe on tags: GitLab
+  # only auto-cancels a pipeline superseded on the same ref, and a release tag
+  # never gets a second one.
+  interruptible: true
   timeout: 2h
   before_script:
     # curl + xz-utils + meson/ninja are needed by the intermediate profile (its
@@ -70,7 +124,11 @@ validate:
     # are harmless for the lean profile, which uses neither.
     - apt-get update && apt-get install -y --no-install-recommends git make pkg-config gzip ca-certificates curl xz-utils meson ninja-build && rm -rf /var/lib/apt/lists/*
   script:
-    - export FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
+    # build/ffmpeg-version.txt is the source of truth and the `ffmpeg-version` job
+    # has already reconciled it with any tag (spec 0035 D3). Assign then export as
+    # two statements so a failure here is not masked by export's exit status.
+    - FFMPEG_VERSION="$(sh build/ffmpeg-version.sh)"
+    - export FFMPEG_VERSION
     # Artifact name: lean keeps the legacy ffmpeg-wasi-<variant>.wasm; a non-lean
     # profile carries the profile in the name (spec 0022). PROFILE reaches deps.sh
     # and libav.sh via the environment (a GitLab job variable), defaulting to lean.
@@ -124,8 +182,11 @@ build:gpl:intermediate:
 .build-native:
   stage: build
   image: debian:bookworm-slim
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+  rules: *engine-build-rules
+  # Same group as the wasm builds — one engine compile at a time across both
+  # targets, not one per target (spec 0035 D7).
+  resource_group: "$CI_PROJECT_PATH_SLUG-engine-build"
+  interruptible: true
   timeout: 2h
   variables:
     TARGET: native
@@ -135,7 +196,9 @@ build:gpl:intermediate:
     # full one (x265/SVT-AV1); harmless for lean. Mirrors the native Dockerfile.
     - apt-get update && apt-get install -y --no-install-recommends git make cmake pkg-config gzip ca-certificates build-essential nasm zlib1g-dev curl xz-utils meson ninja-build && rm -rf /var/lib/apt/lists/*
   script:
-    - export FFMPEG_VERSION="${CI_COMMIT_TAG%-*}"
+    # See the wasm .build note — assign, then export, so the guard can fail.
+    - FFMPEG_VERSION="$(sh build/ffmpeg-version.sh)"
+    - export FFMPEG_VERSION
     # Lean keeps the platform-only name; other profiles carry the profile before
     # the variant, mirroring the wasm intermediate naming (spec 0022 parity).
     - 'if [ "${PROFILE:-lean}" = lean ]; then NAME="ffmpeg-wasi-driver-linux-amd64-${VARIANT}"; else NAME="ffmpeg-wasi-driver-linux-amd64-${PROFILE}-${VARIANT}"; fi'
@@ -198,19 +261,35 @@ build:native:gpl:full:
 size-budget:
   stage: sign
   image: alpine:3.24.1
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+  # Runs on engine merge requests too (spec 0035 D4), which is where a size
+  # regression is worth seeing — the lean wasm module is at 93% of its 6 MB
+  # ceiling on n9.0.1, and that is the number most likely to break the n9 bump.
+  rules: *engine-build-rules
+  interruptible: true
+  # `optional: true` so the job runs against whatever the pipeline actually built.
+  # check-size-budget.sh already skips absent artifacts and fails only on a
+  # *present* artifact over its ceiling, so a partial set needs no script change.
   needs:
-    - build:lgpl
-    - build:gpl
-    - build:lgpl:intermediate
-    - build:gpl:intermediate
-    - build:native:lgpl
-    - build:native:gpl
-    - build:native:lgpl:intermediate
-    - build:native:gpl:intermediate
-    - build:native:lgpl:full
-    - build:native:gpl:full
+    - job: build:lgpl
+      optional: true
+    - job: build:gpl
+      optional: true
+    - job: build:lgpl:intermediate
+      optional: true
+    - job: build:gpl:intermediate
+      optional: true
+    - job: build:native:lgpl
+      optional: true
+    - job: build:native:gpl
+      optional: true
+    - job: build:native:lgpl:intermediate
+      optional: true
+    - job: build:native:gpl:intermediate
+      optional: true
+    - job: build:native:lgpl:full
+      optional: true
+    - job: build:native:gpl:full
+      optional: true
   allow_failure: true
   script:
     - sh build/check-size-budget.sh
@@ -223,6 +302,9 @@ size-budget:
 sign:
   stage: sign
   image: golang:1.26
+  # Tag-only, unconditionally, and its `needs` stay mandatory (spec 0035 D5). A
+  # merge request must never assume the signing role, mint a signature or publish.
+  # The `optional: true` relaxation on size-budget must not spread here.
   rules:
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
   needs:
