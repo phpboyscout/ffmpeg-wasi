@@ -382,13 +382,29 @@ static int add_buffersink(Ctx *c, AVFilterInOut *pad) {
     // "sample_formats"); the older "pix_fmts"/"sample_fmts" binary options are
     // deprecated and feed a malformed list into format negotiation that crashes on
     // an -O2 native build (merge_formats_internal), though -Oz wasm tolerated it.
+    //
+    // The supported list comes from avcodec_get_supported_config, not the AVCodec
+    // fields it replaced: those are deprecated in FFmpeg 8 and removed outright in
+    // 9.0, where AVCodec no longer carries them. A NULL list means the encoder
+    // accepts everything, so pin nothing and let the graph negotiate — which is
+    // exactly what the old `if (enc_codec->pix_fmts)` guard did.
     int ret = 0;
-    if (type == AVMEDIA_TYPE_VIDEO && enc_codec->pix_fmts) {
-        enum AVPixelFormat pf = enc_codec->pix_fmts[0];
-        ret = av_opt_set_array(go->sink, "pixel_formats", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_PIXEL_FMT, &pf);
-    } else if (type == AVMEDIA_TYPE_AUDIO && enc_codec->sample_fmts) {
-        enum AVSampleFormat sf = enc_codec->sample_fmts[0];
-        ret = av_opt_set_array(go->sink, "sample_formats", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_SAMPLE_FMT, &sf);
+    if (type == AVMEDIA_TYPE_VIDEO) {
+        const enum AVPixelFormat *pix_fmts = NULL;
+        ret = avcodec_get_supported_config(NULL, enc_codec, AV_CODEC_CONFIG_PIX_FORMAT, 0,
+                                           (const void **)&pix_fmts, NULL);
+        if (ret >= 0 && pix_fmts) {
+            enum AVPixelFormat pf = pix_fmts[0];
+            ret = av_opt_set_array(go->sink, "pixel_formats", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_PIXEL_FMT, &pf);
+        }
+    } else if (type == AVMEDIA_TYPE_AUDIO) {
+        const enum AVSampleFormat *sample_fmts = NULL;
+        ret = avcodec_get_supported_config(NULL, enc_codec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0,
+                                           (const void **)&sample_fmts, NULL);
+        if (ret >= 0 && sample_fmts) {
+            enum AVSampleFormat sf = sample_fmts[0];
+            ret = av_opt_set_array(go->sink, "sample_formats", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_SAMPLE_FMT, &sf);
+        }
     }
     if (ret < 0) return ret;
     ret = avfilter_init_str(go->sink, NULL);

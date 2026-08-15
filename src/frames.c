@@ -160,10 +160,17 @@ static int build_graph(Frames *f, const AVCodec *enc, const char *chain) {
     // create_filter, which initialises before we can pin the encoder's format).
     f->sink = avfilter_graph_alloc_filter(f->graph, avfilter_get_by_name("buffersink"), "out");
     if (!f->sink) { fprintf(stderr, "ffmpeg-wasi: frames: buffersink alloc failed\n"); return AVERROR(ENOMEM); }
-    if (enc->pix_fmts) {
+    // The supported list comes from avcodec_get_supported_config, not the AVCodec
+    // fields it replaced (deprecated in FFmpeg 8, removed in 9.0). A NULL list means
+    // the encoder accepts everything, so pin nothing — see process.c add_buffersink.
+    const enum AVPixelFormat *pix_fmts = NULL;
+    if ((rc = avcodec_get_supported_config(NULL, enc, AV_CODEC_CONFIG_PIX_FORMAT, 0,
+                                           (const void **)&pix_fmts, NULL)) < 0)
+        return rc;
+    if (pix_fmts) {
         // FFmpeg 8's counted-array option (the deprecated "pix_fmts" binary option
         // crashes native format negotiation — see process.c add_buffersink).
-        enum AVPixelFormat pf = enc->pix_fmts[0];
+        enum AVPixelFormat pf = pix_fmts[0];
         if ((rc = av_opt_set_array(f->sink, "pixel_formats", AV_OPT_SEARCH_CHILDREN,
                                    0, 1, AV_OPT_TYPE_PIXEL_FMT, &pf)) < 0)
             return rc;
