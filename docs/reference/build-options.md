@@ -51,8 +51,8 @@ unprefixed name so existing consumers are unaffected:
 
 | Mistake | Result |
 |---|---|
-| `PROFILE=full` on `build/Dockerfile` (the WASM one) | `build/libav.sh` exits `2`: `PROFILE=full is native-only` |
-| `PROFILE` set to anything else | `build/libav.sh` exits `2`: `unknown PROFILE '<x>'`, naming the three it accepts |
+| `PROFILE=full` on `build/Dockerfile` (the WASM one) | `build/enable-lists.sh` exits `2`: `PROFILE=full is native-only` |
+| `PROFILE` set to anything else | `build/enable-lists.sh` exits `2`: `unknown PROFILE '<x>'`, naming the three it accepts |
 | `VARIANT` set to anything but `lgpl`/`gpl` | `build/deps.sh` exits `2`: `deps: unknown VARIANT <x>` |
 | `FFMPEG_VERSION` naming a tag that does not exist | the `git clone --branch` in `build/libav.sh` fails |
 | `FFMPEG_VERSION` unset when running `build/libav.sh` directly | the script aborts: `set FFMPEG_VERSION, e.g. n8.1.2`. Both Dockerfiles and CI supply it from `build/ffmpeg-version.txt`, so this only bites a hand-run script |
@@ -74,8 +74,8 @@ path, so a typo reaching `libav.sh` alone would silently build an LGPL artifact 
 | `WASI_SDK` | `/opt/wasi-sdk` | `toolchain.sh` (wasm only) | The wasi-sdk root; its `share/wasi-sysroot` becomes `WASI_SYSROOT`. |
 | `CC` / `CXX` | `cc` / `c++` (native), `clang` / `clang++` (wasm) | `toolchain.sh` | The compilers. Overridable on native only; the wasm path pins clang from the SDK. |
 | `FFMPEG_VERSION` | *(required; both Dockerfiles and CI resolve it via `build/ffmpeg-version.sh`)* | `libav.sh` | The upstream tag to clone. |
-| `VARIANT` | `lgpl` | `deps.sh`, `libav.sh` | The licence variant. |
-| `PROFILE` | `lean` | `deps.sh`, `libav.sh` | The capability profile. |
+| `VARIANT` | `lgpl` | `deps.sh`, `enable-lists.sh` | The licence variant. |
+| `PROFILE` | `lean` | `deps.sh`, `enable-lists.sh` | The capability profile. |
 | `FFMPEG_SRC` | `/ffmpeg` | `libav.sh`, `driver.sh` | Where FFmpeg is cloned to and where `driver.sh` finds the built `libav*` archives. |
 | `SRC_DIR` | `<repo>/src` | `driver.sh` | The engine sources. |
 | `DRIVER_SRC` | `$SRC_DIR/driver.c` | `driver.sh` | The engine entry point. |

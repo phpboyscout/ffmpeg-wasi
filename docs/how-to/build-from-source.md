@@ -114,18 +114,23 @@ build smoke test, not an inventory: for the full set see [codecs](../reference/c
 
 ## What the build does
 
-Four small scripts under `build/`, orchestrated by `build/Dockerfile`:
+Five small scripts under `build/`, orchestrated by `build/Dockerfile`:
 
 1. **`deps.sh`** — clones/cross-compiles the external codec libraries into `$PREFIX`: openh264
    (+ libx264 on gpl), and for the intermediate/full profiles Opus/MP3/Vorbis/WebP/VP8-9,
    freetype/harfbuzz/libass, **AV1 decode (libdav1d)**, and — native full only — x265 / SVT-AV1.
-2. **`libav.sh`** — clones FFmpeg, configures it single-threaded for `wasm32-wasi`
+2. **`enable-lists.sh`** — the component allowlist: which decoders, encoders, muxers,
+   demuxers, filters, bitstream filters and protocols each (profile, variant) asks for. Sourced by
+   `libav.sh`, and read directly by the conformance suite, which asserts the built artifact really
+   carries what this file claims (spec 0036). One definition, two consumers — a test that
+   re-implemented the composition would drift from the build silently.
+3. **`libav.sh`** — clones FFmpeg, configures it single-threaded for `wasm32-wasi`
    (libraries only), and `make`s the `libav*` archives.
-3. **`driver.sh`** — links the engine (`src/driver.c`) + the wasi compat shims against those
+4. **`driver.sh`** — links the engine (`src/driver.c`) + the wasi compat shims against those
    archives into one `.wasm` command module.
-4. **`toolchain.sh`** — the shared wasi-sdk/clang cross-compile environment.
+5. **`toolchain.sh`** — the shared wasi-sdk/clang cross-compile environment.
 
-All four branch on `TARGET` (`wasm` by default, `native` for the driver), so one build system
+They branch on `TARGET` (`wasm` by default, `native` for the driver), so one build system
 produces both artifacts. See [The build](../explanation/the-build.md) for what makes it work
 (single-threaded config, setjmp/longjmp lowering, the POSIX/WASI compat shims) and
 [The native driver](../explanation/the-build.md#the-native-driver-spec-0028) for the `TARGET=native`

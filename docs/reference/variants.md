@@ -82,7 +82,7 @@ Two asymmetries catch people out: `lean` **reads** Ogg, AAC and FLAC but does no
 (those muxers are `intermediate`), and several `intermediate` codecs decode without an encoder. See
 [limits](limits.md#what-is-deliberately-left-out-of-the-codec-and-filter-sets).
 
-The authoritative source for any build is the allowlist in `build/libav.sh` at the commit named in
+The authoritative source for any build is the allowlist in `build/enable-lists.sh` at the commit named in
 that release's `provenance.json`. **`provenance.json` itself does not carry a codec matrix** — it
 records the FFmpeg version, build tag, commit, and a per-artifact file/licence/H.264-encoder/profile
 record. `--report` is a smoke test that probes a fixed handful of names, not an inventory either.
