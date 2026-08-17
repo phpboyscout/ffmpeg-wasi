@@ -1,17 +1,26 @@
-// Package buildlist reads the component allowlist the build claims for a given
-// (profile, variant).
+// Package buildlist reads what this repository declares a build should produce:
+// the component allowlist for a given (profile, variant), the FFmpeg version, and
+// the job-spec vocabulary version.
 //
-// It does NOT reimplement the composition. It runs build/enable-lists.sh, which
-// is the same file build/libav.sh sources to configure FFmpeg, and parses the
-// flags that come back. A Go reimplementation of that shell would drift from the
-// build silently, and a conformance check comparing an artifact against a stale
-// idea of what was requested asserts nothing useful (spec 0036 D3).
+// It does NOT reimplement any of those. It runs build/enable-lists.sh and
+// build/ffmpeg-version.sh — the same files the build itself runs — and reads
+// AFMPEG_VOCAB_VERSION out of src/driver.c. A Go reimplementation of that shell
+// would drift from the build silently, and a conformance check comparing an
+// artifact against a stale idea of what was requested asserts nothing useful
+// (spec 0036 D3).
+//
+// Everything here is one side of a conformance assertion: the declaration. The
+// other side is the artifact, read through internal/engine.
 package buildlist
 
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -153,6 +162,70 @@ func LoadGPLOnly(repoRoot string) (map[Claim]bool, error) {
 		out[Claim{Kind: kind, Name: name}] = true
 	}
 	return out, nil
+}
+
+// FFmpegVersion returns the FFmpeg version this repository builds, by running
+// build/ffmpeg-version.sh — the resolver both Dockerfiles and every pipeline job
+// use, reading build/ffmpeg-version.txt (spec 0035 D3).
+//
+// Running the script rather than parsing the file keeps one resolver: the file
+// carries comments and the script decides what counts as the version, so a second
+// reader here could disagree with the build about its own version.
+//
+// CI_COMMIT_TAG is cleared for the child, because the script also enforces that a
+// release tag agrees with the file. That guard belongs to the pipeline; a test
+// asking "what does this repo build" must not fail on a mismatched tag, or the
+// suite would go red for a reason that has nothing to do with any artifact.
+func FFmpegVersion(repoRoot string) (string, error) {
+	cmd := exec.Command("sh", "build/ffmpeg-version.sh")
+	cmd.Dir = repoRoot
+	cmd.Env = append(cmd.Environ(), "CI_COMMIT_TAG=")
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ffmpeg-version.sh: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	version := strings.TrimSpace(stdout.String())
+	if version == "" {
+		return "", fmt.Errorf("ffmpeg-version.sh printed no version")
+	}
+	return version, nil
+}
+
+// vocabDefine matches the engine's vocabulary-version declaration in
+// src/driver.c. Anchored to a #define at the start of a line so a mention in a
+// comment cannot satisfy it.
+var vocabDefine = regexp.MustCompile(`(?m)^#define[ \t]+AFMPEG_VOCAB_VERSION[ \t]+([0-9]+)`)
+
+// VocabVersion returns the job-spec vocabulary version src/driver.c declares.
+//
+// There is no script to run for this one — the declaration is a #define compiled
+// into the engine — so this reads the C source. That is still the build's own
+// statement of the answer rather than a copy of it: a constant repeated in Go
+// would have to be remembered on every vocabulary bump, and forgetting it would
+// make the check pass while comparing the artifact against the wrong number.
+func VocabVersion(repoRoot string) (int, error) {
+	path := filepath.Join(repoRoot, "src", "driver.c")
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	m := vocabDefine.FindSubmatch(src)
+	if m == nil {
+		return 0, fmt.Errorf("%s declares no AFMPEG_VOCAB_VERSION", path)
+	}
+	n, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		return 0, fmt.Errorf("%s: AFMPEG_VOCAB_VERSION %q is not a number: %w", path, m[1], err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("%s: AFMPEG_VOCAB_VERSION is %d, want a positive version", path, n)
+	}
+	return n, nil
 }
 
 // parse pulls the component claims out of a configure flag string.
