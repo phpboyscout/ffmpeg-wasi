@@ -39,6 +39,7 @@ include:
 stages:
   - validate
   - build
+  - test
   - sign
   - release
   - notify
@@ -253,6 +254,56 @@ build:native:gpl:full:
   variables:
     VARIANT: gpl
     PROFILE: full
+
+# The engine conformance suite (spec 0036). Runs against the artifacts the build
+# stage just produced, asserting that every component build/enable-lists.sh claims
+# for a (profile, variant) is actually in the binary built from it — the check
+# that catches a component silently dropped by an FFmpeg bump.
+#
+# Deliberately NOT in the engine-build resource group: that group exists to stop
+# ten parallel FFmpeg *compiles* exhausting the runners (0035 D7). This job
+# compiles no C and runs in minutes, so serialising it behind the builds would add
+# to an already long pipeline for no benefit (0036 D8).
+test:
+  stage: test
+  image: golang:1.26
+  rules: *engine-build-rules
+  interruptible: true
+  # Same optional needs as size-budget: run against whatever the pipeline built.
+  # A missing artifact is a skipped subtest, never a failure.
+  needs:
+    - job: build:lgpl
+      optional: true
+    - job: build:gpl
+      optional: true
+    - job: build:lgpl:intermediate
+      optional: true
+    - job: build:gpl:intermediate
+      optional: true
+    - job: build:native:lgpl
+      optional: true
+    - job: build:native:gpl
+      optional: true
+    - job: build:native:lgpl:intermediate
+      optional: true
+    - job: build:native:gpl:intermediate
+      optional: true
+    - job: build:native:lgpl:full
+      optional: true
+    - job: build:native:gpl:full
+      optional: true
+  variables:
+    # The build jobs deposit their artifacts in the job root; Discover() ignores
+    # anything whose name it cannot parse, so pointing at the whole directory is
+    # safe and needs no staging step.
+    FFMPEG_WASI_ARTIFACTS: "$CI_PROJECT_DIR"
+  before_script:
+    # Artifact restore does not always preserve the executable bit on the native
+    # drivers, and a driver that cannot be exec'd would look like a missing
+    # capability rather than a permissions problem.
+    - chmod +x ffmpeg-wasi-driver-linux-amd64-* 2>/dev/null || true
+  script:
+    - go test ./... -v
 
 # Size-budget gate (spec 0022): print each artifact's size vs its budget in
 # build/size-budget.txt and flag a profile that ballooned past its ceiling. Advisory
