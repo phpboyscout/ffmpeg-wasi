@@ -26,9 +26,26 @@ import (
 // Features is the WebAssembly feature set a real FFmpeg build needs. It is
 // shared with tools/run rather than restated there, so the smoke tool and the
 // suite cannot drift into configuring the runtime differently (spec 0036 D5).
+//
+// It must stay in step with afmpeg's runtimeCoreFeatures (pkg/afmpeg/setjmp.go),
+// which is the reference host: a module afmpeg can load and this cannot is a
+// module we cannot test.
+//
+// ExceptionHandling is not optional for the intermediate profile. Its C++
+// dependencies (harfbuzz, libass) compile exceptions to a wasm tag section, and
+// without this the module does not even compile:
+//
+//	tag section not supported as feature "exception-handling" is disabled
+//
+// tools/run omitted it and so could never load an intermediate module — half the
+// published wasm artifacts — while its own doc comment claimed it provided "the
+// same [features] the afmpeg runtime provides". Nothing caught it because
+// `just run` defaulted to the lean module. The conformance suite found it on its
+// first CI run.
 const Features = api.CoreFeaturesV2 |
 	experimental.CoreFeaturesExtendedConst |
-	experimental.CoreFeaturesTailCall
+	experimental.CoreFeaturesTailCall |
+	experimental.CoreFeaturesExceptionHandling
 
 type storeKey struct{}
 

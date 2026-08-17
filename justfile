@@ -5,9 +5,13 @@ set dotenv-load
 build variant="lgpl" profile="lean":
     docker build -f build/Dockerfile --build-arg VARIANT={{variant}} --build-arg PROFILE={{profile}} --target artifact -o dist .
 
-# Run the built lean engine under wazero (prints the capability report)
-run variant="lgpl":
-    go run ./tools/run dist/ffmpeg-wasi-{{variant}}.wasm
+# Run a built engine under wazero (prints the capability report). profile=lean
+# keeps the legacy artifact name; any other profile carries it in the name.
+run variant="lgpl" profile="lean":
+    #!/bin/sh
+    if [ "{{profile}}" = lean ]; then M="dist/ffmpeg-wasi-{{variant}}.wasm"
+    else M="dist/ffmpeg-wasi-{{profile}}-{{variant}}.wasm"; fi
+    go run ./tools/run "$M"
 
 # Run the engine test suite (spec 0036). Skips every artifact-backed test unless
 # `artifacts` names a directory of built engines — `go test ./...` alone should
