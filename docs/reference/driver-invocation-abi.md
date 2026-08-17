@@ -28,6 +28,38 @@ version, the linked FFmpeg/libav\* versions, and a probe of a few encoders/decod
 test, not a job. Paths inside the spec resolve against the mounted filesystem (see
 [Filesystem & devices](#filesystem-devices)).
 
+### `--capabilities`
+
+`--capabilities` prints the same ground truth **machine-readably**: one line of JSON naming every
+component actually linked into this binary, by kind, plus the engine's identity.
+
+```jsonc
+{"vocab_version":9,"ffmpeg_version":"n8.1.2",
+ "encoders":[…],"decoders":[…],"muxers":[…],"demuxers":[…],
+ "filters":[…],"bsfs":[…],"protocols":[…],"parsers":[…]}
+```
+
+It is built by **iterating what libav registered**, not by probing a list of names, so a component
+nobody thought to ask about still appears. That is what makes it usable as a conformance oracle: the
+engine test suite reconciles it against the allowlist `build/enable-lists.sh` claims for each
+(profile, variant), and a component the build asked for and did not get is a failure (spec 0036).
+
+Like `--report` it is an **invocation mode, not a job op** — it takes no spec, carries no `version`
+field, and has no [vocabulary](job-spec.md#versioning) implication.
+
+!!! note "configure names and runtime names are two namespaces"
+    A few components are called one thing by `configure` and another by the running library, because
+    configure identifies a component by its source symbol while the library reports the format's
+    public name. `--capabilities` reports the **library's** name:
+
+    | configure | `--capabilities` |
+    |---|---|
+    | `--enable-demuxer=image_png_pipe` | `png_pipe` |
+    | `--enable-demuxer=pcm_s16le` | `s16le` |
+
+    Container aliases are also **split**: the `mov,mp4,m4a,3gp,3g2,mj2` demuxer appears as six
+    separate entries, so a caller can ask about `mp4` without knowing it shares a demuxer with `mov`.
+
 ## Operations
 
 Four ops, dispatched on the spec's `"op"` string. Their field vocabulary is the
@@ -156,7 +188,7 @@ per-segment opens route over the same bridge. The reference host implementation 
 
 ## Where this is implemented
 
-`src/driver.c` (dispatch, gate, `--report`), `src/nativeio.c` (the IPC bridge), and afmpeg's
+`src/driver.c` (dispatch, gate, `--report`, `--capabilities`), `src/nativeio.c` (the IPC bridge), and afmpeg's
 `internal/vfs` (WASI devices) + `pkg/afmpeg/native` (IPC host). For how these fit together, see
 [Inside the engine](../explanation/engine-internals.md).
 

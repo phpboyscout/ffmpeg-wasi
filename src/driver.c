@@ -16,6 +16,8 @@
 // errors to stderr with a non-zero exit. See the reference docs (job-spec.md).
 //
 // `--report` (or no args) prints a capability report — a build smoke test.
+// `--capabilities` prints the same ground truth as one line of JSON, listing
+// every linked component by kind, for the conformance suite (spec 0036).
 //
 // Status: probe implemented; process is the next increment (spec 0007 §4).
 
@@ -25,7 +27,9 @@
 
 #include <libavutil/avutil.h>
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>       // av_bsf_iterate (--capabilities)
 #include <libavformat/avformat.h>
+#include <libavformat/avio.h>     // avio_enum_protocols (--capabilities)
 #include <libavfilter/avfilter.h>
 
 #include "third_party/cJSON/cJSON.h"
@@ -91,6 +95,126 @@ static int report(void) {
     for (int i = 0; dec[i]; i++) {
         printf("  %-10s %s\n", dec[i], avcodec_find_decoder_by_name(dec[i]) ? "yes" : "no");
     }
+    return 0;
+}
+
+// ---- machine-readable capability dump (spec 0036 D2) ---------------------
+//
+// `--capabilities` prints ONE LINE OF JSON on stdout naming every component
+// actually linked into this binary, by kind — plus the engine identity, so one
+// call answers both "which artifact is this" and "what is in it".
+//
+// Built by ITERATING what libav registered, never by probing a list of names.
+// Probing can only confirm what the caller already suspected, so it can never
+// surface a component gained or lost silently; iteration reports what is there.
+// That is what lets the conformance check (spec 0036 D3) survive an FFmpeg bump.
+//
+// This is an INVOCATION MODE like --report, not a job op: it carries no
+// AFMPEG_VOCAB_VERSION implication and needs no version stamp.
+
+// has_str reports whether arr already contains s (the component lists are
+// small; a linear scan is cheaper than carrying a set).
+static int has_str(const cJSON *arr, const char *s) {
+    const cJSON *it = NULL;
+    cJSON_ArrayForEach(it, arr) {
+        if (cJSON_IsString(it) && it->valuestring && strcmp(it->valuestring, s) == 0) return 1;
+    }
+    return 0;
+}
+
+// add_names appends a component name to arr, deduplicated. libav gives some
+// formats a COMMA-SEPARATED ALIAS LIST as their name — the mov demuxer is
+// "mov,mp4,m4a,3gp,3g2,mj2" — while build/libav.sh enables them one alias at a
+// time (--enable-demuxer=mov). Splitting here means the consumer compares like
+// with like instead of reimplementing this quirk.
+static void add_names(cJSON *arr, const char *name) {
+    if (!arr || !name) return;
+    while (*name) {
+        const char *comma = strchr(name, ',');
+        size_t len = comma ? (size_t)(comma - name) : strlen(name);
+        if (len > 0 && len < 128) {
+            char buf[128];
+            memcpy(buf, name, len);
+            buf[len] = '\0';
+            if (!has_str(arr, buf)) cJSON_AddItemToArray(arr, cJSON_CreateString(buf));
+        }
+        if (!comma) break;
+        name = comma + 1;
+    }
+}
+
+static int capabilities(void) {
+    cJSON *out = cJSON_CreateObject();
+    if (!out) return 1;
+
+    cJSON_AddNumberToObject(out, "vocab_version", AFMPEG_VOCAB_VERSION);
+    cJSON_AddStringToObject(out, "ffmpeg_version", av_version_info());
+
+    cJSON *encoders  = cJSON_AddArrayToObject(out, "encoders");
+    cJSON *decoders  = cJSON_AddArrayToObject(out, "decoders");
+    cJSON *muxers    = cJSON_AddArrayToObject(out, "muxers");
+    cJSON *demuxers  = cJSON_AddArrayToObject(out, "demuxers");
+    cJSON *filters   = cJSON_AddArrayToObject(out, "filters");
+    cJSON *bsfs      = cJSON_AddArrayToObject(out, "bsfs");
+    cJSON *protocols = cJSON_AddArrayToObject(out, "protocols");
+    cJSON *parsers   = cJSON_AddArrayToObject(out, "parsers");
+    if (!encoders || !decoders || !muxers || !demuxers || !filters || !bsfs || !protocols || !parsers) {
+        cJSON_Delete(out);
+        return 1;
+    }
+
+    void *it = NULL;
+    const AVCodec *codec = NULL;
+    while ((codec = av_codec_iterate(&it))) {
+        if (av_codec_is_encoder(codec)) add_names(encoders, codec->name);
+        if (av_codec_is_decoder(codec)) add_names(decoders, codec->name);
+    }
+
+    it = NULL;
+    const AVOutputFormat *ofmt = NULL;
+    while ((ofmt = av_muxer_iterate(&it))) add_names(muxers, ofmt->name);
+
+    it = NULL;
+    const AVInputFormat *ifmt = NULL;
+    while ((ifmt = av_demuxer_iterate(&it))) add_names(demuxers, ifmt->name);
+
+    it = NULL;
+    const AVFilter *filter = NULL;
+    while ((filter = av_filter_iterate(&it))) add_names(filters, filter->name);
+
+    it = NULL;
+    const AVBitStreamFilter *bsf = NULL;
+    while ((bsf = av_bsf_iterate(&it))) add_names(bsfs, bsf->name);
+
+    // Parsers are the one kind libav does not name: AVCodecParser carries only
+    // codec_ids. configure names them after the codec (--enable-parser=av1), so
+    // resolve each id back through the codec descriptor to get the same spelling.
+    it = NULL;
+    const AVCodecParser *parser = NULL;
+    while ((parser = av_parser_iterate(&it))) {
+        // sizeof rather than a named bound: the array's width is an internal
+        // detail that has changed across FFmpeg releases, and this suite exists
+        // to survive exactly that kind of change.
+        const size_t nids = sizeof(parser->codec_ids) / sizeof(parser->codec_ids[0]);
+        for (size_t i = 0; i < nids && parser->codec_ids[i] != AV_CODEC_ID_NONE; i++) {
+            const AVCodecDescriptor *d = avcodec_descriptor_get((enum AVCodecID)parser->codec_ids[i]);
+            if (d) add_names(parsers, d->name);
+        }
+    }
+
+    // Protocols are enumerated separately for input and output; build/libav.sh
+    // does not distinguish (--enable-protocol=file,pipe), so report the union.
+    for (int output = 0; output <= 1; output++) {
+        void *opaque = NULL;
+        const char *name = NULL;
+        while ((name = avio_enum_protocols(&opaque, output))) add_names(protocols, name);
+    }
+
+    char *json = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    if (!json) return 1;
+    printf("%s\n", json);
+    free(json);
     return 0;
 }
 
@@ -234,6 +358,9 @@ static int op_version(void) {
 int main(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--report") == 0) {
         return report();
+    }
+    if (strcmp(argv[1], "--capabilities") == 0) {
+        return capabilities();
     }
 
     cJSON *spec = cJSON_Parse(argv[1]);
