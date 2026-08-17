@@ -112,6 +112,59 @@ The report probes a fixed handful of codecs — `libopenh264`, `libx264`, `mjpeg
 `pcm_s16le` for encode; `h264`, `hevc`, `vp9`, `aac`, `mp3`, `opus` and `flac` for decode. It is a
 build smoke test, not an inventory: for the full set see [codecs](../reference/codecs.md).
 
+## Check what you built
+
+The conformance suite (spec 0036) drives built artifacts through the
+[driver ABI](../reference/driver-invocation-abi.md) and checks them against what this repository
+declares. Point it at a directory of artifacts:
+
+```sh
+just test dist            # or any directory of built engines
+```
+
+Artifacts are discovered **by filename** — `ffmpeg-wasi-<profile>-<variant>.wasm` and
+`ffmpeg-wasi-driver-linux-amd64-<profile>-<variant>`, with the lean profile keeping the shorter
+legacy name. A file whose name does not parse is ignored rather than guessed at, so pointing at a
+directory holding other things is safe. Every artifact-backed test **skips** when the directory is
+absent, because `go test ./...` should never require an FFmpeg build:
+
+```sh
+go test ./...            # everything artifact-backed skips
+```
+
+Two things are asserted, both against every artifact found:
+
+- **Capabilities** — every component `build/enable-lists.sh` claims for that (profile, variant) is
+  actually linked into the binary, read from `--capabilities`. A component the build asked for and
+  did not get is a failure; one present but never asked for is only noted, since FFmpeg pulls
+  dependencies in of its own accord. Absences upstream gates behind `--enable-gpl` are expected in
+  an lgpl build and listed as such.
+- **The ABI** — the four ops dispatch, a malformed request exits `2`, a too-new vocabulary exits
+  `3`, a processing failure exits `1`, stdout carries exactly one line of JSON and nothing else, and
+  `version` reports the FFmpeg version `build/ffmpeg-version.txt` names alongside the vocabulary
+  version `src/driver.c` declares.
+
+That last pair is worth knowing about when a result surprises you: if `version` disagrees with the
+files, the usual cause is a **stale artifact** — the directory holds an engine built from a different
+version of this repository, not a defect in the build.
+
+Both run in CI after the build stage, against all ten artifacts. The suite deliberately reports
+**properties**, not checksums: a byte-golden test would go red on every FFmpeg bump, which is the
+opposite of the job this suite exists to do.
+
+!!! note "Two known-failing defects"
+    Two `process` validation defects are asserted against their **documented** exit code and tagged
+    known-failing, because the engine currently exits `0` for both — see
+    [errors & exit codes](../reference/errors.md#how-to-tell-a-job-failed). They log rather than
+    fail, so the suite is green; fixing the engine turns them red asking for the tag to be removed.
+
+To see one side of the capability check on its own:
+
+```sh
+just show-claims lean lgpl wasm            # what the build asks configure for
+just capabilities dist/ffmpeg-wasi-lgpl.wasm   # what the artifact carries
+```
+
 ## What the build does
 
 Five small scripts under `build/`, orchestrated by `build/Dockerfile`:
