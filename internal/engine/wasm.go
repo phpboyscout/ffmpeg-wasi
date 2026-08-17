@@ -98,16 +98,32 @@ type WASM struct {
 	Mount string
 }
 
-// Run compiles and instantiates the module per invocation. That is deliberate:
-// the engine is a one-shot program that exits, so reusing an instance across
-// calls would leak state between assertions.
+// compilationCache shares wazero's compiled form of a module across every
+// invocation in the process.
+//
+// It changes no semantics — each Run below still builds its own runtime and its
+// own instance, so the one-shot property is intact — but it moves compilation from
+// once per invocation to once per module. Phase A invoked each artifact twice and
+// did not care; phase B invokes it around forty times, and recompiling a module of
+// 5–13 MB every time was the dominant cost of the whole suite.
+//
+// In-memory and never closed, which is what a test binary wants: the process is
+// short-lived and the cache is the reason it is short-lived.
+var compilationCache = wazero.NewCompilationCache()
+
+// Run compiles and instantiates the module per invocation. Instantiation per call
+// is deliberate: the engine is a one-shot program that exits, so reusing an
+// instance across calls would leak state between assertions. Compilation is shared
+// through compilationCache, which is not the same thing.
 func (w WASM) Run(ctx context.Context, args ...string) (Result, error) {
 	wasm, err := os.ReadFile(w.Path)
 	if err != nil {
 		return Result{}, fmt.Errorf("read module: %w", err)
 	}
 
-	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCoreFeatures(Features))
+	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().
+		WithCoreFeatures(Features).
+		WithCompilationCache(compilationCache))
 	defer rt.Close(ctx)
 
 	if _, err := rt.NewHostModuleBuilder("env").
