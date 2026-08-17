@@ -42,13 +42,15 @@ func (c Claim) String() string { return "--enable-" + c.Kind + "=" + c.Name }
 // permanently red for a reason everyone knows about is a check that gets
 // switched off.
 //
-// These are expressed as RULES rather than as a table of aliases deliberately. A
-// rule describes the naming convention and cannot excuse anything outside it; a
-// hand-maintained alias table is one typo away from silently excusing a
-// component that really did disappear, which is the failure this check exists to
-// catch.
+// Where the difference follows a convention it is expressed as a RULE, because a
+// rule cannot excuse anything outside the convention it describes. Where upstream
+// simply spells a component differently, there is no rule to write and the entry
+// goes in configureAliases below.
 func (c Claim) RuntimeNames() []string {
 	names := []string{c.Name}
+	if alias, ok := configureAliases[c]; ok {
+		names = append(names, alias)
+	}
 	if c.Kind != "demuxer" && c.Kind != "muxer" {
 		return names
 	}
@@ -62,6 +64,31 @@ func (c Claim) RuntimeNames() []string {
 		names = append(names, rest)
 	}
 	return names
+}
+
+// configureAliases maps a configure component name to the name libav actually
+// registers it under, for the cases where the two namespaces differ ad hoc
+// rather than by a convention.
+//
+// This is a table where RuntimeNames' image_*_pipe and pcm_* handling is a rule,
+// and the distinction is deliberate. Those two families follow a pattern that can
+// be written as a transformation; these simply spell the component differently
+// upstream, and there is no rule to write. The first version of this check tried
+// to hold the line at rules only. The intermediate profile showed that was not
+// tenable.
+//
+// An entry asserts that a component has two names. It cannot hide a component
+// that has genuinely gone, because the check still requires it to be present
+// under one of them. What a WRONG entry can do is map a claim onto an unrelated
+// component that happens to be present — so every entry cites the upstream
+// source it was read from, verified against FFmpeg n8.1.2, and a new one needs
+// the same. Do not add an entry to make a red check green without opening the
+// source and confirming the two names are the same component.
+var configureAliases = map[Claim]string{
+	{Kind: "decoder", Name: "movtext"}:    "mov_text",   // libavcodec/movtextdec.c:595
+	{Kind: "encoder", Name: "movtext"}:    "mov_text",   // libavcodec/movtextenc.c:707
+	{Kind: "encoder", Name: "libvpx_vp8"}: "libvpx",     // libavcodec/libvpxenc.c:2085
+	{Kind: "encoder", Name: "libvpx_vp9"}: "libvpx-vp9", // libavcodec/libvpxenc.c:2184
 }
 
 // kinds are the --enable-<kind>= flags that name an individual component. Other

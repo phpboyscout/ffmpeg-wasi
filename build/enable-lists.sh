@@ -162,7 +162,7 @@ COMPONENT_FLAGS="$ENABLE $OPENH264_FLAGS $GPL_FLAGS"
 # Format: <kind>=<name>, space-separated. Add an entry ONLY for a component
 # upstream gates on a licence — never to silence a component that has genuinely
 # gone missing, which is the failure this check exists to catch.
-GPL_ONLY_COMPONENTS="filter=cropdetect"
+GPL_ONLY_COMPONENTS="filter=cropdetect filter=boxblur"
 
 if [ "${PRINT_COMPONENT_FLAGS:-0}" = 1 ]; then
   printf '%s\n' "$COMPONENT_FLAGS"
