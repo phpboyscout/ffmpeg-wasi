@@ -70,6 +70,30 @@ workflow:
         - src/**/*
         - .gitlab-ci.yml
 
+# The conformance suite runs on everything above — an artifact change is the reason
+# it exists — AND on changes to the suite itself, which the build rules do not
+# cover. Without this a merge request touching only internal/** got no pipeline job
+# at all: the suite was not compiled, let alone run, so a test that did not build
+# would reach the default branch unnoticed.
+#
+# On a suite-only merge request nothing is built, so every artifact-backed test
+# skips (0036 D6) and what the job proves is that the suite compiles and its
+# artifact-free assertions hold. That is much less than a full run, and it is
+# deliberately not bought at the price of a ten-artifact build for a change that
+# cannot alter an artifact — runner slots are the scarce resource (0035 D7).
+.engine-test-rules: &engine-test-rules
+  - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+  - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    changes:
+      paths:
+        - build/**/*
+        - src/**/*
+        - .gitlab-ci.yml
+        - internal/**/*
+        - tools/**/*
+        - go.mod
+        - go.sum
+
 validate:
   stage: validate
   # The alpine variant ships a shell (the scratch shellcheck image sets shellcheck
@@ -256,9 +280,10 @@ build:native:gpl:full:
     PROFILE: full
 
 # The engine conformance suite (spec 0036). Runs against the artifacts the build
-# stage just produced, asserting that every component build/enable-lists.sh claims
-# for a (profile, variant) is actually in the binary built from it — the check
-# that catches a component silently dropped by an FFmpeg bump.
+# stage just produced, asserting two things about each: that every component
+# build/enable-lists.sh claims for a (profile, variant) is actually in the binary
+# built from it — the check that catches a component silently dropped by an FFmpeg
+# bump — and that the driver ABI behaves as documented, down to the exit codes.
 #
 # Deliberately NOT in the engine-build resource group: that group exists to stop
 # ten parallel FFmpeg *compiles* exhausting the runners (0035 D7). This job
@@ -267,7 +292,7 @@ build:native:gpl:full:
 test:
   stage: test
   image: golang:1.26
-  rules: *engine-build-rules
+  rules: *engine-test-rules
   interruptible: true
   # Same optional needs as size-budget: run against whatever the pipeline built.
   # A missing artifact is a skipped subtest, never a failure.
