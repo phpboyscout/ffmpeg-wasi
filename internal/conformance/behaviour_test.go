@@ -124,7 +124,16 @@ func runJob(t *testing.T, ws *engine.Workspace, a engine.Artifact, spec any) []b
 		t.Fatalf("%s: job exited %d, want 0.\nspec:   %s\nstderr: %s",
 			a, res.ExitCode, body, strings.TrimSpace(res.Stderr))
 	}
-	return []byte(strings.TrimSpace(res.Stdout))
+
+	out := []byte(strings.TrimSpace(res.Stdout))
+
+	// File the reply under the job that produced it, so the parity comparison can
+	// ask whether two artefacts running the same job answered the same way (spec
+	// 0037 D1). Purely additive: every assertion in the caller still applies, and
+	// a caller that fails still fails for its own reason.
+	recordForParity(a, body, out)
+
+	return out
 }
 
 // probeReply is the subset of a probe reply these tests assert on.
