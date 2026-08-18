@@ -1184,12 +1184,18 @@ int op_process(const cJSON *spec) {
 
     Ctx c = {0};
     int rc = 0;
+    // A malformed request is tracked separately from rc, NOT returned through it.
+    // rc carries libav return codes, and libav uses positive values for success —
+    // avformat_write_header answers AVSTREAM_INIT_IN_INIT_OUTPUT (1) when the codec
+    // was already initialised. Propagating rc as the exit code would let that 1
+    // surface as "processing failure" on a job that worked.
+    int malformed = 0;
 
     // Parse every output (muxer + codecs + options + map).
     const cJSON *os = NULL;
     cJSON_ArrayForEach(os, outputs) {
         if (c.n_out >= MAX_OUTPUTS) { fprintf(stderr, "ffmpeg-wasi: process: too many outputs\n"); rc = AVERROR(EINVAL); goto end; }
-        if ((rc = parse_output(&c.out[c.n_out], os)) != 0) goto end;
+        if ((rc = parse_output(&c.out[c.n_out], os)) != 0) { malformed = 1; goto end; }
         c.n_out++;
     }
     if (c.n_out > 1) {
@@ -1506,5 +1512,11 @@ end:
     for (int i = 0; i < c.n_in; i++) afio_close_input(&c.in[i]);
     cJSON_Delete(c.analysis); // NULL-safe; non-NULL only on an error path before emission
     av_dict_free(&c.analysis_last);
+    // A malformed request is 2 ("fix the spec"), a runtime failure 1 ("the request
+    // was fine, the work could not be done"). Before this distinction was made the
+    // parse_output rejections above returned 2 into rc and were flattened to 0 —
+    // a host keying on the exit code read a rejected job as a success that happened
+    // to produce no files.
+    if (malformed) return 2;
     return rc < 0 ? 1 : 0;
 }

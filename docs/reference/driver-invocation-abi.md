@@ -90,8 +90,8 @@ Four ops, dispatched on the spec's `"op"` string. Their field vocabulary is the
 
 `process` and `frames` collapse every runtime failure to `1`; the specific cause is the stderr line.
 [Errors & exit codes](errors.md) maps each message to its cause and its code — **including two
-`process` validation failures that currently exit `0`**, which a host keying only on the exit code
-must know about.
+`process` validation failures that exited `0` in releases up to `n8.1.2-12`**, which a host still
+driving one of those engines must know about.
 
 ## Version negotiation
 

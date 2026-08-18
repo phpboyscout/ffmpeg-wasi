@@ -25,14 +25,16 @@ Exit `3` is deliberately distinct from `2` so a caller can tell *"upgrade ffmpeg
 *"fix the job"* without parsing the message. See
 [version negotiation](driver-invocation-abi.md#version-negotiation).
 
-!!! warning "Two `process` validation failures currently exit `0`"
-    A `process` job whose **output entry has no `path`, or no video/audio/subtitle codec**, and one
-    that sets **both `duration` and `end`**, print their error to stderr and then exit **`0`** with
-    empty stdout — the malformed-request code never reaches the caller. A host that keys only on
-    the exit code will read this as a success that produced no files.
+!!! note "Two `process` validation failures exited `0` up to n8.1.2-12"
+    In releases **up to and including `n8.1.2-12`**, a `process` job whose output entry had no
+    `path` or no video/audio/subtitle codec, and one setting both `duration` and `end`, printed
+    their error to stderr and then exited **`0`** with empty stdout — the malformed-request code
+    never reached the caller, so a host keying on the exit code read a rejected job as a success
+    that produced no files. Both exit `2` in later releases.
 
-    Until that is fixed, treat **stdout being empty on a `process` job as a failure** regardless of
-    the exit code. Every other failure path exits `1`, `2` or `3` correctly.
+    A host that carried the workaround for this — treating empty stdout on a `process` job as a
+    failure whatever the exit code — can keep it. It stays correct, and it is what protects a caller
+    still running one of those engines.
 
 ## Dispatch and version-gate errors
 
@@ -63,8 +65,8 @@ bad file in a batch does not lose the results for the others.
 | Message | Exit | Fix |
 |---|---:|---|
 | `process: need at least one input and one output` | `2` | supply non-empty `inputs[]` and `outputs[]` |
-| `process: each output needs path and a video, audio and/or subtitle codec` | `0` — see the warning above | give the output a `path` and at least one of `video_codec` / `audio_codec` / `subtitle_codec` |
-| ``process: `duration` and `end` are mutually exclusive on <path>`` | `0` — see the warning above | set one or the other, never both |
+| `process: each output needs path and a video, audio and/or subtitle codec` | `2` — `0` up to n8.1.2-12, see the note above | give the output a `path` and at least one of `video_codec` / `audio_codec` / `subtitle_codec` |
+| ``process: `duration` and `end` are mutually exclusive on <path>`` | `2` — `0` up to n8.1.2-12, see the note above | set one or the other, never both |
 | ``process: with multiple outputs each must set `map` `` | `1` | with two or more outputs, every one must claim its pads or streams |
 | `process: too many outputs` | `1` | at most 8 — see [limits](limits.md#how-many-inputs-outputs-and-streams-can-one-job-have) |
 | `process: too many graph inputs (max 32)` | `1` | fewer graph input pads |

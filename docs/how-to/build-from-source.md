@@ -152,11 +152,12 @@ Both run in CI after the build stage, against all ten artifacts. The suite delib
 **properties**, not checksums: a byte-golden test would go red on every FFmpeg bump, which is the
 opposite of the job this suite exists to do.
 
-!!! note "Two known-failing defects"
-    Two `process` validation defects are asserted against their **documented** exit code and tagged
-    known-failing, because the engine currently exits `0` for both — see
-    [errors & exit codes](../reference/errors.md#how-to-tell-a-job-failed). They log rather than
-    fail, so the suite is green; fixing the engine turns them red asking for the tag to be removed.
+!!! note "Running the suite against a released artifact"
+    The suite asserts the ABI as documented, so it goes red against a release whose behaviour has
+    since been corrected — two `process` validation failures exited `0` rather than `2` up to
+    `n8.1.2-12` ([errors & exit codes](../reference/errors.md#how-to-tell-a-job-failed)). The
+    capability half needs `--capabilities`, which no release before that carries at all. Build the
+    artifacts you want to check.
 
 To see one side of the capability check on its own:
 

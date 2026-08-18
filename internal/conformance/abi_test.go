@@ -12,8 +12,9 @@ package conformance
 // one case that does reach for a file is asserted to fail. Media that actually
 // decodes is phase C's business (spec 0036 D7).
 //
-// Two exceptions are tagged known-failing rather than asserted green; see
-// TestProcessRejectsAMalformedOutputEntry.
+// Every assertion here is asserted green. Phase B shipped with two known-failing
+// exceptions, both since fixed in the engine; the assertions they were written
+// against are now plain — see TestProcessRejectsAMalformedOutputEntry.
 
 import (
 	"context"
@@ -358,55 +359,36 @@ func TestProbeToleratesAnUnopenableInput(t *testing.T) {
 	}
 }
 
-// knownFailingSince dates the exceptions below, so their age is visible rather
-// than inferred from git.
-const knownFailingSince = "2026-08-17"
-
-// TestProcessRejectsAMalformedOutputEntry covers the two documented defects, and
-// is the one place in phase B where the engine does not currently meet its
-// contract.
+// TestProcessRejectsAMalformedOutputEntry asserts the output-entry validation
+// rejections, which are malformed requests and exit `2` like every other one.
 //
-// docs/reference/errors.md records both: an output entry with no `path` or no
-// codec, and one setting both `duration` and `end`, print their error to stderr
-// and then exit `0` with empty stdout — parse_output returns 2, and op_process's
-// `return rc < 0 ? 1 : 0` turns that into success. Spec 0036 OQ1 resolved to
-// assert the DOCUMENTED code and tag these two as known-failing, so the suite is
-// green on n8.1.2 without blessing a defect as correct.
+// These were phase B's two known-failing exceptions until the engine was fixed:
+// parse_output returned 2 and op_process flattened it with `return rc < 0 ? 1 : 0`,
+// so both printed to stderr and then exited `0` with empty stdout — a host keying
+// on the exit code read a rejected job as a success that produced no files. Kept as
+// its own test rather than folded into TestMalformedRequestExitsTwo, because these
+// are the cases where "a malformed request exits 2" was untrue, and a regression
+// here deserves to be named rather than to arrive as one row among fifteen.
 //
-// The exception is written to RETIRE ITSELF: fix the engine and this test goes red
-// asking for the tag to be removed. An exception that cannot notice its own fix is
-// how a two-item list becomes a ten-item one.
+// Three inputs, two defects — missing path and missing codec trip the same check.
 //
-// THERE ARE TWO EXCEPTIONS, exercised by three inputs — the missing-path and
-// missing-codec inputs trip the same validation check and are the same defect. The
-// count matters: spec 0036 OQ1 says phase B ships with exactly two, and a list that
-// grows means the question should be reopened. Count defects, not table rows.
-//
-// Two things are asserted unconditionally, because a host relies on them today:
-// the error reaches stderr, and stdout is empty — which is the workaround the
-// documentation prescribes ("treat stdout being empty on a `process` job as a
-// failure regardless of the exit code").
+// Stdout being empty is still asserted. It was the workaround the documentation
+// prescribed while the exit code was wrong, and it remains the ABI's rule: a failed
+// invocation writes to stderr and leaves stdout alone.
 func TestProcessRejectsAMalformedOutputEntry(t *testing.T) {
-	// defect names the exception an input belongs to, so the known-failing log
-	// says which of the two it is rather than implying a third.
-	const (
-		defectOutputEntry = "an output entry with no path or no codec"
-		defectWindow      = "an output setting both duration and end"
-	)
-
-	cases := []struct{ name, defect, arg, wantStderr string }{
+	cases := []struct{ name, arg, wantStderr string }{
 		{
-			"an output with no path", defectOutputEntry,
+			"an output with no path",
 			`{"op":"process","inputs":[{"path":"a.mp4"}],"outputs":[{"video_codec":"mpeg4"}]}`,
 			"each output needs path and a video, audio and/or subtitle codec",
 		},
 		{
-			"an output with no codec", defectOutputEntry,
+			"an output with no codec",
 			`{"op":"process","inputs":[{"path":"a.mp4"}],"outputs":[{"path":"out.mp4"}]}`,
 			"each output needs path and a video, audio and/or subtitle codec",
 		},
 		{
-			"an output setting both duration and end", defectWindow,
+			"an output setting both duration and end",
 			`{"op":"process","inputs":[{"path":"a.mp4"}],"outputs":[{"path":"out.mp4","video_codec":"mpeg4","duration":5,"end":10}]}`,
 			"`duration` and `end` are mutually exclusive",
 		},
@@ -418,34 +400,16 @@ func TestProcessRejectsAMalformedOutputEntry(t *testing.T) {
 
 			for _, c := range cases {
 				res := invoke(t, a, c.arg)
-
-				// Holds under the defect and under the fix alike.
+				if res.ExitCode != 2 {
+					t.Errorf("%s: %s: exited %d, want 2 (a malformed request). Exiting 0 here is the defect "+
+						"this test was written against: the rejection never reaches a host that keys on the "+
+						"exit code. stderr: %q", a, c.name, res.ExitCode, strings.TrimSpace(res.Stderr))
+				}
 				if !strings.Contains(res.Stderr, c.wantStderr) {
 					t.Errorf("%s: %s: stderr does not carry %q: %q",
 						a, c.name, c.wantStderr, strings.TrimSpace(res.Stderr))
 				}
-				if res.Stdout != "" {
-					t.Errorf("%s: %s: wrote to stdout on a rejected spec, which breaks the workaround the "+
-						"documentation prescribes — empty stdout is how a host detects this today: %q",
-						a, c.name, res.Stdout)
-				}
-
-				switch res.ExitCode {
-				case 2:
-					t.Errorf("%s: %s: exited 2, which is the DOCUMENTED code — the defect %q is fixed.\n"+
-						"Remove its known-failing exception (tagged %s) and the warning at "+
-						"docs/reference/errors.md, and assert exit 2 plainly.",
-						a, c.name, c.defect, knownFailingSince)
-				case 0:
-					t.Logf("%s: %s: KNOWN-FAILING since %s — exited 0, want 2. Defect: %s. parse_output "+
-						"returns 2 and op_process collapses it with `return rc < 0 ? 1 : 0` (src/process.c). "+
-						"Documented at docs/reference/errors.md; spec 0036 OQ1.",
-						a, c.name, knownFailingSince, c.defect)
-				default:
-					t.Errorf("%s: %s: exited %d — neither the documented 2 nor the known 0. The behaviour has "+
-						"changed to a third thing, so this exception no longer describes it. stderr: %q",
-						a, c.name, res.ExitCode, strings.TrimSpace(res.Stderr))
-				}
+				wantSilentStdout(t, a, res, c.name)
 			}
 		})
 	}
