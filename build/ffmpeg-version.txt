@@ -4,11 +4,11 @@
 # pipeline and both Dockerfiles read, so there is nowhere for a second copy to
 # drift from this one.
 #
-# A release tag's version prefix must equal this value: n8.1.2-13 is fine while
-# this reads n8.1.2, and tagging n9.0.1-1 without first landing the bump here
-# fails the pipeline. Bumping FFmpeg therefore means editing this line in a merge
-# request — and that merge request builds the new version, which is the evidence
-# the tag then rests on.
+# A release tag's version prefix must equal this value: while this file reads
+# n9.0.1, tagging n9.0.1-1 is fine and tagging n8.1.2-13 fails the pipeline.
+# Bumping FFmpeg therefore means editing this line in a merge request — and that
+# merge request builds the new version, which is the evidence the tag then rests
+# on.
 #
-# One bare version, e.g. n8.1.2. Blank lines and # comments are ignored.
-n8.1.2
+# One bare version, e.g. n9.0.1. Blank lines and # comments are ignored.
+n9.0.1
