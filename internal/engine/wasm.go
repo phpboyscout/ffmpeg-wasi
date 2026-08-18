@@ -121,9 +121,17 @@ func (w WASM) Run(ctx context.Context, args ...string) (Result, error) {
 		return Result{}, fmt.Errorf("read module: %w", err)
 	}
 
+	// WithCloseOnContextDone is what makes ctx cancellation reach the guest. It is
+	// off by default, and without it a guest that blocks forever blocks this
+	// goroutine forever: the caller's timeout would expire with nothing to observe
+	// it. That is not hypothetical here — Matroska muxing HANGS on a mount with no
+	// /dev/urandom, so the suite's deadline is only real with this set. It costs
+	// periodic checks in the compiled code, which is the price of a hang being
+	// reported as a hang.
 	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().
 		WithCoreFeatures(Features).
-		WithCompilationCache(compilationCache))
+		WithCompilationCache(compilationCache).
+		WithCloseOnContextDone(true))
 	defer rt.Close(ctx)
 
 	if _, err := rt.NewHostModuleBuilder("env").
