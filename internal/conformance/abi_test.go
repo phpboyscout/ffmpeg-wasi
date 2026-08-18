@@ -323,14 +323,18 @@ func TestProcessingFailureExitsOne(t *testing.T) {
 }
 
 // TestProbeToleratesAnUnopenableInput pins INTENDED behaviour that looks like the
-// known-failing pair below but is not.
+// process defects below but is not.
 //
 // probe reports an unopenable input inside an otherwise normal reply and exits
 // `0`, so one bad file in a batch does not lose the results for the others
-// (docs/reference/errors.md, the probe section). Unlike the two process cases,
-// stdout is NOT empty here — the reply carries the failure — so a host has
-// everything it needs from a successful exit. Asserted explicitly so nobody
-// "fixes" it into a non-zero exit while tidying up the real defect.
+// (docs/reference/errors.md, the probe section). The resemblance is only skin
+// deep: those two exited `0` on a spec they had REJECTED, with empty stdout and
+// nothing for a caller to act on. Here stdout carries the reply, the failure is
+// named inside it, and exiting `0` is the whole point.
+//
+// Asserted explicitly so nobody "fixes" this into a non-zero exit on the strength
+// of that resemblance — which was a live risk while the two sat side by side, and
+// is why they were never lumped together.
 func TestProbeToleratesAnUnopenableInput(t *testing.T) {
 	for _, a := range artifacts(t) {
 		t.Run(a.String(), func(t *testing.T) {
