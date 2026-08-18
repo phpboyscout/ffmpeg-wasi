@@ -132,7 +132,7 @@ absent, because `go test ./...` should never require an FFmpeg build:
 go test ./...            # everything artifact-backed skips
 ```
 
-Two things are asserted, both against every artifact found:
+Three things are asserted, all against every artifact found:
 
 - **Capabilities** — every component `build/enable-lists.sh` claims for that (profile, variant) is
   actually linked into the binary, read from `--capabilities`. A component the build asked for and
@@ -143,12 +143,20 @@ Two things are asserted, both against every artifact found:
   `3`, a processing failure exits `1`, stdout carries exactly one line of JSON and nothing else, and
   `version` reports the FFmpeg version `build/ffmpeg-version.txt` names alongside the vocabulary
   version `src/driver.c` declares.
+- **Behaviour** — that `probe`, `process` and `frames` actually do the thing: stream counts, codecs,
+  dimensions, sample rates, durations within tolerance, and extracted frames landing on disk as
+  decodable images. The media is generated in pure Go, so "the engine read 2.0 seconds" is checked
+  against arithmetic rather than against the engine's own earlier output.
 
-That last pair is worth knowing about when a result surprises you: if `version` disagrees with the
-files, the usual cause is a **stale artifact** — the directory holds an engine built from a different
-version of this repository, not a defect in the build.
+The version assertion is worth knowing about when a result surprises you: if `version` disagrees with
+the files, the usual cause is a **stale artifact** — the directory holds an engine built from a
+different version of this repository, not a defect in the build.
 
-Both run in CI after the build stage, against all ten artifacts. The suite deliberately reports
+Some behavioural tests **skip on a lean build**, saying so and why: WebM muxing needs a VP8/VP9/AV1
+or Opus/Vorbis encoder that only the richer profiles carry. A skip means "this build cannot do that",
+never "this was not checked".
+
+All three run in CI after the build stage, against all ten artifacts. The suite deliberately reports
 **properties**, not checksums: a byte-golden test would go red on every FFmpeg bump, which is the
 opposite of the job this suite exists to do.
 
