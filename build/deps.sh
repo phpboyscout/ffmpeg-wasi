@@ -50,6 +50,39 @@ LIBASS_SHA256=da7c348deb6fa6c24507afab2dee7545ba5dd5bbf90a137bfe9e738f7df68537
 
 mkdir -p "$PREFIX"
 
+# git_clone <url> <ref> <destdir> — clone one pinned ref, with the same retry
+# discipline fetch_tarball has had since the release CDNs proved flaky.
+#
+# The clones never got it, and they are now the dominant cause of a red pipeline:
+# five jobs in one run died on code.videolan.org returning a 502 or an HTML error
+# page mid-git-protocol, each after already spending minutes building the
+# dependencies ahead of it (ffmpeg-wasi#33).
+#
+# The exposure is structural rather than bad luck. A release build needs four
+# third-party hosts healthy at the same moment — code.videolan.org (x264, dav1d),
+# bitbucket.org (x265), gitlab.com (SVT-AV1) and github.com (zlib, openh264,
+# libvpx) — and the `full` profiles need the most of them and take the longest, so
+# they are both the likeliest to be hit and the most expensive to redo.
+#
+# The destination is removed before each attempt: a clone that dies part-way
+# leaves a directory behind, and git refuses to clone into one that is not empty,
+# so without this the retry fails for a different reason than the original.
+git_clone() {
+  url="$1"; ref="$2"; dest="$3"
+  n=0
+  while [ "$n" -lt 5 ]; do
+    n=$((n + 1))
+    rm -rf "$dest"
+    if git clone "$url" --depth=1 --branch "$ref" "$dest"; then
+      return 0
+    fi
+    echo "clone: $url@$ref failed (attempt $n/5)" >&2
+    sleep $((n * 5))
+  done
+  echo "clone: giving up on $url@$ref after $n attempts" >&2
+  return 1
+}
+
 # fetch_tarball <destdir> <sha256> <url...> — download, verify, and extract a
 # release tarball (which ships a pre-generated ./configure, so the image needs no
 # autoconf/automake). Tries each mirror URL in turn with retries (release CDNs —
@@ -252,7 +285,7 @@ build_libwebp() {
 # asm), and wasi has neither threads nor cpuid, so multithread + runtime CPU detect
 # are off. VP9 encode is notably slow single-threaded (documented on the codec).
 build_libvpx() {
-  git clone https://github.com/webmproject/libvpx.git --depth=1 --branch "$VPX_VERSION" /libvpx
+  git_clone https://github.com/webmproject/libvpx.git "$VPX_VERSION" /libvpx
   cd /libvpx
   if [ "$TARGET" = native ]; then
     # libvpx pulls no external deps, so keep $PREFIX/include OFF its own compile
@@ -367,7 +400,7 @@ build_libass() {
 # build_zlib cross-compiles zlib (permissive) to wasm32-wasi, static. FFmpeg's
 # native PNG codec needs it, so both variants get it.
 build_zlib() {
-  git clone https://github.com/madler/zlib.git --depth=1 --branch "$ZLIB_VERSION" /zlib
+  git_clone https://github.com/madler/zlib.git "$ZLIB_VERSION" /zlib
   cd /zlib
   # zlib's configure uses CC/CFLAGS/AR from toolchain.sh; clang cross-links its tests.
   ./configure --prefix="$PREFIX" --eprefix="$PREFIX" --static \
@@ -406,7 +439,7 @@ build_x264() {
 # artifact's AVC *patent* posture (self-compiled → outside Cisco's binary grant)
 # is covered in docs/explanation/licensing.md.
 build_openh264() {
-  git clone https://github.com/cisco/openh264.git --depth=1 --branch "$OPENH264_VERSION" /openh264
+  git_clone https://github.com/cisco/openh264.git "$OPENH264_VERSION" /openh264
   cd /openh264
   # Teach WelsThreadLib about wasip1: no <sys/sysctl.h>, no SCHED_FIFO, CPU count = 1.
   git apply "$HERE_DEPS/openh264-wasi.patch"
@@ -448,7 +481,7 @@ EOF
 # build_openh264_native — openh264 for the native driver (spec 0028): real x86
 # asm + real pthreads, none of the wasm patches/shims. A static archive + pkg-config.
 build_openh264_native() {
-  git clone https://github.com/cisco/openh264.git --depth=1 --branch "$OPENH264_VERSION" /openh264
+  git_clone https://github.com/cisco/openh264.git "$OPENH264_VERSION" /openh264
   cd /openh264
   make -j"$(nproc)" V=No OS=linux CC="$CC" CXX="$CXX" AR="$AR" libopenh264.a \
     || { echo "openh264 (native) build failed"; exit 1; }
@@ -489,7 +522,7 @@ build_x264_native() {
 # openh264/x264: self-compiled → outside any binary patent grant; HEVC pools are
 # active (no AVC-style sunset), so ship comply-on-demand (docs/explanation/licensing.md).
 build_x265_native() {
-  git clone https://bitbucket.org/multicoreware/x265_git.git --depth=1 --branch "$X265_VERSION" /x265
+  git_clone https://bitbucket.org/multicoreware/x265_git.git "$X265_VERSION" /x265
   # cmake root is source/; -DENABLE_PIC for the static-into-shared-driver link.
   cmake -S /x265/source -B /x265/build -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_PIC=ON \
@@ -503,7 +536,7 @@ build_x265_native() {
 # patent caveat). cmake, static, encoder-only. Thread-pool architected → its whole
 # point needs real threads, so native only.
 build_svtav1_native() {
-  git clone https://gitlab.com/AOMediaCodec/SVT-AV1.git --depth=1 --branch "$SVTAV1_VERSION" /svtav1
+  git_clone https://gitlab.com/AOMediaCodec/SVT-AV1.git "$SVTAV1_VERSION" /svtav1
   cmake -S /svtav1 -B /svtav1/build -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_APPS=OFF -DBUILD_DEC=OFF \
     || { echo "SVT-AV1 (native) cmake failed"; exit 1; }
@@ -520,7 +553,7 @@ build_svtav1_native() {
 # n_threads=1 against wasi-libc's pthread stubs while clang lowers its C11 atomics to
 # plain single-threaded ops (same class as the openh264 single-thread shim).
 build_libdav1d() {
-  git clone https://code.videolan.org/videolan/dav1d.git --depth=1 --branch "$DAV1D_VERSION" /dav1d
+  git_clone https://code.videolan.org/videolan/dav1d.git "$DAV1D_VERSION" /dav1d
   cd /dav1d
   if [ "$TARGET" = native ]; then
     native_meson -Denable_tools=false -Denable_tests=false
