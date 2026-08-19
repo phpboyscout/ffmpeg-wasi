@@ -1483,7 +1483,19 @@ int op_process(const cJSON *spec) {
     av_packet_free(&pkt);
     av_frame_free(&frame);
     if (rc >= 0) {
-        for (int i = 0; i < c.n_out; i++) av_write_trailer(c.out[i].ofmt);
+        // The trailer is where a non-fragmented MP4 seeks back and patches its
+        // moov/mdat. Discarding its return meant a failure there produced a
+        // corrupt file and exit 0 (ffmpeg-wasi#16).
+        for (int i = 0; i < c.n_out; i++) {
+            int tr = av_write_trailer(c.out[i].ofmt);
+            if (tr < 0 && rc >= 0) {
+                char eb[128];
+                av_strerror(tr, eb, sizeof(eb));
+                fprintf(stderr, "ffmpeg-wasi: process: writing the trailer for %s: %s\n",
+                        c.out[i].path, eb);
+                rc = tr;
+            }
+        }
     }
 
     if (rc >= 0) {
