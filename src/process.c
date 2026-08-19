@@ -411,6 +411,37 @@ static int add_buffersink(Ctx *c, AVFilterInOut *pad) {
             enum AVSampleFormat sf = sample_fmts[0];
             ret = av_opt_set_array(go->sink, "sample_formats", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_SAMPLE_FMT, &sf);
         }
+
+        // Sample format alone is not enough. An encoder with a restricted set of
+        // sample RATES -- libopus is the everyday case, it takes 48kHz and a few
+        // others but not 44.1 -- would otherwise be handed whatever the graph
+        // happened to carry and reject it, where ffmpeg auto-inserts a resample
+        // (ffmpeg-wasi#17). Same for channel layouts.
+        //
+        // The WHOLE supported list goes to the sink rather than its first entry:
+        // negotiation then keeps the input's rate when the encoder accepts it and
+        // converts only when it must. Pinning one would resample every job.
+        if (ret >= 0) {
+            const int *rates = NULL;
+            if (avcodec_get_supported_config(NULL, enc_codec, AV_CODEC_CONFIG_SAMPLE_RATE, 0,
+                                             (const void **)&rates, NULL) >= 0 && rates) {
+                unsigned n = 0;
+                while (rates[n]) n++; // the list is terminated by a zero rate
+                if (n) ret = av_opt_set_array(go->sink, "samplerates", AV_OPT_SEARCH_CHILDREN,
+                                              0, n, AV_OPT_TYPE_INT, rates);
+            }
+        }
+
+        if (ret >= 0) {
+            const AVChannelLayout *layouts = NULL;
+            if (avcodec_get_supported_config(NULL, enc_codec, AV_CODEC_CONFIG_CHANNEL_LAYOUT, 0,
+                                             (const void **)&layouts, NULL) >= 0 && layouts) {
+                unsigned n = 0;
+                while (layouts[n].nb_channels) n++; // terminated by a zeroed layout
+                if (n) ret = av_opt_set_array(go->sink, "channel_layouts", AV_OPT_SEARCH_CHILDREN,
+                                              0, n, AV_OPT_TYPE_CHLAYOUT, layouts);
+            }
+        }
     }
     if (ret < 0) return ret;
     ret = avfilter_init_str(go->sink, NULL);
