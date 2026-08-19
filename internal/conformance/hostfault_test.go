@@ -186,3 +186,28 @@ func TestAnOverstatedReadIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// NOTE on ffmpeg-wasi#20 (frames swallowing read and decode errors).
+//
+// There is deliberately no test here, and the reason is worth recording so the
+// next person does not write the one that fooled me.
+//
+// A first attempt injected a mid-file host failure and asserted a non-zero exit.
+// It PASSED against the unfixed engine — but not because the engine reported the
+// error. The job HUNG and the test read the kill signal as a non-zero exit. A
+// sweep of fault positions showed the shape: failing early hangs the job (that
+// is #31, no socket timeout), and failing late never fires at all because every
+// read has already happened. There is no window in between.
+//
+// A corrupt payload does not reach it either: mangling a third of a Matroska
+// file produces demuxer warnings and still extracts the same nine frames as the
+// intact control.
+//
+// The underlying reason is a gap in the protocol rather than a gap in the test:
+// a Read reply can express "here are N bytes" or "zero, meaning EOF". It has no
+// way to say "I failed". A host that cannot serve a read can only lie or hang,
+// so a genuine read failure cannot be delivered to the engine at all. Tracked
+// separately.
+//
+// The fix in src/frames.c stands on reading rather than on a reproduction, and
+// the commit says so.

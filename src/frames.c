@@ -295,7 +295,12 @@ static int grab_at(Frames *f, double t_sec, const char *tmpl, int ntok, int cap,
         if (rc == AVERROR(EAGAIN)) continue;
         if (rc < 0) break;
     }
-    return 0; // EOF before reaching target → no frame for this timestamp
+
+    // Only a genuine end of stream means "there is no frame at this timestamp".
+    // Everything else -- a failed read from the host, a corrupt packet, a decoder
+    // that gave up -- is a failure, and returning 0 for it reported a broken job
+    // as a successful one with fewer frames than asked for (ffmpeg-wasi#20).
+    return rc == AVERROR_EOF ? 0 : rc;
 }
 
 // grab_scene stream-decodes the whole input through the select/thumbnail chain,
