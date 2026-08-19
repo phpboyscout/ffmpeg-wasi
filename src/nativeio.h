@@ -38,6 +38,13 @@ void afio_close_input(struct AVFormatContext **out);
 // the native bridge is active, else avio_open).
 int afio_open_output(struct AVFormatContext *ofmt, const char *path);
 
+// afio_install_muxer_io routes a multi-file muxer's CHILD opens (an hls/dash
+// playlist and its segments, an image2 numbered sequence) over the same bridge as
+// the primary pb. Those go through AVFormatContext.io_open rather than the pb, so
+// without this they reach the host filesystem directly. No-op on wasm, and on a
+// muxer that writes a single file.
+void afio_install_muxer_io(struct AVFormatContext *ofmt);
+
 // afio_close_output closes the muxer's pb (no-op when none is open).
 void afio_close_output(struct AVFormatContext *ofmt);
 

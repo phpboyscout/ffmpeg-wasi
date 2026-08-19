@@ -441,6 +441,43 @@ void afio_close_input(AVFormatContext **out) {
     avformat_close_input(out);
 }
 
+#ifdef AFMPEG_NATIVE
+// A muxer that writes MORE THAN ONE FILE — hls, dash, segment, and image2 with a
+// numbered pattern — does not put those files through its own pb. It opens each
+// one through AVFormatContext.io_open, which the primary-pb wrapping never sees,
+// so the playlist and every child went straight to host disk with the bridge
+// active and the job still reported success (ffmpeg-wasi#14).
+//
+// Same shape as concat_io_open on the demux side, with the write flag honoured:
+// a segmenting muxer reads back what it wrote in some modes.
+static int mux_io_open(AVFormatContext *s, AVIOContext **pb, const char *url,
+                       int flags, AVDictionary **options) {
+    (void)s; (void)options;
+    AVIOContext *c = afio_ipc_open(url, (flags & AVIO_FLAG_WRITE) != 0);
+    if (!c) return AVERROR(EIO);
+    *pb = c;
+    return 0;
+}
+
+static int mux_io_close(AVFormatContext *s, AVIOContext *pb) {
+    (void)s;
+    afio_ipc_close(&pb);
+    return 0;
+}
+#endif // AFMPEG_NATIVE
+
+// afio_install_muxer_io routes a muxer's child-file opens over the bridge. Safe on
+// every muxer: one that writes a single file through its pb never calls io_open.
+void afio_install_muxer_io(AVFormatContext *ofmt) {
+#ifdef AFMPEG_NATIVE
+    if (!ofmt || !afio_active()) return;
+    ofmt->io_open = mux_io_open;
+    ofmt->io_close2 = mux_io_close;
+#else
+    (void)ofmt;
+#endif
+}
+
 int afio_open_output(AVFormatContext *ofmt, const char *path) {
 #ifdef AFMPEG_NATIVE
     if (afio_active()) {

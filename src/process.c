@@ -1685,6 +1685,10 @@ int op_process(const cJSON *spec) {
         }
         // Muxer options (spec 0015) drive segmenting/fragmentation here; a
         // segmenting muxer (NOFILE) opens its own child files during write_header.
+        // Those child opens go through io_open rather than the pb wrapped above, so
+        // route them over the bridge too or they land on host disk with the job
+        // still reporting success (ffmpeg-wasi#14).
+        afio_install_muxer_io(c.out[i].ofmt);
         if ((rc = avformat_write_header(c.out[i].ofmt, &c.out[i].fmt_opts)) < 0) {
             fprintf(stderr, "ffmpeg-wasi: process: write header for %s failed\n", c.out[i].path); goto end;
         }
