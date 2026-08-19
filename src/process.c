@@ -49,6 +49,12 @@ typedef struct {
     int st_idx;
     AVCodecContext *dec;
     AVFilterContext *src;
+    // Set once the buffersrc stops accepting frames. A filter that completes
+    // before its input does -- trim, or an xfade whose transition is shorter than
+    // the clips -- closes its upstream source, and every later frame from that
+    // decoder has nowhere to go. That is an ordinary end of stream for this pad,
+    // not a failure of the job (ffmpeg-wasi#11).
+    int closed;
 } GIn;
 
 // One output file: its muxer, codecs, options, and the graph pad labels it takes.
@@ -596,8 +602,25 @@ static int push_frame(Ctx *c, int gi, AVFrame *frame) {
         }
     }
 
+    if (g->closed) {           // the graph stopped taking frames from this pad
+        av_frame_unref(frame);
+        return 0;
+    }
+
     ret = av_buffersrc_add_frame_flags(g->src, frame, AV_BUFFERSRC_FLAG_KEEP_REF);
     av_frame_unref(frame);
+
+    // AVERROR_EOF here means a downstream filter has completed and closed this
+    // source. Returning it would abort a job that is in fact finishing normally,
+    // and -- depending on whether the input ran out first -- that abort is what
+    // made the same job succeed on real files and fail over a host bridge.
+    // Remember the pad is done and carry on; the remaining inputs still need to
+    // be drained so the graph can produce its tail.
+    if (ret == AVERROR_EOF) {
+        g->closed = 1;
+        return 0;
+    }
+
     return ret;
 }
 
@@ -1416,7 +1439,12 @@ int op_process(const cJSON *spec) {
                         if ((rc = push_frame(&c, gi, frame)) < 0) break;
                     }
                     if (rc < 0) break;
-                    av_buffersrc_add_frame_flags(c.gin[gi].src, NULL, 0);
+                    // Signalling EOF on a source the graph already closed is
+                    // pointless and returns AVERROR_EOF; skip it.
+                    if (!c.gin[gi].closed) {
+                        av_buffersrc_add_frame_flags(c.gin[gi].src, NULL, 0);
+                        c.gin[gi].closed = 1;
+                    }
                 }
                 if (rc >= 0) rc = pull_sinks(&c);
                 continue;
