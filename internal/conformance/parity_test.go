@@ -191,9 +191,27 @@ func (t tolerance) applies(job string) bool {
 // TestMain runs the suite, then compares everything phase C recorded.
 func TestMain(m *testing.M) {
 	code := m.Run()
+
 	parity.mu.Lock()
 	seen := parity.seen
 	parity.mu.Unlock()
+
+	// Recording silently producing nothing looks exactly like a clean parity run,
+	// and that is the failure this suite keeps having to guard against. If
+	// artefacts were available then the behavioural tests ran real jobs, so
+	// something must have been recorded; nothing means the wiring in runJob is
+	// broken and every comparison below is vacuous.
+	//
+	// With no artefacts, nothing recorded is simply correct -- the behavioural
+	// tests all skipped.
+	if arts, err := engine.Discover(); err == nil && len(arts) > 0 && len(seen) == 0 {
+		fmt.Fprintf(os.Stderr, "\n--- FAIL: parity\n"+
+			"  %d artifact(s) were available but no job was recorded, so nothing was compared.\n"+
+			"  A parity run that compares nothing reports success. Check that runJob still\n"+
+			"  calls recordForParity (spec 0037 D1).\n", len(arts))
+		code = 1
+	}
+
 	if bad := compareParity(os.Stderr, seen); bad && code == 0 {
 		code = 1
 	}
