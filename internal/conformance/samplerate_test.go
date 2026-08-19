@@ -58,13 +58,13 @@ func TestAnEncoderGetsARateItSupports(t *testing.T) {
 				"op":     "process",
 				"inputs": []any{map[string]any{"path": in}},
 				"outputs": []any{map[string]any{
-					"path": ws.Path("out.webm"), "map": []any{"[a]"}, "audio_codec": enc,
+					"path": ws.Path("rate441.webm"), "map": []any{"[a]"}, "audio_codec": enc,
 				}},
 				"filter": "[0:a]anull[a]",
 			})
 
 			// And the result really is audio the encoder accepted, not an empty file.
-			got := probe(t, ws, a, ws.Path("out.webm")).Inputs[0]
+			got := probe(t, ws, a, ws.Path("rate441.webm")).Inputs[0]
 			if len(got.Streams) != 1 {
 				t.Fatalf("%s: the output has %d streams, want 1", a, len(got.Streams))
 			}

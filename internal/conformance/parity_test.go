@@ -129,6 +129,14 @@ func scrub(v any) any {
 
 // canonicalKey is scrub plus path normalisation: the KEY keeps paths (they say
 // which file the job touched) but must spell them the same way on both targets.
+//
+// CONSEQUENCE FOR ANYONE ADDING A TEST: the key sees a path's BASENAME, so two
+// tests that both write "out.webm" are one job as far as this is concerned, and
+// their different answers are reported as one artefact contradicting itself. Give
+// a new fixture a name that is unique across this package. Observed for real: a
+// 44.1kHz test added for #17 named its output out.webm, collided with
+// TestWebMMuxesWithoutStalling, and produced six divergences that were entirely
+// the test's own fault.
 func canonicalKey(b []byte) (string, bool) {
 	var v any
 	if err := json.Unmarshal(b, &v); err != nil {
