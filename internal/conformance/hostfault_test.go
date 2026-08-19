@@ -116,11 +116,20 @@ func hostFaultSetup(t *testing.T, a engine.Artifact) (*ipchost.Host, string, str
 	return h, sock, name
 }
 
-// TestATransportFailureIsNotAnEndOfStream is the regression test for #15.
+// TestATransportFailureIsNotAnEndOfStream asserts that a host disappearing
+// mid-file fails the job. It was written for #15 and IT HAS NEVER BEEN OBSERVED
+// RED -- run against the released engine, before any fix in this branch, it
+// passes 6/6.
 //
-// Every negative return from av_read_frame currently enters the clean-EOF path,
-// so a host that disappears mid-file yields a truncated output and exit 0. The
-// caller is told the job succeeded.
+// That is recorded here on purpose. A passing test is evidence of a property
+// holding, not evidence that the fault it names was ever present, and reading it
+// the second way is precisely what let #12 hide for the life of the project. So
+// either #15 was never real, or this check is looser than the fault it was
+// written for, and nothing here distinguishes those.
+//
+// It is kept because the property is worth holding either way. Reopen #15 on a
+// concrete host fault that yields truncated output and exit 0; until then, do not
+// cite this test as the thing that fixed anything.
 func TestATransportFailureIsNotAnEndOfStream(t *testing.T) {
 	t.Parallel()
 
