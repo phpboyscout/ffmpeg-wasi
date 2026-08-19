@@ -9,6 +9,39 @@
 #include <libavutil/error.h>
 #include <libavutil/mem.h>
 
+// concat_quote_len is how many bytes escaping name into an ffconcat `file '...'`
+// argument will take. Inside single quotes ffconcat treats everything literally
+// until the next quote, so a quote is written by closing, escaping and reopening:
+// '\'' -- four bytes for one. Backslash is escaped too.
+static size_t concat_quote_len(const char *name) {
+    size_t len = 0;
+    for (const char *p = name; *p; p++) len += (*p == '\'' || *p == '\\') ? 4 : 1;
+    return len;
+}
+
+// concat_quote writes name into dst escaped for an ffconcat file argument, and
+// returns how many bytes it wrote. dst must have concat_quote_len(name) room.
+static size_t concat_quote(char *dst, const char *name) {
+    size_t o = 0;
+    for (const char *p = name; *p; p++) {
+        if (*p == '\'' || *p == '\\') {
+            dst[o++] = '\''; dst[o++] = '\\'; dst[o++] = *p; dst[o++] = '\'';
+        } else {
+            dst[o++] = *p;
+        }
+    }
+    return o;
+}
+
+// concat_name_is_safe rejects a segment name that cannot be represented on one
+// ffconcat line at all. A newline would start a fresh line, and the concat
+// demuxer honours directives there -- so a caller-chosen filename would become
+// control over what the engine opens (ffmpeg-wasi#25). Escaping cannot help:
+// there is no way to spell a newline inside an ffconcat argument.
+static int concat_name_is_safe(const char *name) {
+    return strchr(name, '\n') == NULL && strchr(name, '\r') == NULL;
+}
+
 #ifdef AFMPEG_NATIVE
 #include <stdlib.h>
 #include <string.h>
@@ -239,15 +272,25 @@ static int afio_open_concat_ipc(AVFormatContext **out, const AVInputFormat *cf,
                                 const char *const *segments, int n) {
     // Size the "ffconcat version 1.0\n" header + "file '<seg>'\n" per segment.
     size_t len = strlen("ffconcat version 1.0\n");
-    for (int i = 0; i < n; i++) len += strlen("file '") + strlen(segments[i]) + strlen("'\n");
+    for (int i = 0; i < n; i++) {
+        if (!concat_name_is_safe(segments[i])) {
+            fprintf(stderr, "ffmpeg-wasi: process: concat segment %d contains a newline, "
+                            "which cannot be written to a playlist\n", i);
+            return AVERROR(EINVAL);
+        }
+        len += strlen("file '") + concat_quote_len(segments[i]) + strlen("'\n");
+    }
 
     uint8_t *text = av_malloc(len + 1);
     if (!text) return AVERROR(ENOMEM);
 
     size_t off = 0;
     off += (size_t)snprintf((char *)text + off, len + 1 - off, "ffconcat version 1.0\n");
-    for (int i = 0; i < n; i++)
-        off += (size_t)snprintf((char *)text + off, len + 1 - off, "file '%s'\n", segments[i]);
+    for (int i = 0; i < n; i++) {
+        off += (size_t)snprintf((char *)text + off, len + 1 - off, "file '");
+        off += concat_quote((char *)text + off, segments[i]);
+        off += (size_t)snprintf((char *)text + off, len + 1 - off, "'\n");
+    }
 
     struct plsrc *src = av_mallocz(sizeof *src);
     uint8_t *iobuf = av_malloc(4096);
@@ -311,8 +354,20 @@ int afio_open_concat(AVFormatContext **out, const char *const *segments, int n, 
         fprintf(stderr, "ffmpeg-wasi: process: cannot create concat list\n");
         return AVERROR(EIO);
     }
-    for (int i = 0; i < n; i++)
-        fprintf(lf, "file '/%s'\n", segments[i][0] == '/' ? segments[i] + 1 : segments[i]);
+    for (int i = 0; i < n; i++) {
+        const char *seg = segments[i][0] == '/' ? segments[i] + 1 : segments[i];
+        if (!concat_name_is_safe(seg)) {
+            fclose(lf);
+            fprintf(stderr, "ffmpeg-wasi: process: concat segment %d contains a newline, "
+                            "which cannot be written to a playlist\n", i);
+            return AVERROR(EINVAL);
+        }
+        char *q = av_malloc(concat_quote_len(seg) + 1);
+        if (!q) { fclose(lf); return AVERROR(ENOMEM); }
+        q[concat_quote(q, seg)] = 0;
+        fprintf(lf, "file '/%s'\n", q);
+        av_free(q);
+    }
     fclose(lf);
 
     AVDictionary *opts = NULL;
