@@ -96,6 +96,18 @@ static int afio_read(void *opaque, uint8_t *buf, int size) {
 
     uint32_t n = get32(nb);
     if (n == 0) return AVERROR_EOF;
+    // The host is the counterparty, not an authority. A count larger than the
+    // buffer we asked to fill would have us write past its end (ffmpeg-wasi#24).
+    //
+    // Refusing is not enough on its own: the reply's payload is still queued on
+    // the socket, so the next frame would parse those bytes as a header and the
+    // session would desynchronise -- which shows up as the engine blocking
+    // forever rather than failing. The session is unrecoverable once a reply is
+    // malformed, so tear the connection down and let every later call fail fast.
+    if (n > (uint32_t)size) {
+        shutdown(fd, SHUT_RDWR);
+        return AVERROR(EIO);
+    }
     if (rd_full(fd, buf, n) < 0) return AVERROR(EIO);
     return (int)n;
 }
@@ -109,7 +121,14 @@ static int afio_write(void *opaque, const uint8_t *buf, int size) {
 
     uint8_t nb[4];
     if (rd_full(fd, nb, sizeof nb) < 0) return AVERROR(EIO);
-    return (int)get32(nb);
+    // Same reasoning as afio_read: a host cannot have written more than we gave
+    // it, and handing libav an inflated count corrupts its accounting.
+    uint32_t w = get32(nb);
+    if (w > (uint32_t)size) {
+        shutdown(fd, SHUT_RDWR);
+        return AVERROR(EIO);
+    }
+    return (int)w;
 }
 
 static int64_t afio_seek(void *opaque, int64_t offset, int whence) {

@@ -55,7 +55,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
+
+// errInjected marks a deliberately induced failure, so a test can tell it apart
+// from the host genuinely going wrong.
+var errInjected = errors.New("ipchost: injected fault")
 
 // protocolVersion is the single byte a connection opens with.
 const protocolVersion = 1
@@ -65,6 +70,20 @@ const protocolVersion = 1
 type Host struct {
 	root string
 	ln   net.Listener
+
+	// Fault injection. The point of an independently-implemented host is that it
+	// can misbehave deliberately: afmpeg's host would never send a short count or
+	// drop a connection mid-file, so nothing else in this estate can ask the
+	// engine how it copes when one does. Zero values inject nothing.
+	//
+	// OverstateReadBy makes a Read reply claim MORE bytes than it sends, which is
+	// the malformed-host case (ffmpeg-wasi#24).
+	// CloseAfterReads drops the connection after N Read frames, which is a
+	// mid-stream transport failure rather than an end of file (ffmpeg-wasi#15).
+	OverstateReadBy uint32
+	CloseAfterReads int
+
+	reads atomic.Int64
 
 	mu     sync.Mutex
 	errs   []error
@@ -255,10 +274,29 @@ func (h *Host) doFrame(conn net.Conn, f *os.File, tag byte) error {
 			return fmt.Errorf("reading the Read count: %w", err)
 		}
 
+		if h.CloseAfterReads > 0 && int(h.reads.Add(1)) > h.CloseAfterReads {
+			// Vanish mid-file. The engine sees a transport failure, not an EOF.
+			return errInjected
+		}
+
 		buf := make([]byte, count)
 		n, err := io.ReadFull(f, buf)
 		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 			return fmt.Errorf("reading the file: %w", err)
+		}
+
+		if h.OverstateReadBy > 0 {
+			// Claim more than we send. A host that gets its own accounting wrong
+			// looks exactly like this, and the engine must not write past its buffer.
+			if err := binary.Write(conn, binary.LittleEndian, uint32(n)+h.OverstateReadBy); err != nil {
+				return fmt.Errorf("writing the overstated Read count: %w", err)
+			}
+			if n > 0 {
+				if _, err := conn.Write(buf[:n]); err != nil {
+					return fmt.Errorf("writing the Read payload: %w", err)
+				}
+			}
+			return nil
 		}
 
 		// n == 0 is exactly how end of file is reported. There is no separate
