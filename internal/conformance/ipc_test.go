@@ -46,6 +46,15 @@ import (
 // in internal/ipchost is the only guard, and it guards by asserting the reply
 // value directly rather than by observing a broken file.
 
+// overIPC labels an artefact as "the same driver, driven over the bridge". The
+// comparator groups by this name, so the label is what makes plain-file and IPC
+// two comparable ways of running one binary rather than one indistinguishable
+// blur.
+func overIPC(a engine.Artifact) engine.Artifact {
+	a.Target += "-ipc"
+	return a
+}
+
 // nativeArtifacts returns the native drivers, or skips. The bridge is a native
 // concept; the WASM target serves its filesystem through wazero instead.
 func nativeArtifacts(t *testing.T) []engine.Artifact {
@@ -141,6 +150,23 @@ func TestIPCBridgeCarriesARealTranscode(t *testing.T) {
 			if errs := host.Errors(); len(errs) != 0 {
 				t.Fatalf("%s: the host reported protocol errors: %v", a, errs)
 			}
+
+			// Spec 0037 phase D3. File this reply under a DISTINCT artefact label,
+			// so the phase D1 comparator picks it up and compares it against the
+			// same job run in plain-file mode -- which TestProcessTranscodesAudio
+			// already runs, with an identical spec, so the keys match by
+			// construction.
+			//
+			// That is the whole of D3: the bridge is not a separate thing to
+			// compare, it is another way of running the driver, and the machinery
+			// that asks whether two artefacts agree is the machinery that asks
+			// whether two ways of driving one artefact agree.
+			//
+			// Only the process reply is recorded. The probe below reads back a
+			// file this test produced, which is verification rather than a parity
+			// subject, and recording it would collide with phase C's own probe of
+			// out.mkv under the same key.
+			recordForParity(overIPC(a), job, []byte(strings.TrimSpace(res.Stdout)))
 
 			// And the transcode actually happened, on the host's filesystem.
 			if _, err := os.Stat(filepath.Join(root, "out.mkv")); err != nil {
