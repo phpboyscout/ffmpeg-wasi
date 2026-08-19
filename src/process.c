@@ -858,8 +858,16 @@ static int add_copy_descriptors(Ctx *c) {
             // A subtitle stream with a real subtitle_codec (not "copy") is
             // transcoded on the Sub lane; everything else — and copied subtitles —
             // rides the packet-passthrough Cpy path (spec 0019 D-0019-B).
+            //
+            // The lane comes from the stream that actually resolved, not from the
+            // letter in the map entry. An absolute map ("0:2") parses as UNKNOWN
+            // by design — the type is not knowable until the stream is found — so
+            // reading the parsed type sent a subtitle stream down the copy lane
+            // and dropped subtitle_codec on the floor without a word
+            // (ffmpeg-wasi#21).
+            enum AVMediaType resolved = c->in[in_idx]->streams[st]->codecpar->codec_type;
             const char *sc = c->out[oi].scodec;
-            int transcode_sub = type == AVMEDIA_TYPE_SUBTITLE && sc && strcmp(sc, COPY_CODEC) != 0;
+            int transcode_sub = resolved == AVMEDIA_TYPE_SUBTITLE && sc && strcmp(sc, COPY_CODEC) != 0;
             if (transcode_sub) {
                 if (c->n_sub >= MAX_SUB) { fprintf(stderr, "ffmpeg-wasi: process: too many subtitle streams\n"); return AVERROR(EINVAL); }
                 Sub *su = &c->sub[c->n_sub++];
@@ -1104,9 +1112,31 @@ static int write_sub_pkt(Ctx *c, Sub *su, AVSubtitle *sub) {
     else if (out->end > 0) cutoff = (out->copy_ts ? 0 : seek0) + (int64_t)(out->end * AV_TIME_BASE);
     if (start_us >= cutoff) return 0;
 
-    // Zero-base against the seek start unless copy_ts preserves the source timeline.
+    // A cue that STRADDLES the cutoff is shortened to it. Dropping only the cues
+    // that start late left one hanging on screen past the end of the output
+    // (ffmpeg-wasi#22).
+    int clipped = 0;
+    if (cutoff != INT64_MAX && start_us + dur_us > cutoff) {
+        dur_us = cutoff - start_us;
+        clipped = 1;
+    }
+
+    // Zero-base against the seek start unless copy_ts preserves the source
+    // timeline. A cue that began before the seek point is moved to zero — and the
+    // part cut off its front has to come off its duration as well. Moving the
+    // start without shortening left it displayed for longer than it was written
+    // for, by exactly the amount that was discarded (ffmpeg-wasi#22).
     int64_t out_us = out->copy_ts ? start_us : start_us - seek0;
-    if (out_us < 0) out_us = 0;
+    if (out_us < 0) {
+        dur_us += out_us; // negative: the overlap with the discarded head
+        out_us = 0;
+        clipped = 1;
+    }
+
+    // Only a cue clipped to nothing is dropped. A cue that arrived with no
+    // duration keeps its old behaviour — some formats leave the end open, and
+    // this fix is about windows, not about inventing an end.
+    if (clipped && dur_us <= 0) return 0;
 
     const int bufsize = 1 << 16; // one subtitle event; ample for text formats
     uint8_t *buf = av_malloc(bufsize); // heap, not the wasm stack
