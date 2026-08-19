@@ -1019,13 +1019,17 @@ static int flush_copy_bsfs(Ctx *c) {
         Cpy *cp = &c->cpy[i];
         if (!cp->bsf) continue;
 
-        av_bsf_send_packet(cp->bsf, NULL);
+        // A send that fails at end of stream means the filter never drains, so
+        // whatever it was holding is simply absent from the output. Discarding
+        // this made that silent (ffmpeg-wasi#28).
+        if ((ret = av_bsf_send_packet(cp->bsf, NULL)) < 0) break;
 
         AVPacket *pkt = av_packet_alloc();
         if (!pkt) return AVERROR(ENOMEM);
-        while (av_bsf_receive_packet(cp->bsf, pkt) == 0) {
+        while ((ret = av_bsf_receive_packet(cp->bsf, pkt)) == 0) {
             if ((ret = write_copy_pkt(c, cp, cp->bsf->time_base_out, pkt)) < 0) break;
         }
+        if (ret == AVERROR_EOF) ret = 0; // the drain completing, not a failure
         av_packet_free(&pkt);
     }
     return ret;
@@ -1171,7 +1175,11 @@ static int open_concat_input(AVFormatContext **out, const cJSON *concat, int idx
         fprintf(stderr, "ffmpeg-wasi: process: cannot open concat playlist\n");
         return rc;
     }
-    return avformat_find_stream_info(*out, NULL);
+    // Past this point the context exists, so every failure has to free it: the
+    // caller only frees the inputs it has counted (ffmpeg-wasi#27).
+    rc = avformat_find_stream_info(*out, NULL);
+    if (rc < 0) avformat_close_input(out);
+    return rc;
 }
 
 // open_one_input opens a single `inputs[]` entry: a concat playlist when it has a
@@ -1217,11 +1225,14 @@ static int open_one_input(AVFormatContext **out, const cJSON *in, int idx) {
         const AVDictionaryEntry *e = av_dict_iterate(opts, NULL);
         fprintf(stderr, "ffmpeg-wasi: process: input %d: unknown demuxer option %s\n", idx, e ? e->key : "?");
         av_dict_free(&opts);
+        avformat_close_input(out); // opened above (ffmpeg-wasi#27)
         return AVERROR(EINVAL);
     }
     av_dict_free(&opts);
 
-    return avformat_find_stream_info(*out, NULL);
+    rc = avformat_find_stream_info(*out, NULL);
+    if (rc < 0) avformat_close_input(out);
+    return rc;
 }
 
 // copy_chapters deep-copies an input's chapters onto an output context (spec 0020
@@ -1342,31 +1353,36 @@ int op_process(const cJSON *spec) {
     const cJSON *in = NULL;
     cJSON_ArrayForEach(in, inputs) {
         if (c.n_in >= MAX_INPUTS) { rc = AVERROR(EINVAL); goto end; }
-        if ((rc = open_one_input(&c.in[c.n_in], in, c.n_in)) < 0) goto end;
+        int ii = c.n_in;
+        if ((rc = open_one_input(&c.in[ii], in, ii)) < 0) goto end;
+        // Count it the moment it is open. Everything below here can still fail,
+        // and the cleanup at `end` only frees the inputs below n_in — so
+        // incrementing at the bottom leaked the context on every one of those
+        // paths (ffmpeg-wasi#27).
+        c.n_in = ii + 1;
 
-        c.seek_us[c.n_in] = AV_NOPTS_VALUE;
+        c.seek_us[ii] = AV_NOPTS_VALUE;
         const cJSON *sk = cJSON_GetObjectItemCaseSensitive(in, "seek");
         if (cJSON_IsObject(sk)) {
             const cJSON *start = cJSON_GetObjectItemCaseSensitive(sk, "start");
             const char *mode = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(sk, "mode"));
             if (!cJSON_IsNumber(start) || start->valuedouble < 0) {
-                fprintf(stderr, "ffmpeg-wasi: process: input %d seek needs a non-negative `start`\n", c.n_in);
+                fprintf(stderr, "ffmpeg-wasi: process: input %d seek needs a non-negative `start`\n", ii);
                 rc = AVERROR(EINVAL); goto end;
             }
             if (mode && strcmp(mode, "fast") != 0 && strcmp(mode, "accurate") != 0) {
-                fprintf(stderr, "ffmpeg-wasi: process: input %d seek mode %s (want fast|accurate)\n", c.n_in, mode);
+                fprintf(stderr, "ffmpeg-wasi: process: input %d seek mode %s (want fast|accurate)\n", ii, mode);
                 rc = AVERROR(EINVAL); goto end;
             }
-            c.seek_us[c.n_in] = (int64_t)(start->valuedouble * AV_TIME_BASE);
-            c.seek_accurate[c.n_in] = mode && strcmp(mode, "accurate") == 0;
-            if ((rc = avformat_seek_file(c.in[c.n_in], -1, INT64_MIN,
-                                         c.seek_us[c.n_in], c.seek_us[c.n_in], 0)) < 0) {
+            c.seek_us[ii] = (int64_t)(start->valuedouble * AV_TIME_BASE);
+            c.seek_accurate[ii] = mode && strcmp(mode, "accurate") == 0;
+            if ((rc = avformat_seek_file(c.in[ii], -1, INT64_MIN,
+                                         c.seek_us[ii], c.seek_us[ii], 0)) < 0) {
                 fprintf(stderr, "ffmpeg-wasi: process: cannot seek input %d to %.3fs\n",
-                        c.n_in, start->valuedouble);
+                        ii, start->valuedouble);
                 goto end;
             }
         }
-        c.n_in++;
     }
 
     // Copy streams: unbracketed map entries ("0:v") pass through verbatim,
@@ -1518,6 +1534,15 @@ int op_process(const cJSON *spec) {
     // than demuxed to the end (spec 0014).
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
+    // A null here is out of memory, not a bad job. Carrying on dereferences it in
+    // av_read_frame, and the caller cannot tell that segfault from a crash in the
+    // media it handed us (ffmpeg-wasi#26).
+    if (!pkt || !frame) {
+        av_packet_free(&pkt);
+        av_frame_free(&frame);
+        rc = AVERROR(ENOMEM);
+        goto end;
+    }
     int remaining = c.n_in;
     while (remaining > 0 && rc >= 0) {
         for (int i = 0; i < c.n_in && rc >= 0; i++) {
