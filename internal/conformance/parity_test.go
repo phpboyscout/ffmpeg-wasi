@@ -32,6 +32,7 @@ package conformance
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -182,6 +183,9 @@ type tolerance struct {
 	Observed string // where it was first seen
 }
 
+// tolerances is the live table. It is passed into compareParity rather than read
+// from inside it, so a test can supply its own without mutating package state --
+// which would race the parallel tests that share this package.
 var tolerances []tolerance
 
 func (t tolerance) applies(job string) bool {
@@ -204,7 +208,15 @@ func TestMain(m *testing.M) {
 	//
 	// With no artefacts, nothing recorded is simply correct -- the behavioural
 	// tests all skipped.
-	if arts, err := engine.Discover(); err == nil && len(arts) > 0 && len(seen) == 0 {
+	// ...unless the run was filtered. `go test -run TestSomethingElse` legitimately
+	// executes no behavioural test, so nothing recorded is the correct outcome and
+	// failing here would punish anyone narrowing a run.
+	filtered := false
+	if f := flag.Lookup("test.run"); f != nil && f.Value.String() != "" {
+		filtered = true
+	}
+
+	if arts, err := engine.Discover(); !filtered && err == nil && len(arts) > 0 && len(seen) == 0 {
 		fmt.Fprintf(os.Stderr, "\n--- FAIL: parity\n"+
 			"  %d artifact(s) were available but no job was recorded, so nothing was compared.\n"+
 			"  A parity run that compares nothing reports success. Check that runJob still\n"+
@@ -212,7 +224,7 @@ func TestMain(m *testing.M) {
 		code = 1
 	}
 
-	if bad := compareParity(os.Stderr, seen); bad && code == 0 {
+	if bad := compareParity(os.Stderr, seen, tolerances); bad && code == 0 {
 		code = 1
 	}
 	os.Exit(code)
@@ -221,7 +233,7 @@ func TestMain(m *testing.M) {
 // compareParity reports every job whose artefacts did not agree, and returns
 // whether any of them was a failure. It writes to w rather than a *testing.T
 // because there is no test still running by the time it can be correct.
-func compareParity(w io.Writer, seen map[string]map[string][]string) bool {
+func compareParity(w io.Writer, seen map[string]map[string][]string, tols []tolerance) bool {
 	if len(seen) == 0 {
 		return false // nothing ran; the artefact-backed tests skipped
 	}
@@ -275,7 +287,7 @@ func compareParity(w io.Writer, seen map[string]map[string][]string) bool {
 			f := finding{job, fmt.Sprintf("%s and %s disagree\n    %s: %s\n    %s: %s",
 				baseName, n, baseName, truncate(base), n, truncate(got))}
 
-			if excusedBy(job) != "" {
+			if excusedBy(tols, job) != "" {
 				excused = append(excused, f)
 				continue
 			}
@@ -288,7 +300,7 @@ func compareParity(w io.Writer, seen map[string]map[string][]string) bool {
 		jobs, compared, len(findings), len(excused))
 
 	for _, f := range excused {
-		fmt.Fprintf(w, "  EXCUSED %s\n    %s\n    reason: %s\n", f.job, f.detail, excusedBy(f.job))
+		fmt.Fprintf(w, "  EXCUSED %s\n    %s\n    reason: %s\n", f.job, f.detail, excusedBy(tols, f.job))
 	}
 	if len(findings) == 0 {
 		return false
@@ -306,8 +318,8 @@ func compareParity(w io.Writer, seen map[string]map[string][]string) bool {
 	return true
 }
 
-func excusedBy(job string) string {
-	for _, t := range tolerances {
+func excusedBy(tols []tolerance, job string) string {
+	for _, t := range tols {
 		if t.applies(job) {
 			return t.Reason + " (observed: " + t.Observed + ")"
 		}
