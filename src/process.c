@@ -745,8 +745,59 @@ static int parse_output(Out *o, const cJSON *spec) {
 // add_copy_descriptors scans every output's `map` for unbracketed input-stream
 // specifiers ("0:v", "0:a:0", "0:0") and records a Cpy for each — the streams
 // passed through verbatim rather than routed through the filter graph (spec 0013).
+// add_default_copy_descriptors handles the case build_default_graph cannot: an
+// output that omits `map` and asks for a copied codec. The default graph
+// deliberately gives a copied stream no pad, and the explicit-map loop below
+// never runs when there is no map, so between them a
+// {"video_codec":"copy","audio_codec":"copy"} job with no map produced no
+// streams at all and failed with "No streams to mux were specified"
+// (ffmpeg-wasi#18) -- despite the job spec documenting `map` as optional for a
+// single output.
+//
+// This mirrors what the default graph does for a transcoded codec: take input
+// 0's best stream of that type, if it has one.
+static int add_default_copy_descriptors(Ctx *c, int oi) {
+    const struct {
+        const char *codec;
+        enum AVMediaType type;
+    } lanes[] = {
+        {c->out[oi].vcodec, AVMEDIA_TYPE_VIDEO},
+        {c->out[oi].acodec, AVMEDIA_TYPE_AUDIO},
+    };
+
+    for (size_t i = 0; i < sizeof lanes / sizeof lanes[0]; i++) {
+        if (!lanes[i].codec || strcmp(lanes[i].codec, COPY_CODEC) != 0) continue;
+
+        int st = av_find_best_stream(c->in[0], lanes[i].type, -1, -1, NULL, 0);
+        if (st < 0) continue; // no such stream to copy; not an error
+
+        if (c->n_cpy >= MAX_CPY) {
+            fprintf(stderr, "ffmpeg-wasi: process: too many copied streams\n");
+            return AVERROR(EINVAL);
+        }
+
+        Cpy *cp = &c->cpy[c->n_cpy++];
+        cp->in_idx = 0;
+        cp->st_idx = st;
+        cp->out_idx = oi;
+        // No map entry to name it by; the bitstream-filter lookup keys off this,
+        // and a job with no map cannot have named a filter for it either.
+        cp->map_key = NULL;
+        cp->ost = NULL;
+        cp->bsf = NULL;
+    }
+
+    return 0;
+}
+
 static int add_copy_descriptors(Ctx *c) {
     for (int oi = 0; oi < c->n_out; oi++) {
+        if (!c->out[oi].map || cJSON_GetArraySize(c->out[oi].map) == 0) {
+            int rc = add_default_copy_descriptors(c, oi);
+            if (rc < 0) return rc;
+            continue;
+        }
+
         const cJSON *m = NULL;
         cJSON_ArrayForEach(m, c->out[oi].map) {
             if (!cJSON_IsString(m) || is_graph_pad(m->valuestring)) continue;
@@ -824,7 +875,9 @@ static int setup_copy_stream(Ctx *c, Cpy *cp) {
     av_dict_copy(&cp->ost->metadata, ist->metadata, 0);
 
     const char *bsf_spec = NULL;
-    if (cJSON_IsObject(out->bsf)) {
+    // map_key is NULL for a stream copied by default (no `map` given), and a job
+    // that named no map cannot have named a bitstream filter for it either.
+    if (cp->map_key && cJSON_IsObject(out->bsf)) {
         const cJSON *b = cJSON_GetObjectItemCaseSensitive(out->bsf, cp->map_key);
         if (cJSON_IsString(b)) bsf_spec = b->valuestring;
     }
