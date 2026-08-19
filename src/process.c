@@ -127,6 +127,7 @@ typedef struct {
     AVStream *ost;
     int out_idx;
     char label[64]; // the graph pad label, for per-stream metadata routing (0020)
+    int done;       // the output window is satisfied; stop pulling (ffmpeg-wasi#19)
 } GOut;
 
 typedef struct {
@@ -650,10 +651,31 @@ static int pull_sinks(Ctx *c) {
     if (!f) return AVERROR(ENOMEM);
     int ret = 0;
     for (int i = 0; i < c->n_gout; i++) {
+        if (c->gout[i].done) continue;
+        // Where this sink's output stops, on the sink's own timeline.
+        const Out *sout = &c->out[c->gout[i].out_idx];
+        int64_t cutoff = out_cutoff_us(c, sout);
+        // The sink's frames are zero-based; out_cutoff_us is on the output's own
+        // timeline, which under copy_ts is the source's. Same offset drain_encoder
+        // applies, so the two agree on where the window ends.
+        int64_t off = sout->copy_ts ? job_seek_offset_us(c) : 0;
+        AVRational tb = av_buffersink_get_time_base(c->gout[i].sink);
         while (1) {
             ret = av_buffersink_get_frame(c->gout[i].sink, f);
             if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) { ret = 0; break; }
             if (ret < 0) goto done;
+
+            // A graph can outlive its input — `loop=loop=-1` is how a still image
+            // is animated, and it keeps producing forever once the input is gone.
+            // The window used to be enforced only by throwing away packets that
+            // had already been encoded, so such a job encoded into a bin and never
+            // finished, even though the answer was complete (ffmpeg-wasi#19).
+            if (cutoff != INT64_MAX && f->pts != AV_NOPTS_VALUE &&
+                av_rescale_q(f->pts, tb, AV_TIME_BASE_Q) + off >= cutoff) {
+                av_frame_unref(f);
+                c->gout[i].done = 1;
+                break;
+            }
             // Harvest any analysis-filter metadata riding on this frame (spec 0017 §Q).
             collect_analysis(c, f, av_buffersink_get_time_base(c->gout[i].sink));
             // The buffersink already sets frame->pts in the sink's timebase
