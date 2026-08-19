@@ -94,6 +94,75 @@ func countFrames(t *testing.T, ws *engine.Workspace, a engine.Artifact, in, filt
 	return len(got)
 }
 
+// TestEveryFrameSurvivesAPassthrough is the regression test for #12.
+//
+// A passthrough graph must emit exactly as many frames as it was given. The
+// engine currently drops the last one when the output is MP4 — mkv and an image
+// sequence keep all of them — so this is written against the container that
+// exhibits it rather than the one that does not.
+func TestEveryFrameSurvivesAPassthrough(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+			ws := workspaceFor(t, a)
+			in := writeSequence(t, ws, seqFrames)
+
+			// First: the container that is known good, so a failure below cannot be
+			// blamed on the fixture or the graph.
+			if got := countFrames(t, ws, a, in, "[0:v]null[v]"); got != seqFrames {
+				t.Fatalf("%s: an image-sequence output emitted %d frames from %d inputs — "+
+					"the fixture or the graph is wrong, before MP4 is even involved", a, got, seqFrames)
+			}
+
+			// Then the one that loses a frame (#12).
+			runJob(t, ws, a, map[string]any{
+				"op": "process",
+				"inputs": []any{map[string]any{
+					"path": in, "format": "image2",
+					"options": map[string]any{"framerate": fmt.Sprint(seqRate)},
+				}},
+				"outputs": []any{map[string]any{
+					"path": ws.Path("out.mp4"), "map": []any{"[v]"}, "video_codec": "libopenh264",
+				}},
+				"filter": "[0:v]null[v]",
+			})
+
+			// Count by re-encoding the MP4 back out to an image sequence: one file
+			// per decoded frame, so the count is independent of any duration the
+			// muxer wrote.
+			ws2 := workspaceFor(t, a)
+			body, err := ws.Read("out.mp4")
+			if err != nil {
+				t.Fatalf("%s: reading the MP4: %v", a, err)
+			}
+			if _, err := ws2.Write("in.mp4", body); err != nil {
+				t.Fatal(err)
+			}
+
+			runJob(t, ws2, a, map[string]any{
+				"op":     "process",
+				"inputs": []any{map[string]any{"path": ws2.Path("in.mp4")}},
+				"outputs": []any{map[string]any{
+					"path": ws2.Path("d_%03d.png"), "map": []any{"[v]"}, "video_codec": "png",
+				}},
+				"filter": "[0:v]null[v]",
+			})
+
+			out, err := ws2.Glob("d_*.png")
+			if err != nil {
+				t.Fatalf("%s: counting decoded frames: %v", a, err)
+			}
+
+			if len(out) != seqFrames {
+				t.Errorf("%s: MP4 output holds %d frames, want %d (ffmpeg-wasi#12).\n"+
+					"The same graph and encoder into an image sequence kept all %d, so this is the "+
+					"MP4 finalisation path rather than the encoder. The ffmpeg CLI keeps all %d.",
+					a, len(out), seqFrames, seqFrames, seqFrames)
+			}
+		})
+	}
+}
+
 // TestAGraphMayFinishBeforeItsInput is the regression test for #11.
 //
 // A filter graph that completes while its input still has decoded frames — a

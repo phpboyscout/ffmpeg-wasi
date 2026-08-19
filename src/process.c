@@ -514,6 +514,26 @@ static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
             av_packet_unref(pkt);
             continue;
         }
+        // A packet with no duration becomes a zero-duration sample in MP4's
+        // time-to-sample table, and a zero-duration final sample is invisible to
+        // every decoder that counts frames — the file carries it but nothing plays
+        // it (ffmpeg-wasi#12). Matroska hides this by falling back to a default
+        // frame duration, which is why the same job kept every frame there.
+        //
+        // Take it from the frame where the encoder propagated one, and otherwise
+        // derive it from the encoder's own frame rate. Only the LAST packet is
+        // usually affected, because the muxer infers every other sample's duration
+        // from the next one's timestamp.
+        if (pkt->duration <= 0) {
+            if (go->enc->framerate.num > 0 && go->enc->framerate.den > 0) {
+                pkt->duration = av_rescale_q(1, av_inv_q(go->enc->framerate), go->enc->time_base);
+            } else if (go->enc->codec_type == AVMEDIA_TYPE_AUDIO && go->enc->frame_size > 0) {
+                pkt->duration = av_rescale_q(go->enc->frame_size,
+                                             (AVRational){1, go->enc->sample_rate},
+                                             go->enc->time_base);
+            }
+        }
+
         av_packet_rescale_ts(pkt, go->enc->time_base, go->ost->time_base);
         pkt->stream_index = go->ost->index;
         ret = pmux(c, ofmt, go->ost, pkt);
