@@ -211,3 +211,72 @@ func TestAnOverstatedReadIsRefused(t *testing.T) {
 //
 // The fix in src/frames.c stands on reading rather than on a reproduction, and
 // the commit says so.
+
+// TestASmallOverstatementDoesNotHangTheEngine is the regression test for #31.
+//
+// #24's bounds check catches a host claiming MORE than the buffer holds. It
+// cannot catch a smaller lie: near end-of-file a short reply is normal, so a
+// count overstated by a few kilobytes is still inside the buffer, and the engine
+// has no way to know it is waiting for bytes that will never arrive.
+//
+// Observed while writing #24's test: overstating by 4096 on a small file produced
+// a sixty-second hang that ended only when the test's own deadline fired. The
+// engine had no defence of its own — afmpeg imposes a deadline on the subprocess,
+// but the engine must not depend on its caller for that.
+//
+// The timeout is set through AFMPEG_NATIVE_TIMEOUT rather than waiting out the
+// 120-second default, which also exercises the override a host needs in order to
+// tune it.
+func TestASmallOverstatementDoesNotHangTheEngine(t *testing.T) {
+	t.Parallel()
+
+	for _, a := range nativeArtifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			h, sock, name := hostFaultSetup(t, a)
+			// Small enough to fit inside the AVIO buffer on a short read, so #24's
+			// bounds check cannot fire and the engine genuinely blocks.
+			h.OverstateReadBy = 4096
+
+			job, err := json.Marshal(map[string]any{
+				"op":     "process",
+				"inputs": []any{map[string]any{"path": name}},
+				"outputs": []any{map[string]any{
+					"path": "out.mkv", "map": []any{"[v]"}, "video_codec": "libopenh264",
+				}},
+				"filter": "[0:v]null[v]",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// The engine's own deadline must be well inside the test's, so that a
+			// pass means the ENGINE gave up rather than the harness killing it —
+			// which is the mistake the note above records for #20.
+			ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+			defer cancel()
+
+			res, err := engine.Native{
+				Path: a.Path,
+				Env: []string{
+					"AFMPEG_NATIVE_SOCKET=" + sock,
+					"AFMPEG_NATIVE_TIMEOUT=2",
+				},
+			}.Run(ctx, string(job))
+
+			if ctx.Err() != nil {
+				t.Fatalf("%s: the engine blocked on a host that overstated a read by %d bytes "+
+					"and never gave up (ffmpeg-wasi#31).\nIt was killed at %s by the test, not "+
+					"stopped by its own timeout; host errors: %v", a, h.OverstateReadBy, jobTimeout, h.Errors())
+			}
+			if err != nil {
+				t.Fatalf("%s: invoking: %v", a, err)
+			}
+			if res.ExitCode == 0 {
+				t.Errorf("%s: the read timed out and the job still reported success "+
+					"(ffmpeg-wasi#31 with #15).\nstderr: %s", a, strings.TrimSpace(res.Stderr))
+			}
+		})
+	}
+}

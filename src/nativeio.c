@@ -47,6 +47,7 @@ static int concat_name_is_safe(const char *name) {
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/un.h>
 
 // The framed IPC protocol (mirrors afmpeg pkg/afmpeg/native): a 1-byte version
@@ -55,6 +56,39 @@ static int concat_name_is_safe(const char *name) {
 // Close('C'). All integers little-endian. One connection per opened file.
 #define AFIO_PROTO_VERSION 1
 #define AFIO_BUF (64 * 1024)
+
+// How long one read or write on the IPC socket may block before the engine gives
+// up on the host. Blocking forever is not a defence: a host that stops answering
+// -- or answers with a byte count slightly larger than it actually sends -- hangs
+// the job with no output and no upper bound (ffmpeg-wasi#31). #24's bounds check
+// cannot catch the small lie, because near end-of-file a short reply is normal
+// and the overstated count still fits the buffer.
+//
+// The default is generous: this bounds a single read() or write() syscall, not a
+// whole job, and a host serving a large seek may legitimately take a while.
+// AFMPEG_NATIVE_TIMEOUT overrides it in seconds; 0 restores the old
+// block-forever behaviour for a host that wants it.
+#define AFIO_TIMEOUT_SECS 120
+
+// afio_set_timeouts applies the send/receive deadline to a connected socket.
+// Best-effort: a kernel that refuses the option leaves the socket blocking, which
+// is what it did before, so this never fails an otherwise-working job.
+static void afio_set_timeouts(int fd) {
+    long secs = AFIO_TIMEOUT_SECS;
+    const char *env = getenv("AFMPEG_NATIVE_TIMEOUT");
+    if (env && *env) {
+        char *end = NULL;
+        long v = strtol(env, &end, 10);
+        if (end != env && *end == 0 && v >= 0) secs = v;
+    }
+    if (secs <= 0) return; // explicitly disabled
+
+    struct timeval tv;
+    tv.tv_sec = secs;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+}
 
 static int rd_full(int fd, void *p, size_t n) {
     uint8_t *b = p;
@@ -93,6 +127,7 @@ static int afio_dial(const char *name, char mode) {
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
+    afio_set_timeouts(fd);
 
     struct sockaddr_un a;
     memset(&a, 0, sizeof a);
