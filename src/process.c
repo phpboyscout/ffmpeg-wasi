@@ -12,6 +12,9 @@
 // no `map`, every pad is muxed into it (and with no `filter`, a passthrough
 // graph is generated for input 0's streams) — the simple single-file case.
 
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -186,17 +189,57 @@ static int pmux(Ctx *c, AVFormatContext *ofmt, AVStream *ost, AVPacket *pkt) {
     return av_interleaved_write_frame(ofmt, pkt);
 }
 
+// The job spec is untrusted input, so the two things it carries numbers in — map
+// entries and second-valued positions — are parsed strictly rather than
+// leniently (ffmpeg-wasi#23).
+
+// scan_index reads one complete non-negative decimal index from *p and advances
+// *p past it. sscanf("%d") could not do this job: it accepts a leading sign,
+// silently wraps on overflow, and stops wherever it likes, so "0:v:1junk" parsed
+// as a valid map entry and a twenty-digit index parsed as something small.
+static int scan_index(const char **p, int *out) {
+    if (**p < '0' || **p > '9') return -1; // no sign, no space, no empty field
+    errno = 0;
+    char *end = NULL;
+    long v = strtol(*p, &end, 10);
+    if (errno == ERANGE || v < 0 || v > INT_MAX) return -1;
+    *p = end;
+    *out = (int)v;
+    return 0;
+}
+
+// SPEC_SECONDS_MAX bounds any seconds-valued field. cJSON parses numbers with
+// strtod, so "1e400" arrives as infinity and "1e300" as a finite double far
+// outside int64_t — casting either to int64_t is undefined behaviour, and both
+// reach signed arithmetic that assumes a sane timeline. A thousand years is well
+// past any real job and many orders of magnitude short of the overflow.
+#define SPEC_SECONDS_MAX 3.2e10
+
+// spec_seconds validates a seconds-valued number from the spec and converts it to
+// AV_TIME_BASE units. Returns -1 if the value is not a usable position.
+static int spec_seconds(double v, int64_t *out) {
+    if (!isfinite(v) || v < 0 || v > SPEC_SECONDS_MAX) return -1;
+    *out = (int64_t)(v * AV_TIME_BASE);
+    return 0;
+}
+
 // parse_input_pad reads a "N:v" / "N:a" graph input label into an input index +
 // media type, plus an optional "N:v:K" per-type stream index (spec 0024; -1 =
 // best stream of that type, the default).
 static int parse_input_pad(const char *name, int *in_idx, enum AVMediaType *type, int *sel) {
-    char t = 0;
+    const char *p = name;
     *sel = -1;
-    if (sscanf(name, "%d:%c:%d", in_idx, &t, sel) < 2) return -1;
-    if (t == 'v' || t == 'V') *type = AVMEDIA_TYPE_VIDEO;
-    else if (t == 'a' || t == 'A') *type = AVMEDIA_TYPE_AUDIO;
+
+    if (scan_index(&p, in_idx) < 0 || *p != ':') return -1;
+    p++;
+
+    if (*p == 'v' || *p == 'V') *type = AVMEDIA_TYPE_VIDEO;
+    else if (*p == 'a' || *p == 'A') *type = AVMEDIA_TYPE_AUDIO;
     else return -1;
-    return 0;
+    p++;
+
+    if (*p == ':') { p++; if (scan_index(&p, sel) < 0) return -1; }
+    return *p == 0 ? 0 : -1; // trailing anything is a typo, not a pad
 }
 
 // is_graph_pad reports whether a `map` entry is a bracketed graph-pad label
@@ -214,26 +257,26 @@ static int is_graph_pad(const char *entry) {
 static int parse_map_stream(const char *s, int *in_idx, enum AVMediaType *type, int *sel) {
     if (is_graph_pad(s)) return -1;
 
-    char t = 0;
-    int k = -1;
-    if (sscanf(s, "%d:%c:%d", in_idx, &t, &k) >= 2 &&
-        (t == 'v' || t == 'V' || t == 'a' || t == 'A' || t == 's' || t == 'S')) {
-        if (t == 'v' || t == 'V') *type = AVMEDIA_TYPE_VIDEO;
-        else if (t == 'a' || t == 'A') *type = AVMEDIA_TYPE_AUDIO;
+    const char *p = s;
+    if (scan_index(&p, in_idx) < 0 || *p != ':') return -1;
+    p++;
+
+    // "N:v" / "N:a" / "N:s", optionally with a per-type index.
+    if (*p == 'v' || *p == 'V' || *p == 'a' || *p == 'A' || *p == 's' || *p == 'S') {
+        if (*p == 'v' || *p == 'V') *type = AVMEDIA_TYPE_VIDEO;
+        else if (*p == 'a' || *p == 'A') *type = AVMEDIA_TYPE_AUDIO;
         else *type = AVMEDIA_TYPE_SUBTITLE; // spec 0019: N:s subtitle-stream maps
-        *sel = k;
-        return 0;
+        p++;
+
+        *sel = -1;
+        if (*p == ':') { p++; if (scan_index(&p, sel) < 0) return -1; }
+        return *p == 0 ? 0 : -1;
     }
 
-    int n = 0, d = 0;
-    if (sscanf(s, "%d:%d", &n, &d) == 2) {
-        *in_idx = n;
-        *type = AVMEDIA_TYPE_UNKNOWN;
-        *sel = d;
-        return 0;
-    }
-
-    return -1;
+    // "N:D" — an absolute stream index; the type is not knowable until it resolves.
+    if (scan_index(&p, sel) < 0 || *p != 0) return -1;
+    *type = AVMEDIA_TYPE_UNKNOWN;
+    return 0;
 }
 
 // resolve_map_stream turns a parsed selector into a concrete stream index within
@@ -712,6 +755,29 @@ static void build_default_graph(Ctx *c, char *out, size_t n) {
     av_strlcpy(out, tmp, n);
 }
 
+// print_muxers writes the muxers this build actually carries to stderr, comma
+// separated. It exists for one message: when an output format cannot be resolved,
+// libavformat advises "use a standard extension for the filename or specify the
+// format manually" — and for these builds that advice is usually wrong. The
+// engine starts from --disable-everything, so a lean build asked for an `.ogg`
+// output is not looking at an unrecognised extension; the muxer is simply not
+// compiled in, and naming it explicitly will not help either (ffmpeg-wasi#29).
+//
+// Listing what IS present turns an unanswerable message into a decision: the
+// caller can see at a glance whether to pick another container or move up a
+// capability profile.
+static void print_muxers(void) {
+    const AVOutputFormat *f = NULL;
+    void *it = NULL;
+    const char *sep = "";
+    fprintf(stderr, "ffmpeg-wasi: process: this build carries these muxers: ");
+    while ((f = av_muxer_iterate(&it))) {
+        fprintf(stderr, "%s%s", sep, f->name);
+        sep = ", ";
+    }
+    fprintf(stderr, "\n");
+}
+
 // parse_output reads one `outputs[]` entry into an Out + allocates its muxer.
 static int parse_output(Out *o, const cJSON *spec) {
     o->path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "path"));
@@ -727,8 +793,23 @@ static int parse_output(Out *o, const cJSON *spec) {
     // The output window (spec 0014): -t seconds or -to position, not both.
     const cJSON *dur = cJSON_GetObjectItemCaseSensitive(spec, "duration");
     const cJSON *end = cJSON_GetObjectItemCaseSensitive(spec, "end");
-    if (cJSON_IsNumber(dur)) o->duration = dur->valuedouble;
-    if (cJSON_IsNumber(end)) o->end = end->valuedouble;
+    // Both are multiplied by AV_TIME_BASE and cast to int64_t downstream, so a
+    // non-finite or absurd value has to be refused here (ffmpeg-wasi#23).
+    int64_t ignored;
+    if (cJSON_IsNumber(dur)) {
+        if (spec_seconds(dur->valuedouble, &ignored) < 0) {
+            fprintf(stderr, "ffmpeg-wasi: process: `duration` on %s is not a usable number of seconds\n", o->path);
+            return 2;
+        }
+        o->duration = dur->valuedouble;
+    }
+    if (cJSON_IsNumber(end)) {
+        if (spec_seconds(end->valuedouble, &ignored) < 0) {
+            fprintf(stderr, "ffmpeg-wasi: process: `end` on %s is not a usable number of seconds\n", o->path);
+            return 2;
+        }
+        o->end = end->valuedouble;
+    }
     if (o->duration > 0 && o->end > 0) {
         fprintf(stderr, "ffmpeg-wasi: process: `duration` and `end` are mutually exclusive on %s\n", o->path);
         return 2;
@@ -766,6 +847,7 @@ static int parse_output(Out *o, const cJSON *spec) {
     if (!o->ofmt) {
         fprintf(stderr, "ffmpeg-wasi: process: cannot resolve output format for %s%s%s\n",
                 o->path, o->format ? " / " : "", o->format ? o->format : "");
+        print_muxers();
         av_dict_free(&o->enc_opts); // this Out is never counted in n_out, so free here
         av_dict_free(&o->fmt_opts);
         return -1;
@@ -818,6 +900,53 @@ static int add_default_copy_descriptors(Ctx *c, int oi) {
         cp->bsf = NULL;
     }
 
+    return 0;
+}
+
+// check_encodable_map catches a job that names an encoder it has no way to run.
+//
+// Encoding happens only at a graph output pad, and a pad reaches a file only by
+// being named — bracketed — in that output's `map`. So a map with no bracketed
+// entry describes a pure stream copy, and a real encoder alongside it cannot be
+// honoured. The engine used to synthesise a passthrough pad anyway, which then
+// matched nothing and failed with
+//
+//     graph output pad [a] is not mapped to any output
+//
+// naming an internal pad the caller never wrote and cannot find in their own job
+// spec (ffmpeg-wasi#30). The contradiction is in what they wrote, so say that.
+//
+// Subtitles are exempt: spec 0019 gives them a transcode lane straight off an
+// unbracketed map entry, with no graph pad involved.
+static int check_encodable_map(const Ctx *c) {
+    for (int oi = 0; oi < c->n_out; oi++) {
+        const Out *o = &c->out[oi];
+        if (!o->map || cJSON_GetArraySize(o->map) == 0) continue;
+
+        const cJSON *m = NULL;
+        cJSON_ArrayForEach(m, o->map) {
+            if (cJSON_IsString(m) && is_graph_pad(m->valuestring)) goto next_output;
+        }
+
+        const struct {
+            const char *codec, *field, *pad, *filt;
+        } lanes[] = {
+            {o->vcodec, "video_codec", "0:v", "null"},
+            {o->acodec, "audio_codec", "0:a", "anull"},
+        };
+        for (size_t i = 0; i < sizeof lanes / sizeof lanes[0]; i++) {
+            if (!lanes[i].codec || strcmp(lanes[i].codec, COPY_CODEC) == 0) continue;
+            fprintf(stderr,
+                    "ffmpeg-wasi: process: output %s sets %s to \"%s\", but its `map` names only "
+                    "input-stream specifiers, which are stream-copied — there is no graph pad to "
+                    "encode through. Either set %s to \"copy\", or add a filter and map its pad: "
+                    "\"filter\":\"[%s]%s[x]\", \"map\":[\"[x]\"]\n",
+                    o->path, lanes[i].field, lanes[i].codec, lanes[i].field,
+                    lanes[i].pad, lanes[i].filt);
+            return AVERROR(EINVAL);
+        }
+    next_output:;
+    }
     return 0;
 }
 
@@ -1322,7 +1451,17 @@ static int apply_output_metadata(Ctx *c, int oi) {
     // or "none" drops them.
     const char *ch = cJSON_GetStringValue(out->chapters);
     if (ch && strcmp(ch, "none") != 0) {
-        int src = strcmp(ch, "copy") == 0 ? 0 : atoi(ch);
+        // atoi() returns 0 for anything it cannot read, so a typo silently
+        // selected input 0 and looked like it had worked (ffmpeg-wasi#23).
+        int src = 0;
+        if (strcmp(ch, "copy") != 0) {
+            const char *p = ch;
+            if (scan_index(&p, &src) < 0 || *p != 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: `chapters` on %s is \"%s\" "
+                                "(want \"copy\", \"none\", or an input index)\n", out->path, ch);
+                return AVERROR(EINVAL);
+            }
+        }
         if (src >= 0 && src < c->n_in) {
             int rc = copy_chapters(out->ofmt, c->in[src]);
             if (rc < 0) return rc;
@@ -1396,15 +1535,14 @@ int op_process(const cJSON *spec) {
         if (cJSON_IsObject(sk)) {
             const cJSON *start = cJSON_GetObjectItemCaseSensitive(sk, "start");
             const char *mode = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(sk, "mode"));
-            if (!cJSON_IsNumber(start) || start->valuedouble < 0) {
-                fprintf(stderr, "ffmpeg-wasi: process: input %d seek needs a non-negative `start`\n", ii);
+            if (!cJSON_IsNumber(start) || spec_seconds(start->valuedouble, &c.seek_us[ii]) < 0) {
+                fprintf(stderr, "ffmpeg-wasi: process: input %d seek needs a finite, non-negative `start`\n", ii);
                 rc = AVERROR(EINVAL); goto end;
             }
             if (mode && strcmp(mode, "fast") != 0 && strcmp(mode, "accurate") != 0) {
                 fprintf(stderr, "ffmpeg-wasi: process: input %d seek mode %s (want fast|accurate)\n", ii, mode);
                 rc = AVERROR(EINVAL); goto end;
             }
-            c.seek_us[ii] = (int64_t)(start->valuedouble * AV_TIME_BASE);
             c.seek_accurate[ii] = mode && strcmp(mode, "accurate") == 0;
             if ((rc = avformat_seek_file(c.in[ii], -1, INT64_MIN,
                                          c.seek_us[ii], c.seek_us[ii], 0)) < 0) {
@@ -1417,6 +1555,7 @@ int op_process(const cJSON *spec) {
 
     // Copy streams: unbracketed map entries ("0:v") pass through verbatim,
     // bypassing the graph/decoder/encoder (spec 0013).
+    if ((rc = check_encodable_map(&c)) < 0) goto end;
     if ((rc = add_copy_descriptors(&c)) < 0) goto end;
 
     // An accurate seek needs the decode-and-discard a copied stream skips, so it
