@@ -552,6 +552,30 @@ static int64_t job_seek_offset_us(const Ctx *c) {
     return 0;
 }
 
+// ts_add / ts_sub saturate instead of wrapping.
+//
+// #23 range-checked the numbers that arrive in the JOB SPEC. These are the ones
+// that arrive in the MEDIA, and nothing checks those: a demuxed timestamp near
+// INT64_MAX makes `rebase + duration` or `pts - offset` overflow, and signed
+// overflow is UNDEFINED in C -- on the native build, with optimisation, that is
+// not a guess about what happens next. The visible outcomes are a cutoff that
+// goes negative (an empty output reported as success) or timestamps the muxer
+// rejects.
+//
+// This is inside afmpeg's stated threat model in a way #23 was not: "safely
+// process untrusted media" means the file is hostile, not the caller.
+static int64_t ts_add(int64_t a, int64_t b) {
+    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
+    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
+    return a + b;
+}
+
+static int64_t ts_sub(int64_t a, int64_t b) {
+    if (b < 0 && a > INT64_MAX + b) return INT64_MAX;
+    if (b > 0 && a < INT64_MIN + b) return INT64_MIN;
+    return a - b;
+}
+
 // out_cutoff_us returns where output `out` stops on its own timeline (us), or
 // INT64_MAX for no window. On the default zero-based timeline `duration` and
 // `end` coincide (the output starts at 0); under copy_ts the timeline is the
@@ -696,7 +720,7 @@ static int pull_sinks(Ctx *c) {
             // had already been encoded, so such a job encoded into a bin and never
             // finished, even though the answer was complete (ffmpeg-wasi#19).
             if (cutoff != INT64_MAX && f->pts != AV_NOPTS_VALUE &&
-                av_rescale_q(f->pts, tb, AV_TIME_BASE_Q) + off >= cutoff) {
+                ts_add(av_rescale_q(f->pts, tb, AV_TIME_BASE_Q), off) >= cutoff) {
                 av_frame_unref(f);
                 c->gout[i].done = 1;
                 break;
@@ -1157,9 +1181,9 @@ static int write_copy_pkt(Ctx *c, Cpy *cp, AVRational src_tb, AVPacket *pkt) {
         // start; end is absolute under copy_ts, output-relative otherwise.
         int64_t cutoff = INT64_MAX;
         if (out->duration > 0) {
-            cutoff = *rebase + (int64_t)(out->duration * AV_TIME_BASE);
+            cutoff = ts_add(*rebase, (int64_t)(out->duration * AV_TIME_BASE));
         } else if (out->end > 0) {
-            cutoff = (out->copy_ts ? 0 : *rebase) + (int64_t)(out->end * AV_TIME_BASE);
+            cutoff = ts_add(out->copy_ts ? 0 : *rebase, (int64_t)(out->end * AV_TIME_BASE));
         }
         if (t_us >= cutoff) {
             av_packet_unref(pkt);
@@ -1168,8 +1192,8 @@ static int write_copy_pkt(Ctx *c, Cpy *cp, AVRational src_tb, AVPacket *pkt) {
 
         if (!out->copy_ts) {
             int64_t off = av_rescale_q(*rebase, AV_TIME_BASE_Q, src_tb);
-            if (pkt->pts != AV_NOPTS_VALUE) pkt->pts -= off;
-            if (pkt->dts != AV_NOPTS_VALUE) pkt->dts -= off;
+            if (pkt->pts != AV_NOPTS_VALUE) pkt->pts = ts_sub(pkt->pts, off);
+            if (pkt->dts != AV_NOPTS_VALUE) pkt->dts = ts_sub(pkt->dts, off);
         }
     }
 
@@ -1300,7 +1324,7 @@ static int write_sub_pkt(Ctx *c, Sub *su, AVSubtitle *sub) {
     // Event start + duration on the source timeline (AV_TIME_BASE units):
     // decode_subtitle2 sets sub->pts in AV_TIME_BASE; the display times are ms.
     int64_t base_pts = sub->pts != AV_NOPTS_VALUE ? sub->pts : 0;
-    int64_t start_us = base_pts + av_rescale_q(sub->start_display_time, (AVRational){1, 1000}, AV_TIME_BASE_Q);
+    int64_t start_us = ts_add(base_pts, av_rescale_q(sub->start_display_time, (AVRational){1, 1000}, AV_TIME_BASE_Q));
     int64_t dur_us = av_rescale_q((int64_t)sub->end_display_time - sub->start_display_time,
                                   (AVRational){1, 1000}, AV_TIME_BASE_Q);
 
@@ -1317,7 +1341,7 @@ static int write_sub_pkt(Ctx *c, Sub *su, AVSubtitle *sub) {
     // that start late left one hanging on screen past the end of the output
     // (ffmpeg-wasi#22).
     int clipped = 0;
-    if (cutoff != INT64_MAX && start_us + dur_us > cutoff) {
+    if (cutoff != INT64_MAX && ts_add(start_us, dur_us) > cutoff) {
         dur_us = cutoff - start_us;
         clipped = 1;
     }

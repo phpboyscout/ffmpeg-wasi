@@ -187,3 +187,26 @@ func concat(parts ...[]byte) []byte {
 	}
 	return out
 }
+
+// MatroskaAtTimecode returns a file whose single cluster sits at an absurd
+// timecode, for exercising what the engine does with a timestamp from untrusted
+// media that is near the limits of int64 (ffmpeg-wasi#44).
+func MatroskaAtTimecode(ms uint64) []byte {
+	header := el(idEBML, concat(
+		el([]byte{0x42, 0x86}, []byte{1}),
+		el([]byte{0x42, 0xF7}, []byte{1}),
+		el([]byte{0x42, 0xF2}, []byte{4}),
+		el([]byte{0x42, 0xF3}, []byte{8}),
+		strEl([]byte{0x42, 0x82}, "matroska"),
+		el([]byte{0x42, 0x87}, []byte{4}),
+		el([]byte{0x42, 0x85}, []byte{2}),
+	))
+	info := el(idInfo, concat(uintEl(idTimeScale, 1000000), floatEl(idDuration, 1000)))
+	tracks := el(idTracks, el([]byte{0xAE}, concat(
+		uintEl(idTrackNum, 1), uintEl(idTrackUID, 1),
+		uintEl(idTrackType, 17), strEl(idCodecID, "S_TEXT/UTF8"),
+	)))
+	block := concat([]byte{0x81}, []byte{0x00, 0x00}, []byte{0x00}, []byte("x"))
+	cluster := el(idCluster, concat(uintEl(idTimecode, ms), el(idSimpleBlk, block)))
+	return concat(header, el(idSegment, concat(info, tracks, cluster)))
+}
