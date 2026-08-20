@@ -1777,6 +1777,20 @@ int op_process(const cJSON *spec) {
                 }
             }
             if (r < 0) {
+                // Only AVERROR_EOF means this input ENDED. Anything else means it
+                // could not be READ -- a host that vanished, a truncated file, an
+                // I/O failure -- and treating that as an end of stream hands the
+                // caller a short output and exit 0 (ffmpeg-wasi#15).
+                //
+                // The cutoff branch above deliberately sets r = AVERROR_EOF, so an
+                // input stopped early by its window still takes the clean path.
+                if (r != AVERROR_EOF) {
+                    char eb[128];
+                    av_strerror(r, eb, sizeof(eb));
+                    fprintf(stderr, "ffmpeg-wasi: process: reading input %d: %s\n", i, eb);
+                    rc = r;
+                    break;
+                }
                 c.eof[i] = 1;
                 remaining--;
                 // Flush this input's decoders and close its buffersrcs.

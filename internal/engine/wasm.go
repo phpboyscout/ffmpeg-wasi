@@ -77,6 +77,16 @@ type Result struct {
 	Stderr   string
 	ExitCode int
 
+	// Signal names the signal that killed the process, empty if it exited
+	// normally. NATIVE ONLY.
+	//
+	// It exists because ExitCode alone cannot tell a reported failure from a
+	// corpse: Go reports a signalled process as -1, which satisfies any check
+	// spelled "the exit code is not zero". A test for #15 passed that way for
+	// weeks against an engine being killed by SIGPIPE, and the defect it was
+	// written for was recorded as not-reproduced on the strength of it.
+	Signal string
+
 	// PeakRSSKiB is the subprocess's high-water memory, from the kernel.
 	//
 	// NATIVE ONLY — it is 0 on the WASM runner, where the engine runs inside this

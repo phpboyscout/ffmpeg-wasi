@@ -101,12 +101,24 @@ static int rd_full(int fd, void *p, size_t n) {
     return 0;
 }
 
+// send() with MSG_NOSIGNAL rather than write(), because a host that closes the
+// connection would otherwise raise SIGPIPE and the default disposition KILLS THE
+// PROCESS. Measured: a host vanishing mid-file left the driver dead of a broken
+// pipe -- exit status -1, signalled -- instead of returning an error the caller
+// could read.
+//
+// That also made a test lie. The regression test for a transport failure asserts
+// "the exit code is not zero", and a signalled process reports -1, so it passed
+// on a corpse. #15 was recorded as "not reproduced" on the strength of it.
+//
+// MSG_NOSIGNAL is preferred over ignoring SIGPIPE globally: it is local to this
+// socket, so it cannot surprise anything else in the process.
 static int wr_full(int fd, const void *p, size_t n) {
     const uint8_t *b = p;
     size_t put = 0;
     while (put < n) {
-        ssize_t r = write(fd, b + put, n - put);
-        if (r <= 0) return -1;
+        ssize_t r = send(fd, b + put, n - put, MSG_NOSIGNAL);
+        if (r <= 0) return -1; // EPIPE arrives here now, instead of as a signal
         put += (size_t)r;
     }
     return 0;

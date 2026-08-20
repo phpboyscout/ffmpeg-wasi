@@ -60,7 +60,7 @@ func mp4Fixture(t *testing.T, ws *engine.Workspace, a engine.Artifact) string {
 
 // runOverIPC drives the native driver with a host that may be told to misbehave,
 // and returns the engine's exit code.
-func runOverIPC(t *testing.T, a engine.Artifact, h *ipchost.Host, sock, in string) (int, string) {
+func runOverIPC(t *testing.T, a engine.Artifact, h *ipchost.Host, sock, in string) (code int, stderr, signal string) {
 	t.Helper()
 
 	job, err := json.Marshal(map[string]any{
@@ -86,7 +86,7 @@ func runOverIPC(t *testing.T, a engine.Artifact, h *ipchost.Host, sock, in strin
 	if err != nil {
 		t.Fatalf("%s: invoking: %v", a, err)
 	}
-	return res.ExitCode, res.Stderr
+	return res.ExitCode, res.Stderr, res.Signal
 }
 
 // hostFaultSetup builds the fixture once and serves it, returning the host and
@@ -116,20 +116,24 @@ func hostFaultSetup(t *testing.T, a engine.Artifact) (*ipchost.Host, string, str
 	return h, sock, name
 }
 
-// TestATransportFailureIsNotAnEndOfStream asserts that a host disappearing
-// mid-file fails the job. It was written for #15 and IT HAS NEVER BEEN OBSERVED
-// RED -- run against the released engine, before any fix in this branch, it
-// passes 6/6.
+// TestATransportFailureIsNotAnEndOfStream is the regression test for #15 -- and
+// the story of how it lied is worth more than the test.
 //
-// That is recorded here on purpose. A passing test is evidence of a property
-// holding, not evidence that the fault it names was ever present, and reading it
-// the second way is precisely what let #12 hide for the life of the project. So
-// either #15 was never real, or this check is looser than the fault it was
-// written for, and nothing here distinguishes those.
+// It asserted "the exit code is not zero". Against the released engine it passed
+// 6/6, and #15 was recorded as NOT REPRODUCED on that evidence. Both were wrong.
 //
-// It is kept because the property is worth holding either way. Reopen #15 on a
-// concrete host fault that yields truncated output and exit 0; until then, do not
-// cite this test as the thing that fixed anything.
+// The engine was being KILLED BY SIGPIPE. A host that closes the connection makes
+// the driver's next write() raise it, and the default disposition terminates the
+// process; Go reports a signalled process as exit -1, which is not zero, so the
+// check was satisfied by a corpse. Measured across three builds:
+//
+//	released          exit=-1  killed by signal: broken pipe
+//	MSG_NOSIGNAL      exit=0   truncated output, reported as success  <- this is #15
+//	+ read-error fix  exit=1   a failure the caller can read
+//
+// So the test now asserts the process EXITED, and then that it exited non-zero.
+// Without the first half it cannot tell a reported failure from a dead process,
+// which is the whole reason it was believed for as long as it was.
 func TestATransportFailureIsNotAnEndOfStream(t *testing.T) {
 	t.Parallel()
 
@@ -140,7 +144,7 @@ func TestATransportFailureIsNotAnEndOfStream(t *testing.T) {
 			// Control first: an honest host completes the job. Without this a
 			// failure below could be the fixture rather than the fault.
 			good, sock, name := hostFaultSetup(t, a)
-			if code, stderr := runOverIPC(t, a, good, sock, name); code != 0 {
+			if code, stderr, _ := runOverIPC(t, a, good, sock, name); code != 0 {
 				t.Fatalf("%s: the control job failed over an honest host (exit %d) — "+
 					"the fixture or the bridge is wrong before any fault is injected.\n%s",
 					a, code, strings.TrimSpace(stderr))
@@ -150,7 +154,17 @@ func TestATransportFailureIsNotAnEndOfStream(t *testing.T) {
 			bad, sock2, name2 := hostFaultSetup(t, a)
 			bad.CloseAfterReads = 2
 
-			code, stderr := runOverIPC(t, a, bad, sock2, name2)
+			code, stderr, signal := runOverIPC(t, a, bad, sock2, name2)
+
+			// The signal check comes FIRST, and is the point of this test. A
+			// signalled process reports exit -1, which satisfies any "not zero"
+			// check — which is how this test was believed for weeks.
+			if signal != "" {
+				t.Errorf("%s: the host disappeared mid-file and the engine was KILLED BY %s "+
+					"rather than reporting a failure (ffmpeg-wasi#15).\nExit -1 from a corpse is "+
+					"not a reported error, and a check spelled \"the exit code is not zero\" "+
+					"cannot tell the difference.", a, signal)
+			}
 			if code == 0 {
 				t.Errorf("%s: the host disappeared mid-file and the engine exited 0 "+
 					"(ffmpeg-wasi#15).\nA transport failure is not an end of stream: the caller "+
@@ -186,7 +200,7 @@ func TestAnOverstatedReadIsRefused(t *testing.T) {
 			// buffer whatever the read size happens to be.
 			h.OverstateReadBy = 1 << 20
 
-			code, stderr := runOverIPC(t, a, h, sock, name)
+			code, stderr, _ := runOverIPC(t, a, h, sock, name)
 			if code == 0 {
 				t.Errorf("%s: the host claimed more bytes than the buffer holds and the engine "+
 					"exited 0 (ffmpeg-wasi#24).\nThe returned count must be checked against the "+

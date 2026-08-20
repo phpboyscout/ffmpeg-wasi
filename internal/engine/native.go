@@ -69,6 +69,11 @@ func (n Native) Run(ctx context.Context, args ...string) (Result, error) {
 		if ru, ok := st.SysUsage().(*syscall.Rusage); ok {
 			res.PeakRSSKiB = int64(ru.Maxrss) // Linux reports KiB
 		}
+		// A signalled process is not a reported failure, and the two must not be
+		// allowed to look alike.
+		if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			res.Signal = ws.Signal().String()
+		}
 	}
 	return res, nil
 }
