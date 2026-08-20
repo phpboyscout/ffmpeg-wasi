@@ -204,7 +204,12 @@ func TestAnAbsentMuxerSaysWhatIsPresent(t *testing.T) {
 				}
 			}
 			if absent == "" {
-				t.Skipf("%s carries every candidate muxer, so it cannot exercise the message", a)
+				// Not expected to happen — no build carries an `asf` or `rm` muxer —
+				// but if the enable-list ever grows to cover every candidate, this
+				// test would quietly stop testing anything. Fail rather than skip:
+				// a vacuous pass is the failure mode this whole suite exists to avoid.
+				t.Fatalf("%s carries every candidate muxer %v, so this test can no longer "+
+					"exercise the message — add a candidate that is genuinely absent", a, candidates)
 			}
 
 			spec := fmt.Sprintf(
@@ -221,11 +226,26 @@ func TestAnAbsentMuxerSaysWhatIsPresent(t *testing.T) {
 					"the format — cannot work for a muxer that is not compiled in, so the caller "+
 					"needs the list to know that.\nstderr: %s", a, absent, strings.TrimSpace(res.Stderr))
 			}
-			// And the list must be real: a muxer this artifact reports having.
-			if len(caps.Muxers) > 0 && !strings.Contains(res.Stderr, caps.Muxers[0]) {
-				t.Errorf("%s: the muxer list does not mention %q, which --capabilities says is "+
-					"present — the two disagree.\nstderr: %s",
-					a, caps.Muxers[0], strings.TrimSpace(res.Stderr))
+			// The list must be COMPLETE, not merely present. Checking one name would
+			// pass against a diagnostic that printed a single muxer, or a stale
+			// subset — and an incomplete list is worse than none, because it tells
+			// the caller a container is unavailable when it is not.
+			listed := res.Stderr
+			if i := strings.Index(listed, "carries these muxers:"); i >= 0 {
+				listed = listed[i:]
+			}
+			var missing []string
+			for _, m := range caps.Muxers {
+				if !strings.Contains(listed, m) {
+					missing = append(missing, m)
+				}
+			}
+			if len(missing) > 0 {
+				t.Errorf("%s: the muxer list omits %d of the %d muxers --capabilities reports: %s\n"+
+					"An incomplete list is worse than none — it tells the caller a container is "+
+					"absent when the build has it.\nstderr: %s",
+					a, len(missing), len(caps.Muxers), strings.Join(missing, ", "),
+					strings.TrimSpace(res.Stderr))
 			}
 		})
 	}

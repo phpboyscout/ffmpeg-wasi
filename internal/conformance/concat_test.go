@@ -100,14 +100,26 @@ func TestConcatQuotesASegmentNameContainingAnApostrophe(t *testing.T) {
 
 			// The same join, with an apostrophe in one name.
 			const quoted = "it's a wrap.mkv"
-			_, sock2 := concatSegments(t, a, []string{"a.mkv", quoted})
+			h2, sock2 := concatSegments(t, a, []string{"a.mkv", quoted})
 
 			code, stderr := runConcat(t, a, sock2, []string{"a.mkv", quoted})
 			if code != 0 {
-				t.Errorf("%s: a segment named %q broke the join (exit %d) — the playlist "+
+				t.Fatalf("%s: a segment named %q broke the join (exit %d) — the playlist "+
 					"interpolates names into `file '<name>'` without escaping, so the apostrophe "+
 					"closes the quote early (ffmpeg-wasi#25).\n%s",
 					a, quoted, code, strings.TrimSpace(stderr))
+			}
+
+			// Exit 0 is not enough. An engine that kept the quoting bug but swallowed
+			// the resulting error, or wrote a file holding only the first segment,
+			// would satisfy an exit-code check. The join has to have actually
+			// happened, so require BOTH segments' worth of material.
+			one := concatFrameCount(t, a, h2, sock2, []string{"a.mkv"})
+			two := concatFrameCount(t, a, h2, sock2, []string{"a.mkv", quoted})
+			if two < one*2 {
+				t.Errorf("%s: joining a.mkv with %q yielded %d frames, but a.mkv alone yields %d — "+
+					"the second segment did not reach the output, so the join failed quietly "+
+					"rather than loudly (ffmpeg-wasi#25).", a, quoted, two, one)
 			}
 		})
 	}
@@ -134,6 +146,17 @@ func TestConcatDoesNotLetAFilenameInjectAPlaylistDirective(t *testing.T) {
 			injected := "a.mkv'\nfile 'no-such-segment.mkv"
 
 			h, sock := concatSegments(t, a, []string{"a.mkv"})
+
+			// Control first. Without it, an unrelated concat failure — a broken
+			// fixture, a missing muxer — satisfies the assertion below while the
+			// unsafe interpolation is still there, because "did not open the
+			// injected name" is also true of a job that never got started.
+			if code, stderr := runConcat(t, a, sock, []string{"a.mkv"}); code != 0 {
+				t.Fatalf("%s: joining one ordinary segment failed (exit %d) — concat is broken "+
+					"before injection is reached, so this test would pass for the wrong reason.\n%s",
+					a, code, strings.TrimSpace(stderr))
+			}
+
 			code, stderr := runConcat(t, a, sock, []string{injected})
 
 			// Either outcome is acceptable; what is not is the engine opening the
@@ -147,4 +170,48 @@ func TestConcatDoesNotLetAFilenameInjectAPlaylistDirective(t *testing.T) {
 			}
 		})
 	}
+}
+
+// concatFrameCount joins segs and returns how many frames the result yields.
+//
+// It counts frames rather than probing: a probe asks the engine what it thinks it
+// wrote, and a quietly-failed join is exactly the case where that answer cannot be
+// trusted. The output is an image sequence over the same bridge, so the host's own
+// record of what it was asked to open is the count.
+func concatFrameCount(t *testing.T, a engine.Artifact, h *ipchost.Host, sock string, segs []string) int {
+	t.Helper()
+
+	before := len(h.Opened())
+	job, err := json.Marshal(map[string]any{
+		"op":      "process",
+		"version": 2,
+		"inputs":  []any{map[string]any{"concat": segs}},
+		"outputs": []any{map[string]any{
+			"path": "d_%04d.png", "map": []any{"[v]"}, "video_codec": "png",
+		}},
+		"filter": "[0:v]null[v]",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+	defer cancel()
+	res, err := engine.Native{Path: a.Path, Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}.
+		Run(ctx, string(job))
+	if err != nil {
+		t.Fatalf("%s: invoking: %v", a, err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("%s: counting the join of %v failed (exit %d)\n%s",
+			a, segs, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+
+	n := 0
+	for _, name := range h.Opened()[before:] {
+		if strings.HasPrefix(name, "d_") {
+			n++
+		}
+	}
+	return n
 }

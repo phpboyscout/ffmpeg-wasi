@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -123,6 +124,38 @@ func TestAMultiFileOutputStaysInsideTheBridge(t *testing.T) {
 					a, len(stray), strings.Join(names, ", "))
 			}
 
+			// HLS is the other multi-file muxer #14 named, and an engine that
+			// special-cased image2 would pass everything above while its segments
+			// still escaped. Its CONTAINMENT is asserted here; its usability is not,
+			// because the playlist is written to a .tmp and renamed and the protocol
+			// has no rename — that gap is #35, and a test demanding a working
+			// playlist today would be failing for that instead of this.
+			if hasMuxer(t, a, "hls") {
+				mustBeEmptyAfterClearing(t, offLimits)
+				runIn(t, a, offLimits, []string{"AFMPEG_NATIVE_SOCKET=" + sock},
+					map[string]any{
+						"op":     "process",
+						"inputs": []any{map[string]any{"path": "clip.mkv"}},
+						"outputs": []any{map[string]any{
+							"path": "stream.m3u8", "map": []any{"[v]"}, "format": "hls",
+							"video_codec": "libopenh264",
+							"format_options": map[string]any{
+								"hls_time": "1", "hls_segment_filename": "seg_%03d.ts",
+								"hls_list_size": "0",
+							},
+						}},
+						"filter": "[0:v]null[v]",
+					})
+				if stray, err := os.ReadDir(offLimits); err == nil && len(stray) > 0 {
+					names := make([]string, len(stray))
+					for i, e := range stray {
+						names[i] = e.Name()
+					}
+					t.Errorf("%s: an HLS output put %d file(s) on host disk with the bridge "+
+						"active (ffmpeg-wasi#14): %s", a, len(stray), strings.Join(names, ", "))
+				}
+			}
+
 			// And the positive half: the frames really did arrive through the host.
 			// Without this, a fix that simply stopped writing anything would pass.
 			got, err := filepath.Glob(filepath.Join(served, "shot_*.png"))
@@ -172,4 +205,15 @@ func mustBeEmptyAfterClearing(t *testing.T, dir string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// hasMuxer reports whether an artifact carries a muxer by name, so a test can
+// cover it where present and stay quiet where the profile leaves it out.
+func hasMuxer(t *testing.T, a engine.Artifact, name string) bool {
+	t.Helper()
+	caps, err := engine.Query(context.Background(), a.Runner())
+	if err != nil {
+		t.Fatalf("%s: querying capabilities: %v", a, err)
+	}
+	return slices.Contains(caps.Muxers, name)
 }
