@@ -140,10 +140,24 @@ func TestAFinishedSinkDoesNotHoardFrames(t *testing.T) {
 	// Long enough that hoarding is unmistakable against the baseline, short
 	// enough to stay quick: 15s at 25fps of 320x320 is ~375 frames.
 	const (
-		seconds   = 15
-		rate      = 25
-		side      = 320
-		maxGrowth = 2.5 // the defect gave 7.3x; anything near 1.0 is the fix working
+		seconds = 15
+		rate    = 25
+		side    = 320
+	)
+
+	// What hoarding would COST, in KiB, derived from the fixture rather than
+	// guessed. The finished sink would hold every frame after its window: that
+	// many yuv420p frames of this geometry. A relative multiplier was the first
+	// attempt and it is the wrong instrument — it moves with the control
+	// baseline and with the fixture length, so it can be satisfied by a fixture
+	// too short to hoard much, which is the "check looser than the fault" shape
+	// this file exists to avoid.
+	const (
+		hoardedFrames = (seconds - 1) * rate
+		frameKiB      = side * side * 3 / 2 / 1024 // yuv420p
+		hoardCostKiB  = hoardedFrames * frameKiB
+		// Half of it is unmistakable: the fix should show ~0, the defect ~all of it.
+		allowedKiB = hoardCostKiB / 2
 	)
 
 	for _, a := range nativeArtifacts(t) {
@@ -227,15 +241,18 @@ func TestAFinishedSinkDoesNotHoardFrames(t *testing.T) {
 			wantFrames(t, ws, a, "win_b.mkv", seconds*rate)
 			wantFrames(t, ws, a, "win_a.mkv", 1*rate)
 
-			// The control establishes what this job costs when nothing finishes
-			// early. Without it a threshold would be an arbitrary number that
-			// drifts with the fixture and the encoder.
-			if ratio := float64(windowed) / float64(control); ratio > maxGrowth {
-				t.Errorf("%s: windowing one of two outputs took peak memory from %d KiB to %d KiB "+
-					"(%.1fx) — a finished sink is hoarding the frames the graph keeps pushing to it.\n"+
-					"Both files are still correct, so only this can see it. The fix is to drain the "+
-					"done sink with AV_BUFFERSINK_FLAG_NO_REQUEST and discard, never to skip it "+
-					"(ffmpeg-wasi#19).", a, control, windowed, ratio)
+			// The control says what this job costs when nothing finishes early, so
+			// the comparison is against measured baseline plus the arithmetic cost
+			// of the defect — not against a multiplier that would drift.
+			if grew := windowed - control; grew > allowedKiB {
+				t.Errorf("%s: windowing one of two outputs grew peak memory by %d KiB "+
+					"(%d KiB -> %d KiB). Hoarding every frame after the window would cost about "+
+					"%d KiB (%d frames of %dx%d yuv420p), and this is over half of that — a "+
+					"finished sink is holding the frames the graph keeps pushing to it.\n"+
+					"Both output files are still correct, so only a memory measurement can see "+
+					"this. The fix is to drain the done sink with AV_BUFFERSINK_FLAG_NO_REQUEST "+
+					"and discard, never to skip it (ffmpeg-wasi#19).",
+					a, grew, control, windowed, hoardCostKiB, hoardedFrames, side, side)
 			}
 		})
 	}

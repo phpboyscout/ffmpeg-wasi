@@ -116,7 +116,18 @@ func TestConcatQuotesASegmentNameContainingAnApostrophe(t *testing.T) {
 			// happened, so require BOTH segments' worth of material.
 			one := concatFrameCount(t, a, h2, sock2, []string{"a.mkv"})
 			two := concatFrameCount(t, a, h2, sock2, []string{"a.mkv", quoted})
-			if two < one*2 {
+
+			// Guard the baseline first. With one == 0 the comparison below is
+			// "0 < 0", which is false, and the whole assertion passes having
+			// measured nothing — the exact shape of vacuous pass this suite exists
+			// to catch, and one I nearly shipped writing the check for it.
+			if one == 0 {
+				t.Fatalf("%s: counting a single-segment join yielded no frames, so the "+
+					"comparison below would pass without measuring anything", a)
+			}
+			// Half again is enough to prove the second segment contributed, without
+			// demanding an exact doubling the muxer is not obliged to give.
+			if two < one+one/2 {
 				t.Errorf("%s: joining a.mkv with %q yielded %d frames, but a.mkv alone yields %d — "+
 					"the second segment did not reach the output, so the join failed quietly "+
 					"rather than loudly (ffmpeg-wasi#25).", a, quoted, two, one)
@@ -159,13 +170,24 @@ func TestConcatDoesNotLetAFilenameInjectAPlaylistDirective(t *testing.T) {
 
 			code, stderr := runConcat(t, a, sock, []string{injected})
 
-			// Either outcome is acceptable; what is not is the engine opening the
-			// injected name as if the caller had asked for it.
+			// Either outcome is acceptable; what is not is the engine opening
+			// ANYTHING the caller did not name.
+			//
+			// A whitelist rather than a search for "no-such-segment": that string is
+			// this test's own payload, and checking only for it would miss an
+			// injection through a different directive — `file` is not the only one
+			// the concat demuxer honours. Anything outside the set below is the
+			// filename having become control over what the engine opens.
+			allowed := map[string]bool{
+				"a.mkv":      true, // the real segment, and the control job above
+				"joined.mkv": true, // the job's own output, which also crosses the bridge
+				injected:     true, // asking for the literal name is fine; acting on it is not
+			}
 			for _, opened := range h.Opened() {
-				if strings.Contains(opened, "no-such-segment") {
-					t.Errorf("%s: a newline in a segment name injected a playlist directive and "+
-						"the engine acted on it — it tried to open %q (ffmpeg-wasi#25).\n"+
-						"exit %d, stderr: %s", a, opened, code, strings.TrimSpace(stderr))
+				if !allowed[opened] {
+					t.Errorf("%s: a newline in a segment name made the engine open %q, which the "+
+						"caller never asked for (ffmpeg-wasi#25).\nexit %d, stderr: %s",
+						a, opened, code, strings.TrimSpace(stderr))
 				}
 			}
 		})
