@@ -143,7 +143,12 @@ type probeReply struct {
 		Format      string  `json:"format"`
 		DurationSec float64 `json:"duration_sec"`
 		Error       string  `json:"error"`
-		Streams     []struct {
+		Chapters    []struct {
+			Start float64 `json:"start"`
+			End   float64 `json:"end"`
+			Title string  `json:"title"`
+		} `json:"chapters"`
+		Streams []struct {
 			Index      int    `json:"index"`
 			Type       string `json:"type"`
 			Codec      string `json:"codec"`
@@ -152,6 +157,7 @@ type probeReply struct {
 			SampleRate int    `json:"sample_rate"`
 			Channels   int    `json:"channels"`
 			PixFmt     string `json:"pix_fmt"`
+			Language   string `json:"language"`
 		} `json:"streams"`
 	} `json:"inputs"`
 }

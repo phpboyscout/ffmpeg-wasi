@@ -114,6 +114,7 @@ typedef struct {
     int in_idx;
     int st_idx;
     int out_idx;
+    const char *map_key; // the "0:s" entry it came from, for stream_metadata routing
     AVCodecContext *dec;
     AVCodecContext *enc;
     AVStream *ost;
@@ -1049,6 +1050,7 @@ static int add_copy_descriptors(Ctx *c) {
                 su->in_idx = in_idx;
                 su->st_idx = st;
                 su->out_idx = oi;
+                su->map_key = m->valuestring; // so stream_metadata can find it (#40)
                 su->dec = su->enc = NULL;
                 su->ost = NULL;
                 continue;
@@ -1443,16 +1445,41 @@ static int open_one_input(AVFormatContext **out, const cJSON *in, int idx) {
 // copy_chapters deep-copies an input's chapters onto an output context (spec 0020
 // D-0020-B): id/time_base/start/end + the title dict, so a transcode keeps its
 // chapter list. Passthrough only — authoring chapters from the spec is deferred.
-static int copy_chapters(AVFormatContext *dst, const AVFormatContext *src) {
+// seek0_us and cutoff_us bound the output on the SOURCE timeline; copy_ts keeps
+// the source timeline instead of zero-basing. A chapter outside the window is
+// dropped and one that straddles it is clipped, because the engine used to copy
+// start and end verbatim: seeking an input to 60s left a chapter at 70s sitting
+// at 70s in an output whose media now starts at zero, and chapters past a
+// duration cutoff pointed beyond the end of the file (ffmpeg-wasi#41).
+//
+// Same defect as #22 wearing different clothes — the engine decided WHETHER to
+// carry the item and never adjusted WHERE it sits.
+static int copy_chapters(AVFormatContext *dst, const AVFormatContext *src,
+                         int64_t seek0_us, int64_t cutoff_us, int copy_ts) {
     for (unsigned i = 0; i < src->nb_chapters; i++) {
         const AVChapter *sc = src->chapters[i];
+
+        int64_t start_us = av_rescale_q(sc->start, sc->time_base, AV_TIME_BASE_Q);
+        int64_t end_us = av_rescale_q(sc->end, sc->time_base, AV_TIME_BASE_Q);
+
+        // Wholly outside the window in either direction.
+        if (start_us >= cutoff_us) continue;
+        if (end_us <= seek0_us) continue;
+
+        if (end_us > cutoff_us) end_us = cutoff_us;   // straddles the end
+        if (start_us < seek0_us) start_us = seek0_us; // straddles the start
+        if (!copy_ts) { start_us -= seek0_us; end_us -= seek0_us; }
+
         AVChapter *dc = av_mallocz(sizeof(*dc));
         if (!dc) return AVERROR(ENOMEM);
         dc->id = sc->id;
         dc->time_base = sc->time_base;
-        dc->start = sc->start;
-        dc->end = sc->end;
-        av_dict_copy(&dc->metadata, sc->metadata, 0);
+        dc->start = av_rescale_q(start_us, AV_TIME_BASE_Q, sc->time_base);
+        dc->end = av_rescale_q(end_us, AV_TIME_BASE_Q, sc->time_base);
+        // An allocation failure here used to be discarded, so a chapter arrived
+        // with no title and the job reported success (ffmpeg-wasi#43).
+        int mr = av_dict_copy(&dc->metadata, sc->metadata, 0);
+        if (mr < 0) { av_free(dc); return mr; }
         AVChapter **tmp = av_realloc_array(dst->chapters, dst->nb_chapters + 1, sizeof(*tmp));
         if (!tmp) { av_dict_free(&dc->metadata); av_free(dc); return AVERROR(ENOMEM); }
         dst->chapters = tmp;
@@ -1477,14 +1504,21 @@ static const cJSON *stream_meta_for(const Out *out, const char *map_key) {
 // apply_stream_metadata applies one stream_metadata entry to an output stream:
 // language + arbitrary tags onto ost->metadata, and the disposition set. Overrides
 // whatever a copy carried across (spec 0020 D-0020-D).
-static void apply_stream_metadata(const cJSON *meta, AVStream *ost) {
-    if (!cJSON_IsObject(meta)) return;
+// Returns 0, or the libav error if a dictionary allocation failed — discarding
+// that produced an output missing the language the caller asked for, reported as
+// a success (ffmpeg-wasi#43).
+static int apply_stream_metadata(const cJSON *meta, AVStream *ost) {
+    if (!cJSON_IsObject(meta)) return 0;
 
     const char *lang = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(meta, "language"));
-    if (lang) av_dict_set(&ost->metadata, "language", lang, 0);
+    if (lang) {
+        int rc = av_dict_set(&ost->metadata, "language", lang, 0);
+        if (rc < 0) return rc;
+    }
     meta_apply_tags(&ost->metadata, cJSON_GetObjectItemCaseSensitive(meta, "tags"));
     const cJSON *disp = cJSON_GetObjectItemCaseSensitive(meta, "disposition");
     if (cJSON_IsArray(disp)) ost->disposition = meta_disposition_from_json(disp);
+    return 0;
 }
 
 // apply_output_metadata threads one output's container tags, chapter passthrough,
@@ -1509,18 +1543,36 @@ static int apply_output_metadata(Ctx *c, int oi) {
             }
         }
         if (src >= 0 && src < c->n_in) {
-            int rc = copy_chapters(out->ofmt, c->in[src]);
+            int64_t seek0 = c->seek_us[src] != AV_NOPTS_VALUE ? c->seek_us[src] : 0;
+            int64_t cutoff = INT64_MAX;
+            if (out->duration > 0) cutoff = seek0 + (int64_t)(out->duration * AV_TIME_BASE);
+            else if (out->end > 0) cutoff = (out->copy_ts ? 0 : seek0) + (int64_t)(out->end * AV_TIME_BASE);
+            int rc = copy_chapters(out->ofmt, c->in[src], seek0, cutoff, out->copy_ts);
             if (rc < 0) return rc;
         }
     }
 
     for (int i = 0; i < c->n_gout; i++) {
-        if (c->gout[i].out_idx == oi)
-            apply_stream_metadata(stream_meta_for(out, c->gout[i].label), c->gout[i].ost);
+        if (c->gout[i].out_idx == oi) {
+            int rc = apply_stream_metadata(stream_meta_for(out, c->gout[i].label), c->gout[i].ost);
+            if (rc < 0) return rc;
+        }
     }
     for (int i = 0; i < c->n_cpy; i++) {
-        if (c->cpy[i].out_idx == oi)
-            apply_stream_metadata(stream_meta_for(out, c->cpy[i].map_key), c->cpy[i].ost);
+        if (c->cpy[i].out_idx == oi) {
+            int rc = apply_stream_metadata(stream_meta_for(out, c->cpy[i].map_key), c->cpy[i].ost);
+            if (rc < 0) return rc;
+        }
+    }
+    // And the subtitle transcode lane, which was simply missed. A COPIED subtitle
+    // got its metadata because it rides the Cpy path above, so the same job spec
+    // behaved differently depending on whether subtitle_codec was "copy" or a real
+    // encoder (ffmpeg-wasi#40).
+    for (int i = 0; i < c->n_sub; i++) {
+        if (c->sub[i].out_idx == oi) {
+            int rc = apply_stream_metadata(stream_meta_for(out, c->sub[i].map_key), c->sub[i].ost);
+            if (rc < 0) return rc;
+        }
     }
     return 0;
 }

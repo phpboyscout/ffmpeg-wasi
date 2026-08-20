@@ -188,3 +188,59 @@ func readCues(t *testing.T, ws *engine.Workspace, a engine.Artifact, name string
 	}
 	return string(body)
 }
+
+// TestATranscodedSubtitleKeepsItsMetadata is the regression test for #40.
+//
+// apply_output_metadata walked graph outputs and copied streams and stopped.
+// The subtitle TRANSCODE lane (spec 0019) is neither, so `stream_metadata` was
+// silently dropped for it — while a COPIED subtitle got it, because that rides
+// the Cpy path.
+//
+// The same job spec therefore behaved differently depending on whether
+// subtitle_codec was "copy" or a real encoder, which is the split #21 was about.
+// The copy case is the control here for exactly that reason: it proves the
+// routing works and isolates the missing lane.
+func TestATranscodedSubtitleKeepsItsMetadata(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+			subtitleArtifacts(t, a, "srt")
+
+			language := func(name, codec string) string {
+				ws, in := subWorkspace(t, a)
+				runJob(t, ws, a, map[string]any{
+					"op":     "process",
+					"inputs": []any{map[string]any{"path": in}},
+					"outputs": []any{map[string]any{
+						"path": ws.Path(name), "map": []any{"0:s"}, "subtitle_codec": codec,
+						"stream_metadata": map[string]any{
+							"0:s": map[string]any{"language": "deu"},
+						},
+					}},
+				})
+				got := probe(t, ws, a, ws.Path(name)).Inputs[0]
+				if len(got.Streams) != 1 {
+					t.Fatalf("%s: %s has %d streams, want 1", a, name, len(got.Streams))
+				}
+				return got.Streams[0].Language
+			}
+
+			// Matroska, not SubRip: a .srt file is bare text with nowhere to put a
+			// language, so both halves would report "" and the test would fail for
+			// a reason that has nothing to do with the defect.
+			//
+			// Control: a COPIED subtitle carries it, so the routing itself works.
+			if lang := language("copied.mkv", "copy"); lang != "deu" {
+				t.Fatalf("%s: a copied subtitle stream lost its language (%q) — the metadata "+
+					"routing is broken before the transcode lane is reached", a, lang)
+			}
+
+			if lang := language("encoded.mkv", "srt"); lang != "deu" {
+				t.Errorf("%s: a TRANSCODED subtitle stream reports language %q, want \"deu\" "+
+					"(ffmpeg-wasi#40).\nThe copy of the same job keeps it, so the request is "+
+					"understood — the transcode lane was simply never visited by "+
+					"apply_output_metadata.", a, lang)
+			}
+		})
+	}
+}
