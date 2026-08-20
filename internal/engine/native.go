@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"syscall"
 )
 
 // Native runs the native ELF driver as a subprocess.
@@ -61,6 +62,14 @@ func (n Native) Run(ctx context.Context, args ...string) (Result, error) {
 
 	res.Stdout = stdout.String()
 	res.Stderr = stderr.String()
+	// Peak memory, so a test can assert on growth the output cannot show. Best
+	// effort: a platform that does not report it leaves the field zero rather
+	// than failing the run.
+	if st := cmd.ProcessState; st != nil {
+		if ru, ok := st.SysUsage().(*syscall.Rusage); ok {
+			res.PeakRSSKiB = int64(ru.Maxrss) // Linux reports KiB
+		}
+	}
 	return res, nil
 }
 

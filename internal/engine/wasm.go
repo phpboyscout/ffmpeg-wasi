@@ -76,6 +76,14 @@ type Result struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+
+	// PeakRSSKiB is the subprocess's high-water memory, from the kernel.
+	//
+	// NATIVE ONLY — it is 0 on the WASM runner, where the engine runs inside this
+	// process and its memory is not separable from the test binary's. It exists
+	// because one class of defect here is unbounded growth rather than a wrong
+	// answer, and no assertion about output can see that.
+	PeakRSSKiB int64
 }
 
 // Runner invokes an artifact with the given arguments.

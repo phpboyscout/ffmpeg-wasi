@@ -650,8 +650,32 @@ static int pull_sinks(Ctx *c) {
     AVFrame *f = av_frame_alloc();
     if (!f) return AVERROR(ENOMEM);
     int ret = 0;
+
+    // Every sink satisfied means the job already has its answer. Stop pulling
+    // entirely -- an endless graph (`loop=loop=-1`) has no other reason to stop,
+    // and this is what makes a bounded output bound the work (ffmpeg-wasi#19).
+    int live = 0;
+    for (int i = 0; i < c->n_gout; i++) live += !c->gout[i].done;
+    if (c->n_gout > 0 && live == 0) { av_frame_free(&f); return 0; }
+
     for (int i = 0; i < c->n_gout; i++) {
-        if (c->gout[i].done) continue;
+        if (c->gout[i].done) {
+            // Finished, but NOT abandoned. Skipping it outright leaves the graph
+            // queueing every later frame for this pad, because a sink nobody
+            // reads still accumulates: two outputs sharing one graph through
+            // `split`, one windowed to 1s of a 20s source, took peak RSS from
+            // 14MB to 102MB. On a long source that is unbounded.
+            //
+            // NO_REQUEST is the whole trick. A plain get_frame would pump the
+            // graph to satisfy the read, which on an endless filter never
+            // returns -- reintroducing the defect this flag exists to fix. This
+            // drains only what is already queued and then reports EAGAIN.
+            while (av_buffersink_get_frame_flags(c->gout[i].sink, f,
+                                                 AV_BUFFERSINK_FLAG_NO_REQUEST) >= 0) {
+                av_frame_unref(f);
+            }
+            continue;
+        }
         // Where this sink's output stops, on the sink's own timeline.
         const Out *sout = &c->out[c->gout[i].out_idx];
         int64_t cutoff = out_cutoff_us(c, sout);

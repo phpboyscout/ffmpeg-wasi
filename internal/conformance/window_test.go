@@ -1,10 +1,14 @@
 package conformance
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"gitlab.com/phpboyscout/ffmpeg-wasi/internal/engine"
+	"gitlab.com/phpboyscout/ffmpeg-wasi/internal/fixture"
 )
 
 // A bounded output must bound the work — ffmpeg-wasi#19.
@@ -108,5 +112,131 @@ func wantFrames(t *testing.T, ws *engine.Workspace, a engine.Artifact, name stri
 	if len(got) != want {
 		t.Errorf("%s: %s holds %d frames, want %d (ffmpeg-wasi#19) — the window was "+
 			"applied, but not to the right amount of material", a, name, len(got), want)
+	}
+}
+
+// TestAFinishedSinkDoesNotHoardFrames is the regression test for the defect the
+// #19 fix introduced, found in review before it shipped.
+//
+// Marking a sink done and then SKIPPING it on every later pass is the obvious
+// implementation, and it is wrong: a buffersink nobody reads still accumulates
+// whatever the graph pushes to it. With two outputs sharing one graph and only
+// one of them windowed, the finished sink queues every remaining frame of the
+// source. Measured before the fix, on a 20-second source with a one-second
+// window: peak RSS 14MB against 102MB. That grows with the source, so on a long
+// input it is unbounded.
+//
+// # Why this asserts memory rather than output
+//
+// Both outputs were CORRECT throughout — 1.000s and 20.000s, exactly as asked.
+// No assertion about the files could have caught this, which is precisely why it
+// needed measuring instead. Peak RSS is the quantity that was wrong.
+//
+// # Why it is native-only
+//
+// The WASM engine runs inside the test binary, so its memory is not separable
+// from Go's. The defect is in shared src/, so the native measurement covers it.
+func TestAFinishedSinkDoesNotHoardFrames(t *testing.T) {
+	// Long enough that hoarding is unmistakable against the baseline, short
+	// enough to stay quick: 15s at 25fps of 320x320 is ~375 frames.
+	const (
+		seconds   = 15
+		rate      = 25
+		side      = 320
+		maxGrowth = 2.5 // the defect gave 7.3x; anything near 1.0 is the fix working
+	)
+
+	for _, a := range nativeArtifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			ws := workspaceFor(t, a)
+			for i := range seconds * rate {
+				png, err := fixture.PNG(side, side, i)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := ws.Write(fmt.Sprintf("f_%04d.png", i), png); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runJob(t, ws, a, map[string]any{
+				"op": "process",
+				"inputs": []any{map[string]any{
+					"path": ws.Path("f_%04d.png"), "format": "image2",
+					"options": map[string]any{"framerate": fmt.Sprint(rate)},
+				}},
+				"outputs": []any{map[string]any{
+					"path": ws.Path("hoard_src.mkv"), "map": []any{"[v]"},
+					"video_codec": "libopenh264",
+				}},
+				"filter": "[0:v]null[v]",
+			})
+
+			// Two outputs off one graph. In the control both run to the end, so
+			// neither sink is ever finished early; in the test one is windowed to
+			// a second, so its sink finishes with ~14 seconds still to come.
+			split := func(name string, window any) int64 {
+				out := []any{
+					map[string]any{"path": ws.Path(name + "_a.mkv"), "map": []any{"[a]"},
+						"video_codec": "libopenh264"},
+					map[string]any{"path": ws.Path(name + "_b.mkv"), "map": []any{"[b]"},
+						"video_codec": "libopenh264"},
+				}
+				if window != nil {
+					out[0].(map[string]any)["duration"] = window
+				}
+				spec, err := json.Marshal(map[string]any{
+					"op":      "process",
+					"inputs":  []any{map[string]any{"path": ws.Path("hoard_src.mkv")}},
+					"filter":  "[0:v]split=2[a][b]",
+					"outputs": out,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+				defer cancel()
+				res, err := ws.Runner().Run(ctx, string(spec))
+				if err != nil {
+					t.Fatalf("%s: %s: %v", a, name, err)
+				}
+				if res.ExitCode != 0 {
+					t.Fatalf("%s: %s exited %d\n%s", a, name, res.ExitCode,
+						strings.TrimSpace(res.Stderr))
+				}
+				if res.PeakRSSKiB == 0 {
+					// Not a skip. A skip here is a vacuous pass, which is the exact
+					// failure mode this suite exists to prevent — and the native
+					// runner on Linux always reports this, so a zero means the
+					// measurement broke, not that the platform cannot do it.
+					t.Fatalf("%s: %s: the runner reported no peak RSS, so this test measured "+
+						"nothing", a, name)
+				}
+				return res.PeakRSSKiB
+			}
+
+			control := split("ctl", nil)
+			windowed := split("win", 1)
+
+			// Low memory is only good news if the work still happened. A change that
+			// bounded memory by truncating the shared graph — stopping BOTH outputs
+			// when the windowed one finished — would pass a memory assertion alone.
+			// So the unwindowed output must still be full length, and the windowed
+			// one must still be its window.
+			wantFrames(t, ws, a, "win_b.mkv", seconds*rate)
+			wantFrames(t, ws, a, "win_a.mkv", 1*rate)
+
+			// The control establishes what this job costs when nothing finishes
+			// early. Without it a threshold would be an arbitrary number that
+			// drifts with the fixture and the encoder.
+			if ratio := float64(windowed) / float64(control); ratio > maxGrowth {
+				t.Errorf("%s: windowing one of two outputs took peak memory from %d KiB to %d KiB "+
+					"(%.1fx) — a finished sink is hoarding the frames the graph keeps pushing to it.\n"+
+					"Both files are still correct, so only this can see it. The fix is to drain the "+
+					"done sink with AV_BUFFERSINK_FLAG_NO_REQUEST and discard, never to skip it "+
+					"(ffmpeg-wasi#19).", a, control, windowed, ratio)
+			}
+		})
 	}
 }
