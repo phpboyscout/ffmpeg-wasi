@@ -352,7 +352,12 @@ static int grab_scene(Frames *f, const char *tmpl, int ntok, int cap, AVPacket *
         if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) rc = 0;
     }
     if (rc >= 0 && f->written < cap) {
-        av_buffersrc_add_frame_flags(f->src, NULL, 0); // signal EOF to the graph
+        // Signal EOF to the graph. AVERROR_EOF means a downstream filter already
+        // closed the source, which is the #11 lifecycle case and not a failure;
+        // anything else is. Discarding it was the same defect as #38, in the op
+        // that #38's fix did not touch.
+        int br = av_buffersrc_add_frame_flags(f->src, NULL, 0);
+        if (br < 0 && br != AVERROR_EOF) return br;
         AVFrame *out = av_frame_alloc();
         if (!out) return AVERROR(ENOMEM);
         while (f->written < cap && av_buffersink_get_frame(f->sink, out) >= 0) {

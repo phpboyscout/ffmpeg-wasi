@@ -2,8 +2,13 @@ package fixture
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 )
+
+// maxFixtureSeconds bounds a generated file. The writer emits one cluster per
+// second, so an unbounded span is an unbounded allocation.
+const maxFixtureSeconds = 3600
 
 // A minimal Matroska writer, here for one reason: CHAPTERS.
 //
@@ -104,6 +109,16 @@ type Chapter struct {
 // and no media. Times are stored in nanoseconds, which is Matroska's unit at the
 // default timecode scale.
 func MatroskaWithChapters(chapters []Chapter) []byte {
+	// A fixture builder that hangs is worse than a missing fixture: it would look
+	// like the engine hanging. Times are test-authored, so this is a guard against
+	// a typo rather than against an attacker — but a stray 1e9 in a chapter end
+	// would otherwise spin the one-cluster-per-second loop until the machine died.
+	for i, c := range chapters {
+		if c.Start < 0 || c.End < c.Start || c.End > maxFixtureSeconds {
+			panic(fmt.Sprintf("fixture: chapter %d is %v–%vs, which is not a usable range "+
+				"(0..%v)", i, c.Start, c.End, maxFixtureSeconds))
+		}
+	}
 	header := el(idEBML, concat(
 		el([]byte{0x42, 0x86}, []byte{1}), // EBMLVersion
 		el([]byte{0x42, 0xF7}, []byte{1}), // EBMLReadVersion
@@ -123,9 +138,14 @@ func MatroskaWithChapters(chapters []Chapter) []byte {
 			last = c.End
 		}
 	}
+	// MuxingApp and WritingApp are mandatory in the Matroska schema. libav does
+	// not enforce them, but a fixture that is only accidentally acceptable would
+	// fail the chapter tests for a reason that has nothing to do with chapters.
 	info := el(idInfo, concat(
 		uintEl(idTimeScale, 1000000), // 1ms per tick
 		floatEl(idDuration, last*1000),
+		strEl([]byte{0x4D, 0x80}, "ffmpeg-wasi/internal/fixture"),
+		strEl([]byte{0x57, 0x41}, "ffmpeg-wasi/internal/fixture"),
 	))
 
 	// One subtitle track: S_TEXT/UTF8 needs no CodecPrivate, so the file opens

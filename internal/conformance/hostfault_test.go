@@ -78,6 +78,9 @@ func runOverIPC(t *testing.T, a engine.Artifact, h *ipchost.Host, sock, in strin
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 	defer cancel()
 
+	// NOT runAndCheck: this helper's callers deliberately reason about the signal
+	// themselves — #15's whole point is that being killed is a distinguishable
+	// outcome here — so it is returned rather than made fatal.
 	res, err := engine.Native{Path: a.Path, Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}.
 		Run(ctx, string(job))
 	if ctx.Err() != nil {
@@ -376,11 +379,8 @@ func TestAFailedImageWriteIsReported(t *testing.T) {
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 				defer cancel()
-				res, err := engine.Native{Path: a.Path, Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}.
-					Run(ctx, string(job))
-				if err != nil {
-					t.Fatalf("%s: invoking: %v", a, err)
-				}
+				res := runAndCheck(t, engine.Native{Path: a.Path,
+					Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}, ctx, string(job), "the frames job")
 				return res.ExitCode, res.Stderr
 			}
 

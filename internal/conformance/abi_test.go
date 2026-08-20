@@ -32,11 +32,7 @@ import (
 // the exit code is the contract under test.
 func invoke(t *testing.T, a engine.Artifact, arg string) engine.Result {
 	t.Helper()
-	res, err := a.Runner().Run(context.Background(), arg)
-	if err != nil {
-		t.Fatalf("%s: invoking with %s: %v", a, arg, err)
-	}
-	return res
+	return runAndCheck(t, a.Runner(), context.Background(), arg, "the invocation")
 }
 
 // wantOneJSONLine asserts the ABI's stdout clause: "one line of unformatted JSON
@@ -431,10 +427,7 @@ func TestReportModeIsNotAJobOp(t *testing.T) {
 		t.Run(a.String(), func(t *testing.T) {
 			t.Parallel()
 
-			res, err := a.Runner().Run(context.Background(), "--report")
-			if err != nil {
-				t.Fatalf("%s: invoking --report: %v", a, err)
-			}
+			res := runAndCheck(t, a.Runner(), context.Background(), "--report", "--report")
 			if res.ExitCode != 0 {
 				t.Fatalf("%s: --report exited %d, want 0: %s", a, res.ExitCode, strings.TrimSpace(res.Stderr))
 			}

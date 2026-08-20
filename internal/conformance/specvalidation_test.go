@@ -98,10 +98,7 @@ func TestASpecsNumbersAreCheckedBeforeTheyAreUsed(t *testing.T) {
 			}
 
 			for _, c := range withInput {
-				res, err := ws.Runner().Run(t.Context(), c.spec)
-				if err != nil {
-					t.Fatalf("%s: %s: invoking: %v", a, c.name, err)
-				}
+				res := runAndCheck(t, ws.Runner(), t.Context(), c.spec, c.name)
 				if res.ExitCode == 0 {
 					t.Errorf("%s: %s: exited 0 (ffmpeg-wasi#23).\nAccepting this quietly is the "+
 						"defect: atoi() and sscanf() both have an answer for input they cannot read, "+
@@ -143,10 +140,7 @@ func TestAnEncoderWithNowhereToRunIsRefusedByName(t *testing.T) {
 				`{"op":"process","inputs":[{"path":%q}],"outputs":[{"path":%q,"map":["0:a"],"audio_codec":"aac"}]}`,
 				ws.Path("in.wav"), ws.Path("o.mkv"))
 
-			res, err := ws.Runner().Run(t.Context(), spec)
-			if err != nil {
-				t.Fatalf("%s: invoking: %v", a, err)
-			}
+			res := runAndCheck(t, ws.Runner(), t.Context(), spec, "the job")
 			if res.ExitCode == 0 {
 				t.Fatalf("%s: the job was accepted; it asks for an encoder on a stream-copied map", a)
 			}
@@ -313,10 +307,7 @@ func TestAnOversizedFramesTemplateIsRefused(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 			defer cancel()
-			res, err := ws.Runner().Run(ctx, string(spec))
-			if err != nil {
-				t.Fatalf("%s: invoking: %v", a, err)
-			}
+			res := runAndCheck(t, ws.Runner(), ctx, string(spec), "the frames job")
 			if res.ExitCode != 0 {
 				return // refused, which is a legitimate answer
 			}
@@ -401,6 +392,9 @@ func TestASpecIsTakenLiterallyOrRefused(t *testing.T) {
 			}
 
 			for _, c := range cases {
+				// Deliberately NOT runAndCheck: the crash is the finding here, so it
+				// has to be reported against #49 by name rather than as a generic
+				// "killed" failure from the shared helper.
 				res, err := ws.Runner().Run(t.Context(), c.spec)
 				if err != nil {
 					t.Fatalf("%s: %s: invoking: %v", a, c.name, err)

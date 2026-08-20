@@ -211,10 +211,7 @@ func TestAFinishedSinkDoesNotHoardFrames(t *testing.T) {
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 				defer cancel()
-				res, err := ws.Runner().Run(ctx, string(spec))
-				if err != nil {
-					t.Fatalf("%s: %s: %v", a, name, err)
-				}
+				res := runAndCheck(t, ws.Runner(), ctx, string(spec), name)
 				if res.ExitCode != 0 {
 					t.Fatalf("%s: %s exited %d\n%s", a, name, res.ExitCode,
 						strings.TrimSpace(res.Stderr))

@@ -182,13 +182,8 @@ func runIn(t *testing.T, a engine.Artifact, dir string, env []string, spec any) 
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 	defer cancel()
 
-	res, err := engine.Native{Path: a.Path, Dir: dir, Env: env}.Run(ctx, string(body))
-	if ctx.Err() != nil {
-		t.Fatalf("%s: the job hung", a)
-	}
-	if err != nil {
-		t.Fatalf("%s: invoking: %v", a, err)
-	}
+	res := runAndCheck(t, engine.Native{Path: a.Path, Dir: dir, Env: env}, ctx, string(body),
+		"the job")
 	return res.ExitCode, res.Stderr
 }
 
@@ -282,11 +277,8 @@ func TestAnImageSequenceCannotReachHostDisk(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 			defer cancel()
-			res, err := engine.Native{Path: a.Path, Dir: cwd,
-				Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}.Run(ctx, string(job))
-			if err != nil {
-				t.Fatalf("%s: invoking: %v", a, err)
-			}
+			res := runAndCheck(t, engine.Native{Path: a.Path, Dir: cwd,
+				Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}, ctx, string(job), "the probe")
 
 			var reply probeReply
 			if res.ExitCode == 0 {

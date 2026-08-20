@@ -111,15 +111,7 @@ func runJob(t *testing.T, ws *engine.Workspace, a engine.Artifact, spec any) []b
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 	defer cancel()
 
-	res, err := ws.Runner().Run(ctx, string(body))
-	if ctx.Err() != nil {
-		t.Fatalf("%s: the job did not finish within %s — it HUNG rather than failed.\n"+
-			"The known cause is a muxer waiting on entropy the mount does not serve; check that the "+
-			"workspace still creates /dev/urandom (spec 0036 D5).\nspec: %s", a, jobTimeout, body)
-	}
-	if err != nil {
-		t.Fatalf("%s: invoking: %v", a, err)
-	}
+	res := runAndCheck(t, ws.Runner(), ctx, string(body), "the job")
 	if res.ExitCode != 0 {
 		t.Fatalf("%s: job exited %d, want 0.\nspec:   %s\nstderr: %s",
 			a, res.ExitCode, body, strings.TrimSpace(res.Stderr))

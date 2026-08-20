@@ -341,6 +341,7 @@ static int probe_input(cJSON *out_inputs, const cJSON *in) {
 
     afio_close_input(&fmt);
     cJSON_AddItemToArray(out_inputs, ji);
+    return 0;
 }
 
 static int op_probe(const cJSON *spec) {

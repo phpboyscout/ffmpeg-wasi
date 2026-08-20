@@ -605,8 +605,10 @@ static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
         // copy_ts restores the source timeline the graph entered zero-based.
         if (out->copy_ts) {
             int64_t off = av_rescale_q(job_seek_offset_us(c), AV_TIME_BASE_Q, go->enc->time_base);
-            if (pkt->pts != AV_NOPTS_VALUE) pkt->pts += off;
-            if (pkt->dts != AV_NOPTS_VALUE) pkt->dts += off;
+            // ts_add here too: #44 saturated the other three sites and missed
+            // this one, which takes the same untrusted-media-derived timestamp.
+            if (pkt->pts != AV_NOPTS_VALUE) pkt->pts = ts_add(pkt->pts, off);
+            if (pkt->dts != AV_NOPTS_VALUE) pkt->dts = ts_add(pkt->dts, off);
         }
         // Enforce the output window (-t / -to): drop packets past the cutoff.
         if (cutoff != INT64_MAX && pkt->pts != AV_NOPTS_VALUE &&
@@ -1351,10 +1353,18 @@ static int write_sub_pkt(Ctx *c, Sub *su, AVSubtitle *sub) {
     // part cut off its front has to come off its duration as well. Moving the
     // start without shortening left it displayed for longer than it was written
     // for, by exactly the amount that was discarded (ffmpeg-wasi#22).
-    int64_t out_us = out->copy_ts ? start_us : start_us - seek0;
+    int64_t out_us = out->copy_ts ? start_us : ts_sub(start_us, seek0);
     if (out_us < 0) {
         dur_us += out_us; // negative: the overlap with the discarded head
         out_us = 0;
+        clipped = 1;
+    } else if (out->copy_ts && start_us < seek0) {
+        // copy_ts keeps the SOURCE timeline, so out_us never goes negative and the
+        // branch above cannot fire — a cue straddling the seek point kept its whole
+        // duration, including the part before the seek. The window is the same
+        // either way; only the timeline differs.
+        dur_us -= (seek0 - start_us);
+        out_us = seek0;
         clipped = 1;
     }
 
@@ -1888,6 +1898,18 @@ int op_process(const cJSON *spec) {
                     av_strerror(r, eb, sizeof(eb));
                     fprintf(stderr, "ffmpeg-wasi: process: reading input %d: %s\n", i, eb);
                     rc = r;
+                    break;
+                }
+                // Some demuxers report EOF after their AVIO layer has already
+                // recorded a failure, so an I/O error can arrive wearing a clean
+                // end-of-input. Ask the AVIO directly rather than trusting the
+                // demuxer's summary.
+                if (c.in[i]->pb && c.in[i]->pb->error < 0) {
+                    char eb[128];
+                    av_strerror(c.in[i]->pb->error, eb, sizeof(eb));
+                    fprintf(stderr, "ffmpeg-wasi: process: input %d ended after an I/O "
+                                    "failure: %s\n", i, eb);
+                    rc = c.in[i]->pb->error;
                     break;
                 }
                 c.eof[i] = 1;

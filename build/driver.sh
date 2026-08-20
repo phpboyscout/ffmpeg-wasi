@@ -55,6 +55,17 @@ LIBAV_L="-L$FFMPEG_SRC/libavformat -L$FFMPEG_SRC/libavcodec -L$FFMPEG_SRC/libavf
 -L$FFMPEG_SRC/libavutil -L$FFMPEG_SRC/libswresample -L$FFMPEG_SRC/libswscale"
 LIBAV_l="-lavformat -lavcodec -lavfilter -lavutil -lswresample -lswscale"
 
+# Warnings for OUR code only — CFLAGS is shared with the vendored dependencies,
+# which are not ours to make noisy.
+#
+# -Werror=return-type is the one that earns its place. Falling off the end of a
+# non-void function is never intentional, and it is undefined behaviour rather
+# than a style point: the caller reads whatever happens to be in the return
+# register. It shipped here, in probe_input, and every test still passed because
+# that register usually held zero. A whole-source review caught it; a compiler
+# flag would have caught it in the same second it was written.
+ENGINE_WARNINGS="-Wall -Werror=return-type"
+
 if [ "$TARGET" = native ]; then
   # Native driver (spec 0028): a real ELF executable. libc/setjmp/threads are the
   # host's, so no wasm shims, no 8 MB stack bump, no -lsetjmp. --start-group lets
@@ -66,7 +77,7 @@ if [ "$TARGET" = native ]; then
   # $DEP_LIBS are the native external encoders from deps.sh (openh264, + x264 on
   # gpl); --start-group covers the libav*↔codec interdependencies.
   # shellcheck disable=SC2086  # $ENGINE_SRC/$LIBAV_*/$DEP_LIBS are deliberately split
-  $CC $CFLAGS -DAFMPEG_NATIVE -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
+  $CC $CFLAGS $ENGINE_WARNINGS -DAFMPEG_NATIVE -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
     $LIBAV_L -L"$PREFIX/lib" \
     -Wl,--start-group $LIBAV_l $DEP_LIBS -Wl,--end-group \
     -lz -lm -lpthread -lstdc++
@@ -81,7 +92,7 @@ else
   # the engine's op_process holds a large Ctx and FFmpeg's native encoders recurse
   # deeply (the mpegvideo/mjpeg path most of all), so 64 KB overflows into a trap.
   # shellcheck disable=SC2086  # $ENGINE_SRC/$DEP_LIBS/$WASI_EMULATED_LIBS are deliberately split
-  $CC $CFLAGS -Wl,-z,stack-size=8388608 -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
+  $CC $CFLAGS $ENGINE_WARNINGS -Wl,-z,stack-size=8388608 -I"$FFMPEG_SRC" $ENGINE_SRC -o "$OUT" \
     $LIBAV_L $LIBAV_l \
     -L"$PREFIX/lib" $DEP_LIBS \
     -lc++ -lc++abi -lsetjmp \

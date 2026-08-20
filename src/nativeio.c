@@ -159,6 +159,15 @@ static int afio_dial(const char *name, char mode) {
     struct sockaddr_un a;
     memset(&a, 0, sizeof a);
     a.sun_family = AF_UNIX;
+    // Refuse rather than truncate. A silently shortened path can NAME A DIFFERENT
+    // SOCKET, and the engine would then hand another process the caller's media
+    // paths and data (ffmpeg-wasi#55).
+    if (strlen(sock) >= sizeof(a.sun_path)) {
+        fprintf(stderr, "ffmpeg-wasi: AFMPEG_NATIVE_SOCKET is %zu bytes; the limit is %zu\n",
+                strlen(sock), sizeof(a.sun_path) - 1);
+        close(fd);
+        return -1;
+    }
     strncpy(a.sun_path, sock, sizeof(a.sun_path) - 1);
     if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0) { close(fd); return -1; }
 
@@ -269,19 +278,26 @@ static AVIOContext *afio_ipc_open(const char *name, int write) {
 }
 
 // afio_ipc_close flushes, sends Close, closes the socket, and frees the context.
-static void afio_ipc_close(AVIOContext **ppb) {
-    if (!ppb || !*ppb) return;
+// Returns 0, or the error the final flush or Close recorded. The FINAL FLUSH is
+// where a write-mode AVIO actually pushes its last buffer, so discarding this
+// left an hls/dash/segment/image2 CHILD truncated with the muxer and the job
+// both reporting success (ffmpeg-wasi#54) -- distinct from the trailer and
+// afio_write_file cases, because the error was destroyed inside io_close2.
+static int afio_ipc_close(AVIOContext **ppb) {
+    if (!ppb || !*ppb) return 0;
 
     AVIOContext *pb = *ppb;
     int fd = (int)(intptr_t)pb->opaque;
     uint8_t c = 'C';
 
     avio_flush(pb);
-    (void)wr_full(fd, &c, 1);
+    int err = pb->error; // where the flush leaves a failed write
+    if (wr_full(fd, &c, 1) < 0 && err >= 0) err = AVERROR(EIO);
     close(fd);
     av_freep(&pb->buffer);
     avio_context_free(&pb);
     *ppb = NULL;
+    return err < 0 ? err : 0;
 }
 
 // --- concat over IPC ------------------------------------------------------
@@ -321,7 +337,9 @@ static int concat_io_open(AVFormatContext *s, AVIOContext **pb, const char *url,
 
 static int concat_io_close(AVFormatContext *s, AVIOContext *pb) {
     (void)s;
-    afio_ipc_close(&pb);
+    // A read session has nothing to flush, so a close error carries no
+    // information the caller could act on — unlike the muxer side (#54).
+    (void)afio_ipc_close(&pb);
     return 0;
 }
 
@@ -466,7 +484,7 @@ void afio_close_input(AVFormatContext **out) {
         AVIOContext *pb = (*out)->pb;
         (*out)->pb = NULL; // detach so avformat_close_input leaves the custom pb alone
         avformat_close_input(out);
-        afio_ipc_close(&pb);
+        (void)afio_ipc_close(&pb); // read side: nothing to report
         return;
     }
 #endif
@@ -493,8 +511,9 @@ static int mux_io_open(AVFormatContext *s, AVIOContext **pb, const char *url,
 
 static int mux_io_close(AVFormatContext *s, AVIOContext *pb) {
     (void)s;
-    afio_ipc_close(&pb);
-    return 0;
+    // Propagated, not swallowed: this is the only place a child file's final
+    // flush can report anything (ffmpeg-wasi#54).
+    return afio_ipc_close(&pb);
 }
 #endif // AFMPEG_NATIVE
 
@@ -523,7 +542,7 @@ int afio_open_output(AVFormatContext *ofmt, const char *path) {
 void afio_close_output(AVFormatContext *ofmt) {
     if (!ofmt || !ofmt->pb) return;
 #ifdef AFMPEG_NATIVE
-    if (afio_active()) { afio_ipc_close(&ofmt->pb); return; }
+    if (afio_active()) { (void)afio_ipc_close(&ofmt->pb); return; }
 #endif
     avio_closep(&ofmt->pb);
 }
@@ -547,11 +566,12 @@ int afio_write_file(const char *path, const uint8_t *data, size_t len) {
     if (afio_active()) {
         AVIOContext *pb = afio_ipc_open(path, 1);
         if (!pb) return AVERROR(EIO);
+        if (len > INT_MAX) return AVERROR(EINVAL); // avio_write takes an int
         avio_write(pb, data, (int)len);
-        avio_flush(pb);
-        int err = pb->error; // where avio_write and avio_flush leave their failures
-        afio_ipc_close(&pb);
-        return err < 0 ? err : 0;
+        int err = pb->error;          // where avio_write left a failure
+        int cerr = afio_ipc_close(&pb); // the final flush lives in here
+        if (err < 0) return err;
+        return cerr;
     }
 #endif
     FILE *fp = fopen(path, "wb");
