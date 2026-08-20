@@ -81,12 +81,20 @@ static int template_int_conversions(const char *t) {
 // expand_path renders the output path for frame `index`. With one integer token
 // it is snprintf(template, index); with none the template is literal (only valid
 // for a single frame — the caller enforces that). ntok is the validated count.
-static void expand_path(const char *tmpl, int ntok, int index, char *out, size_t n) {
-    if (ntok == 1) {
-        snprintf(out, n, tmpl, index); // validated to hold exactly one %d-style token
-    } else {
-        snprintf(out, n, "%s", tmpl);
-    }
+// Returns 0, or AVERROR(ENAMETOOLONG) when the result would not fit.
+//
+// snprintf's return was discarded, so a template long enough to overflow the
+// buffer TRUNCATED SILENTLY -- and truncation eats the tail, which is where the
+// index lives. Every frame then expanded to the same path and each overwrote the
+// last, while the reply still listed them all (ffmpeg-wasi#53). A truncated path
+// is also a perfectly valid path, so it could write somewhere the caller never
+// named.
+static int expand_path(const char *tmpl, int ntok, int index, char *out, size_t n) {
+    int need = (ntok == 1)
+                   ? snprintf(out, n, tmpl, index) // validated: exactly one %d-style token
+                   : snprintf(out, n, "%s", tmpl);
+    if (need < 0 || (size_t)need >= n) return AVERROR(ENAMETOOLONG);
+    return 0;
 }
 
 // ---- input / decoder ----------------------------------------------------
@@ -255,7 +263,12 @@ static int emit_one(Frames *f, AVFrame *decoded, double t_sec, const char *tmpl,
         if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) { rc = 0; break; }
         if (rc < 0) break;
         char path[1024];
-        expand_path(tmpl, ntok, f->written, path, sizeof(path));
+        if ((rc = expand_path(tmpl, ntok, f->written, path, sizeof(path))) < 0) {
+            fprintf(stderr, "ffmpeg-wasi: frames: the output path does not fit in %zu bytes\n",
+                    sizeof(path));
+            av_frame_unref(out);
+            break;
+        }
         rc = write_frame(f, out, path, t_sec);
         av_frame_unref(out);
         if (rc < 0) break;
@@ -344,7 +357,12 @@ static int grab_scene(Frames *f, const char *tmpl, int ntok, int cap, AVPacket *
         if (!out) return AVERROR(ENOMEM);
         while (f->written < cap && av_buffersink_get_frame(f->sink, out) >= 0) {
             char path[1024];
-            expand_path(tmpl, ntok, f->written, path, sizeof(path));
+            if ((rc = expand_path(tmpl, ntok, f->written, path, sizeof(path))) < 0) {
+                fprintf(stderr, "ffmpeg-wasi: frames: the output path does not fit in %zu bytes\n",
+                        sizeof(path));
+                av_frame_unref(out);
+                break;
+            }
             rc = write_frame(f, out, path, -1);
             av_frame_unref(out);
             if (rc < 0) break;

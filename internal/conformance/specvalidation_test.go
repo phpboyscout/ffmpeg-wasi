@@ -2,7 +2,9 @@ package conformance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -246,6 +248,95 @@ func TestAnAbsentMuxerSaysWhatIsPresent(t *testing.T) {
 					"absent when the build has it.\nstderr: %s",
 					a, len(missing), len(caps.Muxers), strings.Join(missing, ", "),
 					strings.TrimSpace(res.Stderr))
+			}
+		})
+	}
+}
+
+// TestAnOversizedFramesTemplateIsRefused is the regression test for #53.
+//
+// expand_path formatted into a fixed 1024-byte buffer and discarded snprintf's
+// return. Truncation eats the TAIL, which is where the frame index lives — so
+// every frame expanded to the same path, each overwrote the last, and the reply
+// still listed them all. One file on disk, N in the answer.
+//
+// The assertion is deliberately not "the job fails": refusing is one legitimate
+// fix and so is a larger buffer. What must not happen is a success whose reply
+// claims more files than exist.
+func TestAnOversizedFramesTemplateIsRefused(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			ws := mediaWorkspace(t, a)
+			runJob(t, ws, a, map[string]any{
+				"op": "process",
+				"inputs": []any{map[string]any{
+					"path": ws.Path("f%03d.png"), "format": "image2",
+					"options": map[string]any{"framerate": fmt.Sprint(frameRate)},
+				}},
+				"outputs": []any{map[string]any{"path": ws.Path("seq.mp4"), "video_codec": "mjpeg"}},
+			})
+
+			// The path has to be long in TOTAL while every component stays legal.
+			// A single 1100-character filename does not work: the filesystem
+			// refuses it at NAME_MAX long before the buffer matters, so the job
+			// fails for the wrong reason and the truncation is never exercised.
+			//
+			// Nested directories get past 1024 bytes with nothing over 255, and
+			// they must already EXIST — a truncated path pointing at a missing
+			// directory would also fail for the wrong reason. ws.Write creates them.
+			deep := ""
+			for range 5 {
+				deep += strings.Repeat("d", 200) + "/"
+			}
+			if _, err := ws.Write(deep+"keep.txt", []byte("makes the directories")); err != nil {
+				t.Fatal(err)
+			}
+			// The tail is what truncation eats, and the index lives in the tail.
+			tmpl := ws.Path(deep + strings.Repeat("n", 40) + "_%02d.png")
+			if len(tmpl) <= 1024 {
+				t.Fatalf("the template is only %d bytes, which cannot overflow the engine's "+
+					"1024-byte buffer — this test would measure nothing", len(tmpl))
+			}
+
+			spec, err := json.Marshal(map[string]any{
+				"op":     "frames",
+				"inputs": []any{map[string]any{"path": ws.Path("seq.mp4")}},
+				"select": map[string]any{"timestamps": []any{0.5, 1.5, 2.5}},
+				"path":   tmpl,
+				"codec":  "png",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+			defer cancel()
+			res, err := ws.Runner().Run(ctx, string(spec))
+			if err != nil {
+				t.Fatalf("%s: invoking: %v", a, err)
+			}
+			if res.ExitCode != 0 {
+				return // refused, which is a legitimate answer
+			}
+
+			var reply struct {
+				Frames []struct{} `json:"frames"`
+				Count  int        `json:"count"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &reply); err != nil {
+				t.Fatalf("%s: parsing the reply: %v\n%s", a, err, res.Stdout)
+			}
+			written, err := filepath.Glob(filepath.Join(filepath.Dir(tmpl), "*.png"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reply.Count != len(written) {
+				t.Errorf("%s: the job succeeded claiming %d frames, but %d file(s) exist "+
+					"(ffmpeg-wasi#53).\nThe template overflowed a 1024-byte buffer and snprintf "+
+					"truncated it — taking the index with it — so every frame expanded to the "+
+					"same path and overwrote the last.", a, reply.Count, len(written))
 			}
 		})
 	}
