@@ -1794,18 +1794,49 @@ int op_process(const cJSON *spec) {
                 c.eof[i] = 1;
                 remaining--;
                 // Flush this input's decoders and close its buffersrcs.
+                //
+                // Every return here used to be discarded, so a codec that failed
+                // while flushing lost its delayed frames and the job still exited
+                // 0 — an output short at the tail, which is the signature #12 wore
+                // for the life of the project (ffmpeg-wasi#38).
                 for (int gi = 0; gi < c.n_gin; gi++) {
                     if (c.gin[gi].in_idx != i) continue;
-                    avcodec_send_packet(c.gin[gi].dec, NULL);
-                    while (avcodec_receive_frame(c.gin[gi].dec, frame) >= 0) {
+                    if ((rc = avcodec_send_packet(c.gin[gi].dec, NULL)) < 0) break;
+                    // The loop's TERMINATING value matters: AVERROR_EOF is the
+                    // drain completing, EAGAIN cannot happen after a NULL send, and
+                    // anything else is a decode failure that was being read as "no
+                    // more frames".
+                    int dr;
+                    while ((dr = avcodec_receive_frame(c.gin[gi].dec, frame)) >= 0) {
                         if ((rc = push_frame(&c, gi, frame)) < 0) break;
                     }
                     if (rc < 0) break;
+                    if (dr != AVERROR_EOF && dr != AVERROR(EAGAIN)) { rc = dr; break; }
                     // Signalling EOF on a source the graph already closed is
                     // pointless and returns AVERROR_EOF; skip it.
                     if (!c.gin[gi].closed) {
-                        av_buffersrc_add_frame_flags(c.gin[gi].src, NULL, 0);
+                        int br = av_buffersrc_add_frame_flags(c.gin[gi].src, NULL, 0);
                         c.gin[gi].closed = 1;
+                        // AVERROR_EOF means the graph closed this pad already,
+                        // which is the #11 lifecycle case and not a failure.
+                        if (br < 0 && br != AVERROR_EOF) { rc = br; break; }
+                    }
+                }
+                // The subtitle transcode lane has decoders too, and nothing was
+                // ever flushing them — a decoder holding a buffered final event
+                // dropped it, with the job reporting success (ffmpeg-wasi#39).
+                for (int si = 0; si < c.n_sub && rc >= 0; si++) {
+                    if (c.sub[si].in_idx != i || !c.sub[si].dec) continue;
+                    AVSubtitle sub;
+                    int got = 0;
+                    AVPacket *empty = av_packet_alloc();
+                    if (!empty) { rc = AVERROR(ENOMEM); break; }
+                    int sr = avcodec_decode_subtitle2(c.sub[si].dec, &sub, &got, empty);
+                    av_packet_free(&empty);
+                    if (sr < 0) { rc = sr; break; }
+                    if (got) {
+                        rc = write_sub_pkt(&c, &c.sub[si], &sub);
+                        avsubtitle_free(&sub);
                     }
                 }
                 if (rc >= 0) rc = pull_sinks(&c);
