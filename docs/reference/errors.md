@@ -80,9 +80,14 @@ bad file in a batch does not lose the results for the others.
 | `process: input N has no <type> stream K` | `1` | the indexed stream selection points past the input's streams |
 | `process: graph output pad [<p>] is not mapped to any output` | `1` | every graph output pad must appear in some output's `map` |
 | `process: pad [<p>] is <type> but output <path> gives no codec for it` | `1` | an output receiving a video pad needs `video_codec`; an audio pad needs `audio_codec` |
-| ``process: input N seek needs a non-negative `start` `` | `1` | `seek.start` must be ≥ 0 |
+| ``process: input N seek needs a finite, non-negative `start` `` | `1` | `seek.start` must be ≥ 0 and a real number — `1e400` parses to infinity and is refused |
 | `process: input N seek mode <m>` (the message goes on to name the two it wants) | `1` | `seek.mode` is `"fast"` or `"accurate"` |
 | `process: accurate seek cannot apply to copied stream <s> (copy cuts on keyframes; use mode "fast")` | `1` | a stream-copy cannot be cut mid-GOP — re-encode, or use `"fast"` |
+| ``process: `duration` on <path> is not a usable number of seconds`` | `2` | the value is infinite, negative, or past any real timeline. cJSON parses numbers with `strtod`, so `1e400` arrives as infinity |
+| ``process: `end` on <path> is not a usable number of seconds`` | `2` | as above, for `end` |
+| ``process: `chapters` on <path> is "<s>"`` (the message names what it wants) | `1` | `chapters` is `"copy"`, `"none"`, or an input index — a value it cannot read is refused rather than silently meaning input 0 |
+| ``process: output <path> sets <field> to "<codec>", but its `map` names only input-stream specifiers…`` | `1` | an unbracketed `map` entry is **stream-copied**, so there is no graph pad for an encoder to run on. Set the codec to `"copy"`, or add a `filter` and map its bracketed pad |
+| `process: concat segment N contains a newline, which cannot be quoted` | `1` | a segment filename with a newline cannot be represented on one `ffconcat` line; rename it |
 
 ## `process` errors — the build cannot do it
 
@@ -99,6 +104,7 @@ check [codecs](codecs.md), [filters](filters.md) and
 | `process: no decoder for subtitle stream` | `1` | the subtitle codec is not enabled |
 | `process: unknown input format <name>` | `1` | `inputs[].format` names a demuxer this build does not carry |
 | `process: cannot resolve output format for <path>` | `1` | the muxer could not be guessed from the extension, or `outputs[].format` names one that is absent |
+| `process: this build carries these muxers: …` | `1` | always follows the line above, listing what **is** present. libavformat's own advice ("use a standard extension… or specify the format manually") is a dead end here: the build starts from `--disable-everything`, so a missing muxer cannot be named into existence — pick another container or move up a [profile](variants.md) |
 | `process: bad filtergraph <s>` | `1` | libavfilter rejected the graph — most often a filter name that is not enabled |
 | `process: bad bitstream filter <s>` | `1` | `bitstream_filters` names a BSF this build does not carry |
 | `process: concat demuxer not built` | `1` | the concat demuxer is missing (it is in every profile, so this indicates a non-standard build) |
@@ -116,6 +122,7 @@ check [codecs](codecs.md), [filters](filters.md) and
 | `process: open encoder <name> failed` | `1` | the encoder rejected its `options` or the negotiated frame format |
 | `process: write header for <path> failed` | `1` | the muxer rejected the stream set or its `format_options` |
 | `process: filtergraph config failed` | `1` | the graph parsed but could not be configured — usually a format negotiation the enabled filters cannot satisfy |
+| `process: writing the trailer for <path>: <libav message>` | `1` | finalisation failed — for a non-fragmented MP4 this is the `moov`/`mdat` patch, which needs a seekable output. Up to and including `n9.0.1-1` this was discarded and the job exited `0` with a corrupt file |
 | `process: <libav message>` | `1` | any other libav failure, rendered through `av_strerror` |
 
 ## `frames` errors
