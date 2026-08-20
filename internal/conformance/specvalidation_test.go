@@ -341,3 +341,88 @@ func TestAnOversizedFramesTemplateIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestASpecIsTakenLiterallyOrRefused covers #42, #49 and #50 — three ways the
+// engine used to accept something it could not act on, and act as though it had.
+//
+// The common shape: a well-formed request that the engine partly ignored, then
+// reported success for. None of them is a parse failure; each is the engine
+// answering a question nobody asked.
+func TestASpecIsTakenLiterallyOrRefused(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			ws := mediaWorkspace(t, a)
+			in := ws.Path("in.wav")
+
+			cases := []struct{ name, spec, want string }{
+				{
+					// #42 — the natural way to write a numeric option. It was
+					// dropped in silence, so a raw input decoded at libav's default
+					// while the caller believed the option had been honoured.
+					"a numeric demuxer option",
+					fmt.Sprintf(`{"op":"process","inputs":[{"path":%q,"options":{"sample_rate":48000}}],`+
+						`"filter":"[0:a]anull[a]","outputs":[{"path":%q,"map":["[a]"],"audio_codec":"flac"}]}`,
+						in, ws.Path("o1.mkv")),
+					"must be a string",
+				},
+				{
+					"a numeric encoder option",
+					fmt.Sprintf(`{"op":"process","inputs":[{"path":%q}],"filter":"[0:a]anull[a]",`+
+						`"outputs":[{"path":%q,"map":["[a]"],"audio_codec":"flac","options":{"compression_level":5}}]}`,
+						in, ws.Path("o2.mkv")),
+					"must be a string",
+				},
+				{
+					// #50 — a valid object with rubbish after it.
+					"trailing text after a valid spec",
+					fmt.Sprintf(`{"op":"probe","inputs":[{"path":%q}]} and then some`, in),
+					"",
+				},
+				{
+					// #49 — process refuses an unknown demuxer; probe auto-probed,
+					// so the two ops disagreed about the same spec.
+					"probe with an unknown forced format",
+					fmt.Sprintf(`{"op":"probe","inputs":[{"path":%q,"format":"no-such-demuxer"}]}`, in),
+					"unknown input format",
+				},
+				{
+					// #49 — and this one SEGFAULTS the released engine. A missing
+					// `path` became a NULL handed to avformat_open_input. Exit 139
+					// is not zero, so a check spelled "the exit code is not zero"
+					// is satisfied by the crash — the same trap that let #15 be
+					// recorded as not-reproduced. The signal assertion below is
+					// what makes this test mean anything.
+					"probe with no path",
+					`{"op":"probe","inputs":[{}]}`,
+					"needs a string `path`",
+				},
+			}
+
+			for _, c := range cases {
+				res, err := ws.Runner().Run(t.Context(), c.spec)
+				if err != nil {
+					t.Fatalf("%s: %s: invoking: %v", a, c.name, err)
+				}
+				if res.Signal != "" {
+					t.Errorf("%s: %s: the engine was KILLED BY %s rather than refusing the "+
+						"request.\nA signalled process reports a non-zero code, so this would "+
+						"otherwise read as a clean rejection.\nspec: %s",
+						a, c.name, res.Signal, c.spec)
+					continue
+				}
+				if res.ExitCode == 0 {
+					t.Errorf("%s: %s: accepted and exited 0.\nThe engine acted on a request it "+
+						"could not honour in full, and told the caller it had.\nspec: %s",
+						a, c.name, c.spec)
+					continue
+				}
+				if c.want != "" && !strings.Contains(res.Stderr, c.want) {
+					t.Errorf("%s: %s: refused, but stderr does not carry %q: %q",
+						a, c.name, c.want, strings.TrimSpace(res.Stderr))
+				}
+			}
+		})
+	}
+}

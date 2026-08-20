@@ -825,6 +825,38 @@ static void print_muxers(void) {
     fprintf(stderr, "\n");
 }
 
+// opts_from_json fills an AVDictionary from a job-spec option object.
+//
+// Only string values are accepted -- that is the documented shape, and the type
+// guard is deliberate (spec 0027 4C) so a malformed `options` is not iterated
+// unpredictably. What was wrong is that a well-formed value of the WRONG TYPE was
+// dropped in silence: {"sample_rate": 48000} is the natural way to write it, and
+// a raw PCM input then decoded at whatever default libav picked while the caller
+// believed the option had been honoured (ffmpeg-wasi#42).
+//
+// The unconsumed-key check downstream cannot catch this, because a key that was
+// never SET cannot be unconsumed. So it is refused here, by name, the same answer
+// #23 gave for numbers elsewhere in the spec.
+//
+// `what` names the field for the diagnostic ("inputs[0].options" and so on).
+static int opts_from_json(AVDictionary **out, const cJSON *obj, const char *what) {
+    const cJSON *kv = NULL;
+    if (!cJSON_IsObject(obj)) return 0;
+    cJSON_ArrayForEach(kv, obj) {
+        if (cJSON_IsString(kv)) {
+            int rc = av_dict_set(out, kv->string, kv->valuestring, 0);
+            if (rc < 0) return rc;
+            continue;
+        }
+        fprintf(stderr, "ffmpeg-wasi: process: %s.%s must be a string "
+                        "(write 48000 as \"48000\"); a value of another type "
+                        "cannot be passed to libav and is not ignored\n",
+                what, kv->string ? kv->string : "?");
+        return AVERROR(EINVAL);
+    }
+    return 0;
+}
+
 // parse_output reads one `outputs[]` entry into an Out + allocates its muxer.
 static int parse_output(Out *o, const cJSON *spec) {
     o->path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "path"));
@@ -870,21 +902,13 @@ static int parse_output(Out *o, const cJSON *spec) {
     // Guard the container type before walking it: a malformed but trusted spec
     // whose "options" is not an object (e.g. a string) is ignored, not iterated
     // unpredictably (spec 0027 §4C, defence-in-depth on trusted input).
-    const cJSON *opts = cJSON_GetObjectItemCaseSensitive(spec, "options"), *kv = NULL;
-    if (cJSON_IsObject(opts)) {
-        cJSON_ArrayForEach(kv, opts) {
-            if (cJSON_IsString(kv)) av_dict_set(&o->enc_opts, kv->string, kv->valuestring, 0);
-        }
-    }
+    const cJSON *opts = cJSON_GetObjectItemCaseSensitive(spec, "options");
+    if (opts_from_json(&o->enc_opts, opts, "outputs[].options") < 0) return 2;
     // Muxer options (spec 0015): a separate dict routed to write_header — segment
     // timing/naming, fragmentation flags (movflags), etc. — distinct from the
     // encoder `options` above (D-0015-B: no guessing which dict an option is for).
     const cJSON *fopts = cJSON_GetObjectItemCaseSensitive(spec, "format_options");
-    if (cJSON_IsObject(fopts)) {
-        cJSON_ArrayForEach(kv, fopts) {
-            if (cJSON_IsString(kv)) av_dict_set(&o->fmt_opts, kv->string, kv->valuestring, 0);
-        }
-    }
+    if (opts_from_json(&o->fmt_opts, fopts, "outputs[].format_options") < 0) return 2;
 
     // `format` forces the muxer by name (spec 0015: "hls"/"dash"/"segment"/
     // "mpegts"/… — needed where the extension doesn't imply it); absent → the
@@ -1415,11 +1439,10 @@ static int open_one_input(AVFormatContext **out, const cJSON *in, int idx) {
     // (raw geometry — video_size/pixel_format/framerate, sample_rate, … — rides
     // here). Unconsumed keys are a typed error (Q2: fail loud on a wrong option).
     AVDictionary *opts = NULL;
-    const cJSON *od = cJSON_GetObjectItemCaseSensitive(in, "options"), *kv = NULL;
-    if (cJSON_IsObject(od)) {
-        cJSON_ArrayForEach(kv, od) {
-            if (cJSON_IsString(kv)) av_dict_set(&opts, kv->string, kv->valuestring, 0);
-        }
+    const cJSON *od = cJSON_GetObjectItemCaseSensitive(in, "options");
+    if (opts_from_json(&opts, od, "inputs[].options") < 0) {
+        av_dict_free(&opts);
+        return AVERROR(EINVAL);
     }
 
     int rc = afio_open_input(out, p, ifmt, &opts);

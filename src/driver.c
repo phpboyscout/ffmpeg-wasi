@@ -253,14 +253,36 @@ static void describe_stream(cJSON *streams, unsigned index, const AVStream *st) 
 // probe_input opens one input and appends its container/stream info. It honours a
 // forced `format` (demuxer) and `options` (demuxer dict), so a raw/headerless
 // input — openable only with those (spec 0024) — is probeable too.
-static void probe_input(cJSON *out_inputs, const cJSON *in) {
-    const char *path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(in, "path"));
+// Returns 0, or non-zero for a MALFORMED REQUEST — distinct from an input that
+// could not be opened, which stays a per-input "error" field and exit 0 so one
+// bad file in a batch does not lose the others.
+//
+// probe used to be more forgiving than process about identical input, which makes
+// it a poor instrument for deciding whether a job will run: a missing or
+// non-string `path` became an I/O error, and an unknown `format` silently fell
+// back to autodetection where process refuses it outright (ffmpeg-wasi#49).
+static int probe_input(cJSON *out_inputs, const cJSON *in) {
+    const cJSON *jp = cJSON_GetObjectItemCaseSensitive(in, "path");
+    if (!cJSON_IsString(jp)) {
+        fprintf(stderr, "ffmpeg-wasi: probe: each input needs a string `path`\n");
+        return 2;
+    }
+    const char *path = jp->valuestring;
     cJSON *ji = cJSON_CreateObject();
-    cJSON_AddStringToObject(ji, "path", path ? path : "");
+    cJSON_AddStringToObject(ji, "path", path);
 
     const AVInputFormat *ifmt = NULL;
     const char *fmt_name = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(in, "format"));
-    if (fmt_name) ifmt = av_find_input_format(fmt_name);
+    if (fmt_name) {
+        ifmt = av_find_input_format(fmt_name);
+        if (!ifmt) {
+            // process rejects this; probe silently auto-probed instead, so the two
+            // ops disagreed about the same spec.
+            fprintf(stderr, "ffmpeg-wasi: probe: unknown input format %s\n", fmt_name);
+            cJSON_Delete(ji);
+            return 2;
+        }
+    }
     AVDictionary *opts = NULL;
     const cJSON *od = cJSON_GetObjectItemCaseSensitive(in, "options"), *kv = NULL;
     if (cJSON_IsObject(od)) {
@@ -275,9 +297,17 @@ static void probe_input(cJSON *out_inputs, const cJSON *in) {
     if (rc < 0) {
         cJSON_AddStringToObject(ji, "error", "could not open input");
         cJSON_AddItemToArray(out_inputs, ji);
-        return;
+        return 0;
     }
-    avformat_find_stream_info(fmt, NULL);
+    // Discarding this let probe report incomplete or wrong stream, duration and
+    // chapter information with nothing to distinguish it from a good read. It is
+    // reported the same way an unopenable input is — per input, not fatal.
+    if (avformat_find_stream_info(fmt, NULL) < 0) {
+        cJSON_AddStringToObject(ji, "error", "could not read stream information");
+        cJSON_AddItemToArray(out_inputs, ji);
+        afio_close_input(&fmt);
+        return 0;
+    }
 
     if (fmt->iformat && fmt->iformat->name) {
         cJSON_AddStringToObject(ji, "format", fmt->iformat->name);
@@ -325,7 +355,8 @@ static int op_probe(const cJSON *spec) {
 
     const cJSON *in = NULL;
     cJSON_ArrayForEach(in, inputs) {
-        probe_input(out_inputs, in);
+        int rc = probe_input(out_inputs, in);
+        if (rc != 0) { cJSON_Delete(out); return rc; }
     }
 
     char *json = cJSON_PrintUnformatted(out);
@@ -363,7 +394,13 @@ int main(int argc, char **argv) {
         return capabilities();
     }
 
-    cJSON *spec = cJSON_Parse(argv[1]);
+    // ParseWithOpts with require_null_terminated, so a valid object followed by
+    // trailing text is refused. cJSON_Parse accepts it, and the ABI says the
+    // driver takes ONE argument which is a JSON job spec — quietly running
+    // something that is not one is the same class as #23, and it makes a buggy
+    // host's malformed request succeed, which is a poor way to discover the host
+    // is buggy (ffmpeg-wasi#50).
+    cJSON *spec = cJSON_ParseWithOpts(argv[1], NULL, 1);
     if (!spec) {
         fprintf(stderr, "ffmpeg-wasi: invalid job spec JSON\n");
         return 2;
