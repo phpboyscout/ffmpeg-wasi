@@ -73,6 +73,7 @@
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"
 // from "fix the spec".
+#define EXIT_MALFORMED       2
 #define EXIT_VERSION_TOO_NEW 3
 
 // ---- capability report (build smoke test) -------------------------------
@@ -411,11 +412,24 @@ int main(int argc, char **argv) {
     // engine understands, rather than silently dropping its unknown fields
     // (afmpeg stamps "version"; absent == 0, the pre-gate baseline).
     const cJSON *ver = cJSON_GetObjectItemCaseSensitive(spec, "version");
-    if (cJSON_IsNumber(ver) && ver->valueint > AFMPEG_VOCAB_VERSION) {
-        fprintf(stderr, "ffmpeg-wasi: job spec vocabulary version %d newer than this engine supports (%d); upgrade ffmpeg-wasi\n",
-                ver->valueint, AFMPEG_VOCAB_VERSION);
-        cJSON_Delete(spec);
-        return EXIT_VERSION_TOO_NEW;
+    // The gate's whole job is to catch a mismatch BEFORE anything is acted on, so
+    // a version it cannot read must be refused rather than interpreted. Testing
+    // only cJSON_IsNumber let "10" (a string) skip the gate entirely, and reading
+    // valueint truncated 9.5 to 9 and ran it (ffmpeg-wasi#56).
+    if (ver && !cJSON_IsNull(ver)) {
+        if (!cJSON_IsNumber(ver) || ver->valuedouble != (double)(int)ver->valuedouble ||
+            ver->valuedouble < 0) {
+            fprintf(stderr, "ffmpeg-wasi: `version` must be a non-negative whole number "
+                            "(a string or a fraction is not a vocabulary version)\n");
+            cJSON_Delete(spec);
+            return EXIT_MALFORMED;
+        }
+        if (ver->valueint > AFMPEG_VOCAB_VERSION) {
+            fprintf(stderr, "ffmpeg-wasi: job spec vocabulary version %d newer than this engine supports (%d); upgrade ffmpeg-wasi\n",
+                    ver->valueint, AFMPEG_VOCAB_VERSION);
+            cJSON_Delete(spec);
+            return EXIT_VERSION_TOO_NEW;
+        }
     }
 
     const char *op = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "op"));

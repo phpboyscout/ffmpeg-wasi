@@ -119,6 +119,9 @@ check [codecs](codecs.md), [filters](filters.md) and
 | `process: cannot open concat playlist` | `1` | a segment named in `inputs[].concat` could not be opened |
 | `process: cannot seek input N to <t>s` | `1` | the demuxer could not seek — some formats are not seekable |
 | `process: input N: unknown demuxer option <key>` | `1` | a key in `inputs[].options` was not consumed by the demuxer; an unused key is an error, not a warning |
+| `process: encoder <name> does not have option <key>` | `1` | a key in `outputs[].options` the encoder did not consume. **All three option dictionaries are strict** — an option that is not applied would otherwise produce output built to different settings with exit `0`, which the caller cannot detect |
+| `process: muxer for <path> does not have option <key>` | `1` | as above, for `outputs[].format_options` |
+| ``ffmpeg-wasi: `version` must be a non-negative whole number`` | `2` | `version` is a vocabulary number; a string, a fraction or a negative is refused rather than interpreted, because the gate exists to catch a mismatch *before* anything runs |
 | `process: open encoder <name> failed` | `1` | the encoder rejected its `options` or the negotiated frame format |
 | `process: write header for <path> failed` | `1` | the muxer rejected the stream set or its `format_options` |
 | `process: filtergraph config failed` | `1` | the graph parsed but could not be configured — usually a format negotiation the enabled filters cannot satisfy |

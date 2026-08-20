@@ -527,8 +527,24 @@ static int open_encoder(Ctx *c, GOut *go) {
     AVDictionary *opts = NULL;
     av_dict_copy(&opts, out->enc_opts, 0);
     int ret = avcodec_open2(go->enc, enc_codec, &opts);
+    if (ret < 0) {
+        av_dict_free(&opts);
+        fprintf(stderr, "ffmpeg-wasi: process: open encoder %s failed\n", enc_name);
+        return ret;
+    }
+    // Whatever the encoder did not consume, it did not understand. Ignoring that
+    // meant a misspelled `crf` produced output built to the encoder's defaults
+    // with exit 0 — and the caller cannot tell, because the option they asked for
+    // simply was not applied. inputs[].options has refused this since spec 0024;
+    // these two dictionaries did not (ffmpeg-wasi#54).
+    if (av_dict_count(opts) > 0) {
+        const AVDictionaryEntry *e = av_dict_iterate(opts, NULL);
+        fprintf(stderr, "ffmpeg-wasi: process: encoder %s does not have option %s\n",
+                enc_name, e ? e->key : "?");
+        av_dict_free(&opts);
+        return AVERROR(EINVAL);
+    }
     av_dict_free(&opts);
-    if (ret < 0) { fprintf(stderr, "ffmpeg-wasi: process: open encoder %s failed\n", enc_name); return ret; }
 
     if (go->type == AVMEDIA_TYPE_AUDIO && !(enc_codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
         && go->enc->frame_size > 0)
@@ -1824,6 +1840,16 @@ int op_process(const cJSON *spec) {
         afio_install_muxer_io(c.out[i].ofmt);
         if ((rc = avformat_write_header(c.out[i].ofmt, &c.out[i].fmt_opts)) < 0) {
             fprintf(stderr, "ffmpeg-wasi: process: write header for %s failed\n", c.out[i].path); goto end;
+        }
+        // Same rule as the encoder above and the demuxer before it: an option the
+        // muxer did not consume is one it does not have, and silently ignoring it
+        // produces a file built differently from the one that was asked for
+        // (ffmpeg-wasi#54).
+        if (av_dict_count(c.out[i].fmt_opts) > 0) {
+            const AVDictionaryEntry *e = av_dict_iterate(c.out[i].fmt_opts, NULL);
+            fprintf(stderr, "ffmpeg-wasi: process: muxer for %s does not have option %s\n",
+                    c.out[i].path, e ? e->key : "?");
+            rc = AVERROR(EINVAL); goto end;
         }
     }
 

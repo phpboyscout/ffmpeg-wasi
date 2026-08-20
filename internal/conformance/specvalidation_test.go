@@ -420,3 +420,91 @@ func TestASpecIsTakenLiterallyOrRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestAMalformedVersionIsRefused is the regression test for #56.
+//
+// The gate exists so a host is TOLD its spec is too new rather than having it
+// half-executed. It tested cJSON_IsNumber and read valueint, so the shapes below
+// slipped past it and the job ran against a vocabulary that was never checked —
+// which is the one thing this field is for.
+func TestAMalformedVersionIsRefused(t *testing.T) {
+	cases := []struct{ name, version string }{
+		{"a version written as a string", `"10"`},
+		{"a version that is not whole", `9.5`},
+		{"a version that is negative", `-1`},
+	}
+
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			for _, c := range cases {
+				spec := fmt.Sprintf(
+					`{"op":"probe","version":%s,"inputs":[{"path":"a.wav"}]}`, c.version)
+				res := runAndCheck(t, a.Runner(), t.Context(), spec, c.name)
+
+				if res.ExitCode != 2 {
+					t.Errorf("%s: %s exited %d, want 2 (ffmpeg-wasi#56).\n"+
+						"A version the gate cannot read has to be refused, not interpreted — "+
+						"reading valueint turned 9.5 into 9 and ran it, and a string skipped the "+
+						"gate altogether.\nspec: %s\nstderr: %s",
+						a, c.name, res.ExitCode, spec, strings.TrimSpace(res.Stderr))
+				}
+			}
+
+			// And the gate still does its actual job.
+			tooNew := fmt.Sprintf(`{"op":"probe","version":%d,"inputs":[{"path":"a.wav"}]}`, 9999)
+			if res := runAndCheck(t, a.Runner(), t.Context(), tooNew, "a version too new"); res.ExitCode != 3 {
+				t.Errorf("%s: a version newer than the engine exited %d, want 3 — the stricter "+
+					"parsing must not have swallowed the case the gate exists for", a, res.ExitCode)
+			}
+		})
+	}
+}
+
+// TestAnUnknownEncoderOrMuxerOptionIsRefused is the regression test for #54.
+//
+// inputs[].options has refused an unconsumed key since spec 0024, on the stated
+// grounds that a wrong option should fail loud. The encoder and muxer
+// dictionaries did not: a misspelled `crf`, or a `movflags` the muxer does not
+// have, was dropped and the job exited 0 having built the output to different
+// settings than the caller asked for — which the caller has no way to notice.
+func TestAnUnknownEncoderOrMuxerOptionIsRefused(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			ws := mediaWorkspace(t, a)
+			in := ws.Path("in.wav")
+
+			for _, c := range []struct{ name, spec, want string }{
+				{
+					"an encoder option the encoder does not have",
+					fmt.Sprintf(`{"op":"process","inputs":[{"path":%q}],"filter":"[0:a]anull[a]",`+
+						`"outputs":[{"path":%q,"map":["[a]"],"audio_codec":"flac",`+
+						`"options":{"no_such_encoder_option":"1"}}]}`, in, ws.Path("e.mkv")),
+					"does not have option no_such_encoder_option",
+				},
+				{
+					"a muxer option the muxer does not have",
+					fmt.Sprintf(`{"op":"process","inputs":[{"path":%q}],"filter":"[0:a]anull[a]",`+
+						`"outputs":[{"path":%q,"map":["[a]"],"audio_codec":"flac",`+
+						`"format_options":{"no_such_muxer_option":"1"}}]}`, in, ws.Path("m.mkv")),
+					"does not have option no_such_muxer_option",
+				},
+			} {
+				res := runAndCheck(t, ws.Runner(), t.Context(), c.spec, c.name)
+				if res.ExitCode == 0 {
+					t.Errorf("%s: %s was accepted and the job exited 0 (ffmpeg-wasi#54).\n"+
+						"The option was not applied, so the output is not the one the spec "+
+						"describes.\nspec: %s", a, c.name, c.spec)
+					continue
+				}
+				if !strings.Contains(res.Stderr, c.want) {
+					t.Errorf("%s: %s: refused, but stderr does not name the option (%q): %q",
+						a, c.name, c.want, strings.TrimSpace(res.Stderr))
+				}
+			}
+		})
+	}
+}
