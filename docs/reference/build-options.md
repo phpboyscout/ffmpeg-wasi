@@ -55,7 +55,7 @@ unprefixed name so existing consumers are unaffected:
 | `PROFILE` set to anything else | `build/enable-lists.sh` exits `2`: `unknown PROFILE '<x>'`, naming the three it accepts |
 | `VARIANT` set to anything but `lgpl`/`gpl` | `build/deps.sh` exits `2`: `deps: unknown VARIANT <x>` |
 | `FFMPEG_VERSION` naming a tag that does not exist | the `git clone --branch` in `build/libav.sh` fails |
-| `FFMPEG_VERSION` unset when running `build/libav.sh` directly | the script aborts: `set FFMPEG_VERSION, e.g. n8.1.2`. Both Dockerfiles and CI supply it from `build/ffmpeg-version.txt`, so this only bites a hand-run script |
+| `FFMPEG_VERSION` unset when running `build/libav.sh` directly | the script aborts: `set FFMPEG_VERSION, e.g. n9.0.1`. Both Dockerfiles and CI supply it from `build/ffmpeg-version.txt`, so this only bites a hand-run script |
 | a release tag whose version disagrees with `build/ffmpeg-version.txt` | the `ffmpeg-version` CI job fails in the `validate` stage, before any build runs, naming both values |
 | `build/ffmpeg-version.txt` missing or empty | `build/ffmpeg-version.sh` exits `2` |
 

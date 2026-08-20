@@ -40,7 +40,7 @@ the sandbox — a drop-in speed tier, driven out-of-process by afmpeg's native b
 deliberately will not do — no `ffmpeg` command lines, no network inputs, no hardware acceleration,
 no HEVC or AV1 encode from the `.wasm` module, and a native driver for linux/amd64 only.
 
-> **Status: released.** Releases ship current FFmpeg (n8.1.2) as **lgpl** and **gpl** builds, in a
+> **Status: released.** Releases ship current FFmpeg (n9.0.1) as **lgpl** and **gpl** builds, in a
 > **lean** and an **intermediate** profile — both as portable **WASI modules** and as **native
 > drivers** (spec 0028, threads + SIMD, driven by afmpeg's native backend for 48–58× faster software
 > encode). The native driver adds a third **full** profile with HEVC (x265) and AV1 (SVT-AV1) encode.

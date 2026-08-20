@@ -34,7 +34,7 @@ test, not a job. Paths inside the spec resolve against the mounted filesystem (s
 component actually linked into this binary, by kind, plus the engine's identity.
 
 ```jsonc
-{"vocab_version":9,"ffmpeg_version":"n8.1.2",
+{"vocab_version":9,"ffmpeg_version":"n9.0.1",
  "encoders":[…],"decoders":[…],"muxers":[…],"demuxers":[…],
  "filters":[…],"bsfs":[…],"protocols":[…],"parsers":[…]}
 ```
@@ -99,7 +99,7 @@ The engine advertises the highest [job-spec vocabulary version](job-spec.md#vers
 understands. A host preflights it **before** running jobs:
 
 ```jsonc
-{ "op": "version" }        // → {"vocab_version":9,"ffmpeg_version":"n8.1.2"}
+{ "op": "version" }        // → {"vocab_version":9,"ffmpeg_version":"n9.0.1"}
 ```
 
 A `version` query carries no `version` field of its own, which is what makes it answerable by an

@@ -90,7 +90,7 @@ record. `--report` is a smoke test that probes a fixed handful of names, not an 
 ## Release artifacts
 
 Releases are published [here](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases); the
-latest is [`n8.1.2-10`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n8.1.2-10). Each
+latest is [`n9.0.1-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-1). Each
 release (`nX.Y.Z-N`) publishes:
 
 | Asset | What |
@@ -112,6 +112,6 @@ key never leaves KMS and no human can wield it — only the tagged-release CI jo
 
 ## Versioning
 
-A tag is **`<FFMPEG_VERSION>-<build-rev>`**, e.g. `n8.1.2-10`. The FFmpeg version tracks
+A tag is **`<FFMPEG_VERSION>-<build-rev>`**, e.g. `n9.0.1-1`. The FFmpeg version tracks
 upstream; the build revision bumps when the toolchain or build configuration changes for the
 same upstream FFmpeg. Pin a consumer to a specific tag + the published SHA-256.

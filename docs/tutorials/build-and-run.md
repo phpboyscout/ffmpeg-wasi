@@ -52,7 +52,7 @@ You'll see the engine report itself:
 ```
 ffmpeg-wasi engine
 vocab_version: 9
-ffmpeg: n8.1.2
+ffmpeg: n9.0.1
 libavcodec 4070502  libavformat 4066406  libavfilter 724582
 encoders:
   libopenh264 yes
@@ -69,7 +69,7 @@ decoders:
 
 ## What just happened
 
-- You compiled **current FFmpeg (n8.1.2)** — not an end-of-life pin — to a portable `.wasm`.
+- You compiled **current FFmpeg (n9.0.1)** — not an end-of-life pin — to a portable `.wasm`.
 - It ran under a **pure-Go runtime**: that harness cross-compiles to a single static binary
   with no CGO and no native FFmpeg anywhere.
 - Everything executed inside the **WebAssembly sandbox**.

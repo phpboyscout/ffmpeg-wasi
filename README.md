@@ -30,7 +30,7 @@ Every other "FFmpeg in WebAssembly" project hits the same two walls. We went und
 The result: the **reference server-side FFmpeg for WebAssembly** — current, sandboxed,
 pure-Go-embeddable.
 
-> **Status: it transcodes.** Current FFmpeg (n8.1.2) compiles to `wasm32-wasi` and runs
+> **Status: it transcodes.** Current FFmpeg (n9.0.1) compiles to `wasm32-wasi` and runs
 > under wazero, and the engine does **real in-memory transcodes** — verified end-to-end:
 > WAV → AAC, and H.264 → scaled → H.264 (libx264, GPL variant). `probe`, `process`, `frames`,
 > and `version` all work — `process` includes the full **multi-input `filter_complex`** (N
@@ -76,13 +76,13 @@ module over an in-memory filesystem:
 
 ```go
 rt, _ := afmpeg.New(ctx, afmpeg.WithModuleURL(
-    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n8.1.2-10/ffmpeg-wasi-lgpl.wasm",
-    afmpeg.WithSHA256("160a91663696136940ebc48586ccc199f8b7c369c7a4502999174e790af8d19f"),
+    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n9.0.1-1/ffmpeg-wasi-lgpl.wasm",
+    afmpeg.WithSHA256("0c4bf74a01317f9c2aa8e76033b3a7f22f6ba7821adbe37fab031ba64873fa5a"),
 ))
 // ... run a media job entirely in memory ...
 ```
 
-(That's the LGPL module from [`n8.1.2-10`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n8.1.2-10).
+(That's the LGPL module from [`n9.0.1-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-1).
 The LGPL module encodes H.264 via openh264; swap `lgpl` → `gpl` for libx264 instead. Every release
 lists each asset's URL + SHA-256.)
 

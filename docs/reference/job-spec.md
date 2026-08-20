@@ -264,7 +264,7 @@ stdout — the machine-readable channel a consumer preflights before running job
 input, so it works before any media is mounted:
 
 ```json
-{"vocab_version":9,"ffmpeg_version":"n8.1.2"}
+{"vocab_version":9,"ffmpeg_version":"n9.0.1"}
 ```
 
 This query carries no `version` of its own, so even an engine older than the consumer answers

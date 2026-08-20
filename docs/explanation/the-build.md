@@ -150,7 +150,7 @@ pins in one place as a record — **no script reads it**, so it is a summary to 
 than the mechanism. The [build options reference](../reference/build-options.md) lists every pin and
 where its authoritative value lives.
 
-A release tag is `<FFMPEG_VERSION>-<build-rev>` (e.g. `n8.1.2-10`); the build revision bumps when
+A release tag is `<FFMPEG_VERSION>-<build-rev>` (e.g. `n9.0.1-1`); the build revision bumps when
 the toolchain or config changes for the same upstream FFmpeg. The tag's version half must match
 `build/ffmpeg-version.txt`, which is checked before any build job starts — a release cannot name an
 FFmpeg version that no merge request ever built (spec 0035).
