@@ -172,6 +172,11 @@ func (h *Host) session(conn net.Conn) error {
 	}
 
 	var f *os.File
+	// A session is spent once Open has been ATTEMPTED, not once it has succeeded.
+	// Tracking only `f` meant a failed Open left the connection looking untouched,
+	// so a driver could open again on it — and the contract is one connection per
+	// opened file whether or not the open worked (ffmpeg-wasi#52).
+	attempted := false
 	defer func() {
 		if f != nil {
 			_ = f.Close()
@@ -190,16 +195,25 @@ func (h *Host) session(conn net.Conn) error {
 		switch frame[0] {
 		case 'O':
 			var err error
-			if f != nil {
+			if attempted {
 				return errors.New("a second Open frame arrived on one connection; " +
-					"the contract is one connection per opened file")
+					"the contract is one connection per opened file, and that holds " +
+					"whether or not the first Open succeeded")
 			}
+			attempted = true
 			f, err = h.doOpen(conn)
 			if err != nil {
 				return err
 			}
 
 		case 'C':
+			// Close is the end of a session, so there has to have been one. A
+			// connection that opens nothing and closes is a driver bug, and a host
+			// that shrugs at it lets that bug through conformance.
+			if !attempted {
+				return errors.New("a Close frame arrived before any Open; " +
+					"a session must open a file before it can end one")
+			}
 			return nil
 
 		default:
@@ -378,10 +392,37 @@ func (h *Host) resolve(name string) (string, error) {
 
 	full := filepath.Join(h.root, filepath.Clean("/"+strings.TrimPrefix(name, "/")))
 
-	// Belt and braces: symlinks and any case Clean does not cover.
+	// Lexical containment, which catches the cases Clean leaves behind.
 	rel, err := filepath.Rel(h.root, full)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("the name %q resolves outside the served directory", name)
+	}
+
+	// And now the filesystem, because none of the above can see a symlink.
+	// filepath.Rel is purely lexical — it never touches the disk — so a link
+	// inside the root pointing outside it satisfied every check here while a
+	// comment claimed otherwise (ffmpeg-wasi#51).
+	//
+	// The root is evaluated too: a served directory that is itself reached
+	// through a link would otherwise fail to match its own contents.
+	realRoot, err := filepath.EvalSymlinks(h.root)
+	if err != nil {
+		return "", fmt.Errorf("resolving the served directory: %w", err)
+	}
+	realFull, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		// A path that does not exist yet is normal in write mode; check the
+		// parent instead, which is where a link would have to be.
+		realParent, perr := filepath.EvalSymlinks(filepath.Dir(full))
+		if perr != nil {
+			return "", fmt.Errorf("resolving %q: %w", name, perr)
+		}
+		realFull = filepath.Join(realParent, filepath.Base(full))
+	}
+	rel, err = filepath.Rel(realRoot, realFull)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("the name %q resolves outside the served directory "+
+			"through a symbolic link", name)
 	}
 	return full, nil
 }

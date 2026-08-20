@@ -366,3 +366,126 @@ func TestOpenedRecordsTheNamesAsked(t *testing.T) {
 		t.Errorf("Opened() is %v, want [a.bin]", got)
 	}
 }
+
+// TestASymlinkCannotEscapeTheServedDirectory is the regression test for
+// ffmpeg-wasi#51.
+//
+// The existing escape test covers ".." segments, which are rejected lexically.
+// A symlink is not lexical: filepath.Rel never touches the filesystem, so a link
+// inside the served root pointing outside it passed every check while a comment
+// claimed the opposite.
+//
+// This matters more than a harness bug usually would. The conformance suite uses
+// this host to prove the ENGINE stays inside the bridge — that is the whole
+// assertion behind #14's regression test — so a host more permissive than a real
+// one weakens every such test.
+func TestASymlinkCannotEscapeTheServedDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("OUTSIDE THE ROOT"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A link inside the served directory pointing at it.
+	if err := os.Symlink(secret, filepath.Join(root, "link.txt")); err != nil {
+		t.Skipf("this filesystem does not support symlinks: %v", err)
+	}
+
+	h, sock, err := Listen(root, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	// Control: an ordinary file in the root opens, so a refusal below is the
+	// symlink and not the host being broken.
+	if err := os.WriteFile(filepath.Join(root, "ok.txt"), []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if st := dial(t, sock).open('r', "ok.txt"); st != 0 {
+		t.Fatalf("an ordinary file in the served root was refused (status %d)", st)
+	}
+
+	if st := dial(t, sock).open('r', "link.txt"); st == 0 {
+		t.Errorf("a symlink pointing outside the served root was opened (ffmpeg-wasi#51).\n" +
+			"filepath.Rel is purely lexical and cannot resolve one, so the containment " +
+			"check never saw it — while the comment above it said it did.")
+	}
+}
+
+// TestTheSessionSequenceIsEnforced is the regression test for ffmpeg-wasi#52.
+//
+// The host exists to hold the engine to the DOCUMENT, not to whatever the engine
+// happens to do (spec 0037 D4). A host more forgiving than the document is
+// exactly as useless as a check looser than the fault: a driver that violates
+// the contract passes conformance, and the violation is found by a real host
+// later, in someone else's process.
+//
+// Two sequences were accepted that the ABI forbids. Both are asserted here.
+func TestTheSessionSequenceIsEnforced(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h, sock, err := Listen(root, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	// waitForError polls the host's error log — sessions run in their own
+	// goroutine, so a protocol error is recorded shortly after the client sees the
+	// connection drop, not before.
+	waitForError := func(t *testing.T, want string) bool {
+		t.Helper()
+		for range 100 {
+			for _, e := range h.Errors() {
+				if strings.Contains(e.Error(), want) {
+					return true
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return false
+	}
+
+	t.Run("a second Open after a FAILED one", func(t *testing.T) {
+		c := dial(t, sock)
+		if st := c.open('r', "no-such-file"); st == 0 {
+			t.Fatal("opening a missing file reported success")
+		}
+		// Written by hand: a refusal shows up as the host dropping the connection,
+		// which the open() helper treats as a fatal harness error rather than as
+		// the result under test.
+		buf := []byte{'O', 'r', 0, 0, 0, 0}
+		binary.LittleEndian.PutUint32(buf[2:], uint32(len("a.txt")))
+		buf = append(buf, "a.txt"...)
+		_, _ = c.conn.Write(buf)
+
+		var st [1]byte
+		_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := io.ReadFull(c.conn, st[:]); err == nil && st[0] == 0 {
+			t.Error("a second Open was accepted on the same connection after the first " +
+				"failed (ffmpeg-wasi#52).\nThe contract is one connection per opened file, " +
+				"and a driver reusing a connection after a failed open would pass conformance.")
+		}
+		if !waitForError(t, "second Open") {
+			t.Error("the host did not record the second Open as a protocol error")
+		}
+	})
+
+	t.Run("Close before Open", func(t *testing.T) {
+		c := dial(t, sock)
+		if _, err := c.conn.Write([]byte{'C'}); err != nil {
+			t.Fatal(err)
+		}
+		if !waitForError(t, "Close frame arrived before any Open") {
+			t.Error("Close arrived before Open and the host treated it as a normal end of " +
+				"session (ffmpeg-wasi#52).\nA driver that never opened anything would pass.")
+		}
+	})
+}
