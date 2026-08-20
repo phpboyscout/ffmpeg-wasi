@@ -303,3 +303,104 @@ func TestASmallOverstatementDoesNotHangTheEngine(t *testing.T) {
 		})
 	}
 }
+
+// TestAShortWriteAcknowledgementIsAFailure is the regression test for #45.
+//
+// #24 gave the Read reply an upper bound. The Write reply had no LOWER one, and
+// libavformat does not resend what a short write left behind — flush_buffer
+// calls the write callback once and records an error only on a negative return.
+// So a host acknowledging fewer bytes than it was handed silently lost the tail
+// of every buffer, and the job exited 0 with a truncated file.
+//
+// The host here writes everything and only lies about the count, which separates
+// the question under test — does the engine act on the count — from whether the
+// data happened to survive.
+func TestAShortWriteAcknowledgementIsAFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, a := range nativeArtifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			// Control: an honest host completes the job, so a failure below is the
+			// short count and not the fixture.
+			good, sock, name := hostFaultSetup(t, a)
+			if code, stderr, _ := runOverIPC(t, a, good, sock, name); code != 0 {
+				t.Fatalf("%s: the control job failed over an honest host (exit %d)\n%s",
+					a, code, strings.TrimSpace(stderr))
+			}
+
+			bad, sock2, name2 := hostFaultSetup(t, a)
+			bad.UnderstateWriteBy = 512 // less than a buffer, so writes still mostly work
+
+			code, stderr, signal := runOverIPC(t, a, bad, sock2, name2)
+			if signal != "" {
+				t.Fatalf("%s: the engine was killed by %s rather than reporting a failure", a, signal)
+			}
+			if code == 0 {
+				t.Errorf("%s: the host acknowledged 512 bytes fewer than it was given on every "+
+					"write, and the engine exited 0 (ffmpeg-wasi#45).\nlibav does not resend the "+
+					"remainder, so those bytes are simply missing from the output — and the caller "+
+					"is told the job succeeded.\nstderr: %s", a, strings.TrimSpace(stderr))
+			}
+		})
+	}
+}
+
+// TestAFailedImageWriteIsReported is the regression test for #46.
+//
+// afio_write_file returned 0 whatever happened after the open. avio_write is
+// void and leaves failures in pb->error, which nobody read; avio_flush's outcome
+// was dropped; the plain-file branch ignored fwrite and fclose too. So a bridge
+// that dropped mid-write, or a full disk, produced an empty or truncated image
+// and the `frames` reply still listed it as written.
+//
+// This is the write half of #20, which fixed `frames` swallowing READ errors.
+func TestAFailedImageWriteIsReported(t *testing.T) {
+	t.Parallel()
+
+	for _, a := range nativeArtifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			framesJob := func(h *ipchost.Host, sock, in string) (int, string) {
+				job, err := json.Marshal(map[string]any{
+					"op":     "frames",
+					"inputs": []any{map[string]any{"path": in}},
+					"select": map[string]any{"timestamps": []any{0.1, 0.3, 0.5}},
+					"path":   "shot_%02d.png",
+					"codec":  "png",
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+				defer cancel()
+				res, err := engine.Native{Path: a.Path, Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}.
+					Run(ctx, string(job))
+				if err != nil {
+					t.Fatalf("%s: invoking: %v", a, err)
+				}
+				return res.ExitCode, res.Stderr
+			}
+
+			// Control: an honest host, so a failure below is the fault and not the
+			// job spec being wrong for this build.
+			good, sock, name := hostFaultSetup(t, a)
+			if code, stderr := framesJob(good, sock, name); code != 0 {
+				t.Skipf("%s: the control frames job did not run (exit %d) — this build or "+
+					"spec cannot exercise the write path.\n%s", a, code, strings.TrimSpace(stderr))
+			}
+
+			bad, sock2, name2 := hostFaultSetup(t, a)
+			bad.UnderstateWriteBy = 64
+
+			code, stderr := framesJob(bad, sock2, name2)
+			if code == 0 {
+				t.Errorf("%s: every image write was acknowledged short and the job still "+
+					"reported success (ffmpeg-wasi#46).\nThe reply lists images the caller "+
+					"cannot rely on.\nstderr: %s", a, strings.TrimSpace(stderr))
+			}
+		})
+	}
+}

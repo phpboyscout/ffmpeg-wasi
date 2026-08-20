@@ -171,6 +171,14 @@ Each connection is one file session:
 
 All integers are **little-endian**. Two details a host implementation has to get right:
 
+- **A `Write` reply must acknowledge EXACTLY the byte count it was given.** Anything else fails
+  the job and the driver tears the connection down. libavformat never resends what a short write
+  left behind, so a smaller count silently loses the tail of that buffer; a larger one corrupts
+  libav's accounting. A host that cannot write everything has failed, and saying so is the only
+  reply the engine can act on.
+- **Any failed frame ends the session.** The driver shuts the socket down rather than reusing it:
+  once a reply is half-read the connection is desynchronised, and the next request would read the
+  abandoned bytes as its own header.
 - **A `Read` reply of `0` means end-of-file**, not a short read — the driver turns it into
   `AVERROR_EOF`. Return the bytes you have, or `0` when there are none left.
 - **`Write` replies with a count, not a status byte.** The driver passes that count straight back to

@@ -80,8 +80,13 @@ type Host struct {
 	// the malformed-host case (ffmpeg-wasi#24).
 	// CloseAfterReads drops the connection after N Read frames, which is a
 	// mid-stream transport failure rather than an end of file (ffmpeg-wasi#15).
-	OverstateReadBy uint32
-	CloseAfterReads int
+	// UnderstateWriteBy makes a Write reply acknowledge FEWER bytes than were
+	// handed over — what an honest host does when it runs out of room, and what a
+	// buggy one does by accident. libavformat never resends the remainder, so the
+	// engine must treat it as a failure (ffmpeg-wasi#45).
+	OverstateReadBy   uint32
+	CloseAfterReads   int
+	UnderstateWriteBy uint32
 
 	reads atomic.Int64
 
@@ -339,6 +344,19 @@ func (h *Host) doFrame(conn net.Conn, f *os.File, tag byte) error {
 		n, err := f.Write(buf)
 		if err != nil {
 			return fmt.Errorf("writing to the file: %w", err)
+		}
+
+		if h.UnderstateWriteBy > 0 {
+			// The bytes really are on disk; only the acknowledgement is short. That
+			// isolates what is under test — whether the engine ACTS on the count —
+			// from whether the data survived.
+			short := uint32(n)
+			if short > h.UnderstateWriteBy {
+				short -= h.UnderstateWriteBy
+			} else {
+				short = 0
+			}
+			return binary.Write(conn, binary.LittleEndian, short)
 		}
 
 		// A COUNT, not a status byte. The driver hands this straight to libav.

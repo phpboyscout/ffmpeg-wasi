@@ -90,6 +90,21 @@ static void afio_set_timeouts(int fd) {
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 }
 
+// afio_fail marks a session unusable and returns the error.
+//
+// Any failure mid-frame leaves the connection desynchronised: bytes belonging to
+// the abandoned reply are still queued, so the NEXT request reads them as its own
+// header. That turns one diagnosable failure into a series of undiagnosable ones
+// -- a bogus seek result, a read returning the wrong bytes, a hang for the length
+// of the socket timeout (ffmpeg-wasi#47).
+//
+// #24 established the principle for an over-long count; it applies to every
+// failure, not just that one.
+static int afio_fail(int fd) {
+    shutdown(fd, SHUT_RDWR);
+    return AVERROR(EIO);
+}
+
 static int rd_full(int fd, void *p, size_t n) {
     uint8_t *b = p;
     size_t got = 0;
@@ -169,10 +184,10 @@ static int afio_read(void *opaque, uint8_t *buf, int size) {
     uint8_t req[5];
     req[0] = 'R';
     put32(req + 1, (uint32_t)size);
-    if (wr_full(fd, req, sizeof req) < 0) return AVERROR(EIO);
+    if (wr_full(fd, req, sizeof req) < 0) return afio_fail(fd);
 
     uint8_t nb[4];
-    if (rd_full(fd, nb, sizeof nb) < 0) return AVERROR(EIO);
+    if (rd_full(fd, nb, sizeof nb) < 0) return afio_fail(fd);
 
     uint32_t n = get32(nb);
     if (n == 0) return AVERROR_EOF;
@@ -184,11 +199,8 @@ static int afio_read(void *opaque, uint8_t *buf, int size) {
     // session would desynchronise -- which shows up as the engine blocking
     // forever rather than failing. The session is unrecoverable once a reply is
     // malformed, so tear the connection down and let every later call fail fast.
-    if (n > (uint32_t)size) {
-        shutdown(fd, SHUT_RDWR);
-        return AVERROR(EIO);
-    }
-    if (rd_full(fd, buf, n) < 0) return AVERROR(EIO);
+    if (n > (uint32_t)size) return afio_fail(fd);
+    if (rd_full(fd, buf, n) < 0) return afio_fail(fd);
     return (int)n;
 }
 
@@ -197,17 +209,25 @@ static int afio_write(void *opaque, const uint8_t *buf, int size) {
     uint8_t req[5];
     req[0] = 'W';
     put32(req + 1, (uint32_t)size);
-    if (wr_full(fd, req, sizeof req) < 0 || wr_full(fd, buf, (size_t)size) < 0) return AVERROR(EIO);
+    if (wr_full(fd, req, sizeof req) < 0 || wr_full(fd, buf, (size_t)size) < 0) return afio_fail(fd);
 
     uint8_t nb[4];
-    if (rd_full(fd, nb, sizeof nb) < 0) return AVERROR(EIO);
-    // Same reasoning as afio_read: a host cannot have written more than we gave
-    // it, and handing libav an inflated count corrupts its accounting.
+    if (rd_full(fd, nb, sizeof nb) < 0) return afio_fail(fd);
+
+    // The count must be EXACTLY what we handed over.
+    //
+    // Too many was already refused (#24): a host cannot have written more than it
+    // was given, and an inflated count corrupts libav's accounting. Too FEW is the
+    // one that mattered in practice, because libavformat never resends the
+    // remainder -- flush_buffer calls this once and records an error only on a
+    // negative return. A short count therefore lost the tail of the buffer in
+    // silence, and the job still exited 0 (ffmpeg-wasi#45).
+    //
+    // There is no useful middle ground: the engine cannot act on a partial write,
+    // so a host that manages one has failed, and saying so is the only honest
+    // reply.
     uint32_t w = get32(nb);
-    if (w > (uint32_t)size) {
-        shutdown(fd, SHUT_RDWR);
-        return AVERROR(EIO);
-    }
+    if (w != (uint32_t)size) return afio_fail(fd);
     return (int)w;
 }
 
@@ -217,7 +237,7 @@ static int64_t afio_seek(void *opaque, int64_t offset, int whence) {
     if (whence == AVSEEK_SIZE) {
         uint8_t req = 'Z';
         uint8_t sz[8];
-        if (wr_full(fd, &req, 1) < 0 || rd_full(fd, sz, sizeof sz) < 0) return AVERROR(EIO);
+        if (wr_full(fd, &req, 1) < 0 || rd_full(fd, sz, sizeof sz) < 0) return afio_fail(fd);
         return (int64_t)get64(sz);
     }
 
@@ -228,7 +248,7 @@ static int64_t afio_seek(void *opaque, int64_t offset, int whence) {
     req[9] = (uint8_t)whence;
 
     uint8_t off[8];
-    if (wr_full(fd, req, sizeof req) < 0 || rd_full(fd, off, sizeof off) < 0) return AVERROR(EIO);
+    if (wr_full(fd, req, sizeof req) < 0 || rd_full(fd, off, sizeof off) < 0) return afio_fail(fd);
     return (int64_t)get64(off);
 }
 
@@ -508,19 +528,29 @@ void afio_close_output(AVFormatContext *ofmt) {
     avio_closep(&ofmt->pb);
 }
 
+// afio_write_file writes one file in a single shot -- the frames op's still
+// images. Every failure after the open used to be discarded: avio_write is void
+// and records into pb->error, which nobody read; avio_flush's outcome was
+// dropped; and the plain-file branch ignored fwrite and fclose alike. A bridge
+// that dropped mid-write, or a full disk, produced an empty or truncated image
+// that the reply still listed as written (ffmpeg-wasi#46).
 int afio_write_file(const char *path, const uint8_t *data, size_t len) {
 #ifdef AFMPEG_NATIVE
     if (afio_active()) {
         AVIOContext *pb = afio_ipc_open(path, 1);
         if (!pb) return AVERROR(EIO);
         avio_write(pb, data, (int)len);
+        avio_flush(pb);
+        int err = pb->error; // where avio_write and avio_flush leave their failures
         afio_ipc_close(&pb);
-        return 0;
+        return err < 0 ? err : 0;
     }
 #endif
     FILE *fp = fopen(path, "wb");
     if (!fp) return AVERROR(EIO);
-    fwrite(data, 1, len, fp);
-    fclose(fp);
-    return 0;
+    size_t put = fwrite(data, 1, len, fp);
+    // fclose flushes, so it is the last thing that can fail -- and closing a
+    // stream whose buffer cannot be written is exactly how a full disk surfaces.
+    int closed = fclose(fp);
+    return (put != len || closed != 0) ? AVERROR(EIO) : 0;
 }
