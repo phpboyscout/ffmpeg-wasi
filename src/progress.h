@@ -9,6 +9,11 @@
 // /dev/afmpeg-progress (served by afmpeg's vfs, which parses each line onto the
 // WithProgress channel). Best-effort throughout: if the device cannot be opened,
 // every call is a no-op — the encode is never blocked or failed by progress I/O.
+//
+// WASM ONLY. With the native IPC bridge active the emitter is deliberately inert:
+// the path is a vfs device, and opening it on the native target would be a plain
+// libc call straight to host disk, which the driver promises not to make
+// (ffmpeg-wasi#48). Native progress is spec 0033, and is not this.
 typedef struct Progress Progress;
 
 // progress_open returns an emitter. When enabled is nonzero it opens the device;

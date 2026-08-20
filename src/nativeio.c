@@ -534,6 +534,14 @@ void afio_close_output(AVFormatContext *ofmt) {
 // dropped; and the plain-file branch ignored fwrite and fclose alike. A bridge
 // that dropped mid-write, or a full disk, produced an empty or truncated image
 // that the reply still listed as written (ffmpeg-wasi#46).
+int afio_bridge_active(void) {
+#ifdef AFMPEG_NATIVE
+    return afio_active();
+#else
+    return 0;
+#endif
+}
+
 int afio_write_file(const char *path, const uint8_t *data, size_t len) {
 #ifdef AFMPEG_NATIVE
     if (afio_active()) {

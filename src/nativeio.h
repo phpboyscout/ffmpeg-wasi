@@ -48,6 +48,11 @@ void afio_install_muxer_io(struct AVFormatContext *ofmt);
 // afio_close_output closes the muxer's pb (no-op when none is open).
 void afio_close_output(struct AVFormatContext *ofmt);
 
+// afio_bridge_active reports whether the native IPC bridge is in use, so a
+// component that opens something OUTSIDE afio_* can refuse to. Always 0 on wasm,
+// where the wazero mount is the boundary and a plain open is correct.
+int afio_bridge_active(void);
+
 // afio_write_file writes len bytes to path in one shot — the frames op's still
 // image output (custom AVIO over IPC when active, else fopen/fwrite).
 int afio_write_file(const char *path, const uint8_t *data, size_t len);
