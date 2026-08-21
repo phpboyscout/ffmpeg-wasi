@@ -729,7 +729,14 @@ static int pull_sinks(Ctx *c) {
         AVRational tb = av_buffersink_get_time_base(c->gout[i].sink);
         while (1) {
             ret = av_buffersink_get_frame(c->gout[i].sink, f);
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) { ret = 0; break; }
+            // EOF from a sink is permanent: the chain feeding it has ended, so
+            // this output will never produce another frame. Recording that is
+            // what lets the demux loop know the graph is finished — without it,
+            // `done` meant only "its window is satisfied", and a job bounded by
+            // a filter rather than a window never looked finished at all
+            // (ffmpeg-wasi#58). EAGAIN is the opposite: come back later.
+            if (ret == AVERROR_EOF) { c->gout[i].done = 1; ret = 0; break; }
+            if (ret == AVERROR(EAGAIN)) { ret = 0; break; }
             if (ret < 0) goto done;
 
             // A graph can outlive its input — `loop=loop=-1` is how a still image
@@ -1284,6 +1291,49 @@ static int flush_copy_bsfs(Ctx *c) {
         av_packet_free(&pkt);
     }
     return ret;
+}
+
+// input_is_spent reports whether anything downstream can still take a packet from
+// this input.
+//
+// The demux loop's other exit is the demuxer reaching EOF, and an input need not
+// have an end — `loop=1` on a still image is the ordinary way to hold a frame.
+// When the graph bounds the job instead, every pad this input feeds is closed
+// long before the demuxer stops, and each further packet is decoded and thrown
+// away. The job then runs until something kills it (ffmpeg-wasi#58).
+//
+// All three lanes have to agree before we stop. A copy target takes packets
+// straight from the demuxer and a subtitle lane runs beside the graph, so
+// stopping on closed graph pads alone would cut either short — turning the hang
+// into silent truncation, which is the worse failure of the two. Neither lane
+// has a "closed" state to consult: they consume until their input ends, so an
+// input feeding one stays live, and a job that pairs an endless input with a
+// copy of it still runs forever. That is correct — nothing bounds it, and the
+// ffmpeg CLI does the same.
+static int input_is_spent(const Ctx *c, int in_idx) {
+    // Ask the sinks first. A closed buffersrc is the tidier signal but not a
+    // reliable one: when libavfilter auto-inserts a format converter between the
+    // trim and the sink, the EOF the trim raises is absorbed there and never
+    // reaches the source pad, which stays open forever. The identical graph with
+    // an explicit `format` filter closes it. The sinks are the honest end of the
+    // chain, so they decide, and the pad check below only refines the answer for
+    // an input whose own pads have closed while others are still running.
+    int graph_finished = c->n_gout > 0;
+    for (int i = 0; i < c->n_gout; i++) {
+        if (!c->gout[i].done) { graph_finished = 0; break; }
+    }
+    if (!graph_finished) {
+        for (int i = 0; i < c->n_gin; i++) {
+            if (c->gin[i].in_idx == in_idx && !c->gin[i].closed) return 0;
+        }
+    }
+    for (int i = 0; i < c->n_cpy; i++) {
+        if (c->cpy[i].in_idx == in_idx) return 0;
+    }
+    for (int i = 0; i < c->n_sub; i++) {
+        if (c->sub[i].in_idx == in_idx) return 0;
+    }
+    return 1;
 }
 
 // setup_sub_stream opens the decoder + encoder for one transcoded subtitle stream
@@ -1901,7 +1951,12 @@ int op_process(const cJSON *spec) {
     while (remaining > 0 && rc >= 0) {
         for (int i = 0; i < c.n_in && rc >= 0; i++) {
             if (c.eof[i]) continue;
-            int r = av_read_frame(c.in[i], pkt);
+            // An input nothing can consume any more is finished, whatever its
+            // demuxer thinks — and an endless one never thinks so (#58). Taking
+            // the ordinary end-of-input path from here means the decoders still
+            // get flushed and the buffersrcs still get closed.
+            int spent = input_is_spent(&c, i);
+            int r = spent ? AVERROR_EOF : av_read_frame(c.in[i], pkt);
             if (r >= 0 && c.in_cutoff_us[i] != INT64_MAX) {
                 int64_t t = pkt->dts != AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
                 if (t != AV_NOPTS_VALUE &&
@@ -1930,7 +1985,10 @@ int op_process(const cJSON *spec) {
                 // recorded a failure, so an I/O error can arrive wearing a clean
                 // end-of-input. Ask the AVIO directly rather than trusting the
                 // demuxer's summary.
-                if (c.in[i]->pb && c.in[i]->pb->error < 0) {
+                // Not when we ended it ourselves: no read was attempted, so any
+                // error still sitting on the AVIO belongs to an earlier one, and
+                // an earlier failed read would already have aborted the job.
+                if (!spent && c.in[i]->pb && c.in[i]->pb->error < 0) {
                     char eb[128];
                     av_strerror(c.in[i]->pb->error, eb, sizeof(eb));
                     fprintf(stderr, "ffmpeg-wasi: process: input %d ended after an I/O "
