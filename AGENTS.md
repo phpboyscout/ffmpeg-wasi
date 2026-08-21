@@ -45,7 +45,7 @@ commit type.
 **The engine is the moving part**, and moving a great deal. Around fifty issues
 in the #11 to #60 range are open, nearly all engine defects, almost all raised
 in a single three-day wave. MR !99 is the other half of that picture: it fixes
-thirty-seven of them and is not merged, and it touches `src/`, `build/`,
+forty-two of them and is not merged, and it touches `src/`, `build/`,
 `internal/conformance/`, `internal/fixture/` and `internal/engine/`, so anything
 in those directories is about to move under you. Read that branch before
 reproducing a defect, and treat the issue list as a record of what has been
