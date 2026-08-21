@@ -18,16 +18,20 @@ import (
 // one frame at 25fps is 0.04s against a 0.2s window. The check ran, passed, and
 // could not have failed.
 //
-// The first response was to count frames instead, on the reasoning that a count
-// has no muxer rounding in it. That was half right. A count is the better
-// instrument for #11 — a graph that ends early emits fewer frames — but #12 is
-// not a missing frame at all: every frame is present and the CONTAINER
-// understates its length. No frame count can see it.
+// Counting frames is the answer to that, and it works: measured against the
+// released n9.0.1-1 driver, a 25-image passthrough into MP4 yields 24 frames
+// where the fixed build and the ffmpeg CLI both yield 25. The ticket's own
+// fixture agrees — 5/25/125 source frames give 4/24/124.
 //
-// So this file holds both. The counts guard #11 and the passthrough path; the
-// duration assertion at the bottom guards #12, on a fixture whose length is not
-// a whole number of frames and with a tolerance of half a frame rather than
-// five. Neither could have caught the other's defect.
+// #12 shows a SECOND symptom that a count cannot see. On a graph whose output
+// does not end on a frame boundary — an xfade — the released engine emits the
+// full 48 frames and the container still reports 1.566667s against 1.600000s.
+// Same defect, same fix, and only a duration can observe that half of it.
+//
+// So this file holds both instruments, and neither is redundant. The counts
+// guard #11 and the passthrough path; the duration assertion at the bottom
+// guards the tail that survives a correct count, with a tolerance of half a
+// frame rather than five.
 //
 // # Why the fixture is a PNG sequence
 //
@@ -102,37 +106,33 @@ func countFrames(t *testing.T, ws *engine.Workspace, a engine.Artifact, in, filt
 	return len(got)
 }
 
-// TestEveryFrameSurvivesAPassthrough asserts a passthrough graph emits as many
-// frames as it was given. IT DOES NOT GUARD #12, and the story of why is worth
-// more than the test.
+// TestEveryFrameSurvivesAPassthrough is the frame-count guard for #12.
 //
-// #12 was reported as "every process job drops the last video frame". It does
-// not. Measured on this fixture, released engine against fixed, and against the
-// ffmpeg CLI:
+// A passthrough graph must emit as many frames as it was given. The released
+// n9.0.1-1 driver does not: this fixture's 25 images come back as 24, and the
+// ticket's own testsrc2 fixture gives 4/24/124 against 5/25/125.
 //
-//	released   nb_read_frames=25   duration=1.000000
-//	fixed      nb_read_frames=25   duration=1.000000
-//	CLI        nb_read_frames=25   duration=1.000000
+// # A correction, because the wrong version of this comment was committed
 //
-// No difference at all — so this test passes against the engine it was written
-// to catch, and always did.
+// An earlier revision of this file asserted the opposite — that #12 was not a
+// dropped frame, that this test passed against the engine it was written to
+// catch, and that only a duration could see the defect. It cited a measurement
+// showing 25 frames from the released engine.
 //
-// The real defect is a final MP4 sample with duration ZERO: every frame is
-// present, and the CONTAINER understates its own length by one frame's worth.
-// The downstream session that first reported it derived "107 frames" by dividing
-// a duration by the frame interval and reported the quotient as a count; when
-// they later counted properly with -count_frames, both engines gave 108. Their
-// independent confirmation of the fix is a DURATION: 3.566667 before, 3.600000
-// after, an exact match to the CLI.
+// That measurement was taken against an artefact directory that did not hold the
+// released driver for the variant under test, so the "released" column was the
+// FIXED build compared with itself. Running this test against a genuinely
+// released artefact fails, 24 against 25. The same trap — a stale or misidentified
+// artefact reading exactly like a valid one — cost this suite a false baseline
+// twice in one day, which is why it is written down here rather than quietly
+// repaired.
 //
-// So the defect is invisible to a frame count and visible only in duration —
-// the exact opposite of how it was described, and of what this file was built
-// around. Reproducing it needs a graph whose output length is not a whole number
-// of frame intervals; a uniform sequence at a matching rate cannot show it.
+// # What the duration test at the bottom is for, then
 //
-// The test is kept because "a passthrough emits what it was given" is worth
-// holding. What it must not do is stand in for #12, which is guarded instead by
-// TestAContainerReportsItsFullDurationAcrossATransition below.
+// Not a replacement for this one. #12 has a second symptom that a correct count
+// cannot see: on an xfade, whose output does not end on a frame boundary, the
+// released engine emits all 48 frames and the container still reports 1.566667s
+// against 1.600000s. Both symptoms, one fix. Keep both assertions.
 func TestEveryFrameSurvivesAPassthrough(t *testing.T) {
 	for _, a := range artifacts(t) {
 		t.Run(a.String(), func(t *testing.T) {
@@ -263,17 +263,17 @@ func TestAGraphMayFinishBeforeItsInput(t *testing.T) {
 	}
 }
 
-// The #12 guard proper — a transition whose output length is not a whole number
+// #12's second symptom — a transition whose output length is not a whole number
 // of frame intervals.
 //
-// # Why this fixture and not the one above
+// # Why this fixture as well as the one above
 //
-// TestEveryFrameSurvivesAPassthrough cannot fail for #12 and never could: a
-// uniform sequence at a matching rate produces an output whose length is already
-// a whole number of frames, so the missing final sample duration lands exactly on
-// a boundary and nothing is short. An xfade is the smallest graph that breaks
-// that alignment — the output is two clips overlapped, so its end does not
-// coincide with either input's.
+// TestEveryFrameSurvivesAPassthrough catches the dropped frame, and on that
+// fixture the count and the duration move together: lose the frame, lose 0.04s.
+// An xfade separates them. Its output is two clips overlapped, so it does not end
+// on a frame boundary, and there the released engine emits every frame and still
+// reports a container 1/30s short. A count is blind to that; this is not a
+// duplicate assertion.
 //
 // # Why the expected duration is arithmetic and not an oracle
 //
