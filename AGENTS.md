@@ -126,6 +126,14 @@ proving a stop condition does not cut the copy lane short, has to count frames:
 #59 has made duration useless on exactly that lane. A test asserting only one of
 the two instruments is blind to the other class.
 
+Do not read that as "a count is sufficient for #12". #12 has two symptoms and
+they need different instruments. On a uniform sequence through the passthrough
+lane, count and duration move together: 24 frames where 25 were expected, and
+0.96s where 1.0s was. Under xfade, with the output not ending on a frame
+boundary, all 48 frames are present and only the container disagrees, reporting
+1.566667s against 1.600000s. The same ticket is a count defect on one lane and a
+duration defect on another.
+
 **A tolerance wider than the defect is a check that cannot fail.**
 `durationTolerance` in `internal/conformance/behaviour_test.go` is 0.2s. The #12
 defect is one frame: 0.04s at 25fps, 0.033s at 30fps. That check ran and passed
@@ -144,10 +152,14 @@ instead of an n9.0.1 build, under CPU contention, and produced a 0.4x row.
 Nothing else in the report flags it. A contaminated run reads exactly like a
 valid one until you notice that WASM has apparently beaten native.
 
-**An open issue number is not proof the defect is still there.** !99's
-description lists nineteen of the currently-open issues as already fixed on its
-branch, thirty-seven defects in all. Read the branch before reproducing
-anything, or you will fix something twice.
+**The issue list is a record of what has been written down, not of what is
+broken.** It is wrong in both directions. It over-counts: !99's description
+lists nineteen of the currently-open issues as already fixed on its branch,
+thirty-seven defects in all, so read the branch before reproducing anything or
+you will fix something twice. It also under-counts: #58 and #59 were both found
+and fixed in a single session, and neither existed as a ticket that morning.
+Treat it as a starting point for what is known, never as an inventory of what is
+wrong.
 
 **`go test ./...` on its own proves very little.** Without
 `FFMPEG_WASI_ARTIFACTS` naming a directory of built engines, every
