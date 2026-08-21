@@ -1337,6 +1337,37 @@ static int flush_copy_bsfs(Ctx *c) {
 // input feeding one stays live, and a job that pairs an endless input with a
 // copy of it still runs forever. That is correct — nothing bounds it, and the
 // ffmpeg CLI does the same.
+// report_spent_input says why an input was stopped.
+//
+// Without it, a job that ends because nothing can consume an input any more is
+// indistinguishable from one that ended because the input ran out -- and when
+// this family of defect recurs, the caller sees a short output or a hang with
+// nothing to read (afmpeg spec 0044 D4). #19 and #58 would both have been
+// obvious from one line of this.
+//
+// It names the input and the state of each of the three lanes, because the bug
+// is always that one lane was consulted and another was not.
+static void report_spent_input(const Ctx *c, int in_idx) {
+    int pads = 0, open_pads = 0, cpy = 0, sub = 0;
+    for (int i = 0; i < c->n_gin; i++) {
+        if (c->gin[i].in_idx != in_idx) continue;
+        pads++;
+        if (!c->gin[i].closed) open_pads++;
+    }
+    for (int i = 0; i < c->n_cpy; i++) if (c->cpy[i].in_idx == in_idx) cpy++;
+    for (int i = 0; i < c->n_sub; i++) if (c->sub[i].in_idx == in_idx) sub++;
+
+    int sinks_done = c->n_gout > 0;
+    for (int i = 0; i < c->n_gout; i++) if (!c->gout[i].done) { sinks_done = 0; break; }
+
+    fprintf(stderr,
+            "ffmpeg-wasi: process: input %d has no consumer left, so it is finished: "
+            "%d graph pad(s) (%d still open), %d copy target(s), %d subtitle target(s); "
+            "every graph output %s. Reading on would decode packets nothing can take.\n",
+            in_idx, pads, open_pads, cpy, sub,
+            sinks_done ? "has finished" : "is still live");
+}
+
 static int input_is_spent(const Ctx *c, int in_idx) {
     // Ask the sinks first. A closed buffersrc is the tidier signal but not a
     // reliable one: when libavfilter auto-inserts a format converter between the
@@ -1983,6 +2014,7 @@ int op_process(const cJSON *spec) {
             // the ordinary end-of-input path from here means the decoders still
             // get flushed and the buffersrcs still get closed.
             int spent = input_is_spent(&c, i);
+            if (spent) report_spent_input(&c, i);
             int r = spent ? AVERROR_EOF : av_read_frame(c.in[i], pkt);
             if (r >= 0 && c.in_cutoff_us[i] != INT64_MAX) {
                 int64_t t = pkt->dts != AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
