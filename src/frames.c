@@ -31,6 +31,7 @@
 
 #include "frames.h"
 #include "nativeio.h"
+#include "specopts.h"
 
 // A runaway interval over a long input needs a bound; `count` caps output but is
 // optional, so an uncapped interval falls back to this (spec 0021 §6 open q).
@@ -115,7 +116,14 @@ static int open_video(Frames *f, const cJSON *in) {
     const cJSON *od = cJSON_GetObjectItemCaseSensitive(in, "options"), *kv = NULL;
     if (cJSON_IsObject(od)) {
         cJSON_ArrayForEach(kv, od) {
-            if (cJSON_IsString(kv)) av_dict_set(&opts, kv->string, kv->valuestring, 0);
+            if (!cJSON_IsString(kv)) continue;
+            // Same ceiling as process: the op does not change what an unbounded
+            // scan costs (spec 0044 D3).
+            if (spec_option_in_bounds("frames", kv->string, kv->valuestring) < 0) {
+                av_dict_free(&opts);
+                return AVERROR(EINVAL);
+            }
+            av_dict_set(&opts, kv->string, kv->valuestring, 0);
         }
     }
     int rc = afio_open_input(&f->fmt, path, ifmt, &opts);
