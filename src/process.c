@@ -34,6 +34,7 @@
 #include "meta.h"
 #include "nativeio.h"
 #include "progress.h"
+#include "specopts.h"
 
 #define MAX_INPUTS 32
 #define MAX_GIN 32
@@ -893,7 +894,11 @@ static int opts_from_json(AVDictionary **out, const cJSON *obj, const char *what
     if (!cJSON_IsObject(obj)) return 0;
     cJSON_ArrayForEach(kv, obj) {
         if (cJSON_IsString(kv)) {
-            int rc = av_dict_set(out, kv->string, kv->valuestring, 0);
+            // An option that makes a component iterate over candidate paths is
+            // bounded here, before libav ever sees it (spec 0044 D3).
+            int rc = spec_option_in_bounds("process", kv->string, kv->valuestring);
+            if (rc < 0) return rc;
+            rc = av_dict_set(out, kv->string, kv->valuestring, 0);
             if (rc < 0) return rc;
             continue;
         }

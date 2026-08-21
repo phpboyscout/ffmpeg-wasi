@@ -37,6 +37,7 @@
 #include "frames.h"
 #include "meta.h"
 #include "nativeio.h"
+#include "specopts.h"
 
 // AFMPEG_VOCAB_VERSION is the highest job-spec vocabulary version this engine
 // understands (spec 0007 §4 contract; afmpeg roadmap Phase 1 version-gating).
@@ -288,7 +289,17 @@ static int probe_input(cJSON *out_inputs, const cJSON *in) {
     const cJSON *od = cJSON_GetObjectItemCaseSensitive(in, "options"), *kv = NULL;
     if (cJSON_IsObject(od)) {
         cJSON_ArrayForEach(kv, od) {
-            if (cJSON_IsString(kv)) av_dict_set(&opts, kv->string, kv->valuestring, 0);
+            if (!cJSON_IsString(kv)) continue;
+            // probe opens the input too, so it inherits the same ceiling. #49 was
+            // raised because probe was more forgiving than process about the same
+            // spec; a bound only one of them enforces is that defect again
+            // (spec 0044 D3).
+            if (spec_option_in_bounds("probe", kv->string, kv->valuestring) < 0) {
+                av_dict_free(&opts);
+                cJSON_Delete(ji);
+                return 2;
+            }
+            av_dict_set(&opts, kv->string, kv->valuestring, 0);
         }
     }
 
