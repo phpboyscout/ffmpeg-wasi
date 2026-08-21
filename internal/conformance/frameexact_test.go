@@ -94,12 +94,38 @@ func countFrames(t *testing.T, ws *engine.Workspace, a engine.Artifact, in, filt
 	return len(got)
 }
 
-// TestEveryFrameSurvivesAPassthrough is the regression test for #12.
+// TestEveryFrameSurvivesAPassthrough asserts a passthrough graph emits as many
+// frames as it was given. IT DOES NOT GUARD #12, and the story of why is worth
+// more than the test.
 //
-// A passthrough graph must emit exactly as many frames as it was given. The
-// engine currently drops the last one when the output is MP4 — mkv and an image
-// sequence keep all of them — so this is written against the container that
-// exhibits it rather than the one that does not.
+// #12 was reported as "every process job drops the last video frame". It does
+// not. Measured on this fixture, released engine against fixed, and against the
+// ffmpeg CLI:
+//
+//	released   nb_read_frames=25   duration=1.000000
+//	fixed      nb_read_frames=25   duration=1.000000
+//	CLI        nb_read_frames=25   duration=1.000000
+//
+// No difference at all — so this test passes against the engine it was written
+// to catch, and always did.
+//
+// The real defect is a final MP4 sample with duration ZERO: every frame is
+// present, and the CONTAINER understates its own length by one frame's worth.
+// The downstream session that first reported it derived "107 frames" by dividing
+// a duration by the frame interval and reported the quotient as a count; when
+// they later counted properly with -count_frames, both engines gave 108. Their
+// independent confirmation of the fix is a DURATION: 3.566667 before, 3.600000
+// after, an exact match to the CLI.
+//
+// So the defect is invisible to a frame count and visible only in duration —
+// the exact opposite of how it was described, and of what this file was built
+// around. Reproducing it needs a graph whose output length is not a whole number
+// of frame intervals; a uniform sequence at a matching rate cannot show it.
+//
+// The test is kept because "a passthrough emits what it was given" is worth
+// holding. What it must not do is stand in for #12. Anyone reopening that needs
+// a duration assertion against an independent oracle, on an xfade-shaped
+// fixture.
 func TestEveryFrameSurvivesAPassthrough(t *testing.T) {
 	for _, a := range artifacts(t) {
 		t.Run(a.String(), func(t *testing.T) {
