@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"fmt"
+	"math"
 	"testing"
 
 	"gitlab.com/phpboyscout/ffmpeg-wasi/internal/engine"
@@ -10,16 +11,23 @@ import (
 
 // Frame-exact assertions — ffmpeg-wasi#11 and #12.
 //
-// # Why these do not assert durations
+// # Counts and durations measure different failures
 //
-// The behavioural suite asserts duration against fixture arithmetic within a
-// tolerance, and #12 hid under it for the entire life of the project: one frame
-// at 25fps is 0.04s, comfortably inside the window at every fixture length. The
-// check ran, passed, and could not have failed.
+// The behavioural suite asserts duration against fixture arithmetic within
+// durationTolerance, and #12 hid under it for the entire life of the project:
+// one frame at 25fps is 0.04s against a 0.2s window. The check ran, passed, and
+// could not have failed.
 //
-// So these count frames. A count is the quantity the engine is actually wrong
-// about; a duration is a derived number with muxer rounding in it, which is what
-// made it a poor instrument.
+// The first response was to count frames instead, on the reasoning that a count
+// has no muxer rounding in it. That was half right. A count is the better
+// instrument for #11 — a graph that ends early emits fewer frames — but #12 is
+// not a missing frame at all: every frame is present and the CONTAINER
+// understates its length. No frame count can see it.
+//
+// So this file holds both. The counts guard #11 and the passthrough path; the
+// duration assertion at the bottom guards #12, on a fixture whose length is not
+// a whole number of frames and with a tolerance of half a frame rather than
+// five. Neither could have caught the other's defect.
 //
 // # Why the fixture is a PNG sequence
 //
@@ -123,9 +131,8 @@ func countFrames(t *testing.T, ws *engine.Workspace, a engine.Artifact, in, filt
 // of frame intervals; a uniform sequence at a matching rate cannot show it.
 //
 // The test is kept because "a passthrough emits what it was given" is worth
-// holding. What it must not do is stand in for #12. Anyone reopening that needs
-// a duration assertion against an independent oracle, on an xfade-shaped
-// fixture.
+// holding. What it must not do is stand in for #12, which is guarded instead by
+// TestAContainerReportsItsFullDurationAcrossATransition below.
 func TestEveryFrameSurvivesAPassthrough(t *testing.T) {
 	for _, a := range artifacts(t) {
 		t.Run(a.String(), func(t *testing.T) {
@@ -251,6 +258,129 @@ func TestAGraphMayFinishBeforeItsInput(t *testing.T) {
 			if len(got) != keep {
 				t.Errorf("%s: a graph that finishes before its input emitted %d frames, want %d "+
 					"(ffmpeg-wasi#11)", a, len(got), keep)
+			}
+		})
+	}
+}
+
+// The #12 guard proper — a transition whose output length is not a whole number
+// of frame intervals.
+//
+// # Why this fixture and not the one above
+//
+// TestEveryFrameSurvivesAPassthrough cannot fail for #12 and never could: a
+// uniform sequence at a matching rate produces an output whose length is already
+// a whole number of frames, so the missing final sample duration lands exactly on
+// a boundary and nothing is short. An xfade is the smallest graph that breaks
+// that alignment — the output is two clips overlapped, so its end does not
+// coincide with either input's.
+//
+// # Why the expected duration is arithmetic and not an oracle
+//
+// xfadeFrames frames at xfadeRate is one second per input by construction. An
+// xfade starting at xfadeOffset and lasting xfadeTransition emits
+// offset + transition + (clip - transition) seconds — the head of A, the overlap,
+// then the tail of B. That is a number this test derives from its own fixture, so
+// no external ffmpeg and no engine reply establishes it. Confirmed against the
+// n9.0.1 CLI running the identical graph, which agrees to six decimal places.
+//
+// # Why the tolerance is half a frame
+//
+// The behavioural suite's durationTolerance is 0.2s. The defect is one frame —
+// 0.033s at this rate — so it fits inside that window six times over, which is
+// precisely how it survived every release. Half a frame is the widest tolerance
+// that can still separate "correct" from "one frame short", and the failure it
+// catches is exactly one frame, not a rounding wobble near the limit.
+//
+// Measured against the released engine (n9.0.1-1) and the fixed build, both
+// encoders, native intermediate/gpl:
+//
+//	released   1.566667s   one frame short   FAIL
+//	fixed      1.600000s   exact             PASS
+const (
+	xfadeRate       = 30  // frames per second for both clips
+	xfadeFrames     = 30  // frames per clip — one second each
+	xfadeTransition = 0.4 // seconds of overlap
+	xfadeOffset     = 0.6 // seconds into the output where the overlap begins
+)
+
+// xfadeWantSec is the output length the fixture arithmetic demands.
+const xfadeWantSec = xfadeOffset + xfadeTransition +
+	(float64(xfadeFrames)/float64(xfadeRate) - xfadeTransition)
+
+// halfFrameSec is half a frame interval at xfadeRate.
+const halfFrameSec = 0.5 / float64(xfadeRate)
+
+// writeClip puts n distinct PNGs into ws under the given prefix and returns the
+// pattern a job spec should name them by. The seed offset keeps the two clips
+// visually different, so the transition has something to transition between.
+func writeClip(t *testing.T, ws *engine.Workspace, prefix string, n, seedBase int) string {
+	t.Helper()
+
+	for i := range n {
+		png, err := fixture.PNG(64, 48, seedBase+i)
+		if err != nil {
+			t.Fatalf("building %s PNG %d: %v", prefix, i, err)
+		}
+		if _, err := ws.Write(fmt.Sprintf("%s_%02d.png", prefix, i), png); err != nil {
+			t.Fatalf("writing %s PNG %d: %v", prefix, i, err)
+		}
+	}
+
+	return ws.Path(prefix + "_%02d.png")
+}
+
+func TestAContainerReportsItsFullDurationAcrossATransition(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			ws := workspaceFor(t, a)
+			clipA := writeClip(t, ws, "xa", xfadeFrames, 0)
+			clipB := writeClip(t, ws, "xb", xfadeFrames, 100)
+
+			in := func(pattern string) map[string]any {
+				return map[string]any{
+					"path": pattern, "format": "image2",
+					"options": map[string]any{"framerate": fmt.Sprint(xfadeRate)},
+				}
+			}
+			graph := fmt.Sprintf(
+				"[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];"+
+					"[a][b]xfade=transition=fade:duration=%g:offset=%g[v]",
+				xfadeTransition, xfadeOffset)
+
+			runJob(t, ws, a, map[string]any{
+				"op":     "process",
+				"inputs": []any{in(clipA), in(clipB)},
+				"outputs": []any{map[string]any{
+					"path": ws.Path("xfade.mp4"), "map": []any{"[v]"},
+					"video_codec": "libopenh264",
+				}},
+				"filter": graph,
+			})
+
+			// Control: the frames are all there. Without this, a failure below could
+			// be the graph emitting too little rather than the container understating
+			// what it holds — and those want different fixes.
+			got := countFrames(t, ws, a, clipA, "[0:v]null[v]")
+			if got != xfadeFrames {
+				t.Fatalf("%s: the source clip yields %d frames, not %d — the fixture is "+
+					"wrong before the transition is reached", a, got, xfadeFrames)
+			}
+
+			d := probe(t, ws, a, ws.Path("xfade.mp4")).Inputs[0].DurationSec
+			if math.Abs(d-xfadeWantSec) > halfFrameSec {
+				t.Errorf("%s: the transition output reports %.6fs, want %.6fs ±%.6f "+
+					"(ffmpeg-wasi#12).\n"+
+					"That is %.2f frames at %dfps. Two %d-frame clips at %dfps overlapped by "+
+					"%gs starting at %gs is %.6fs by construction, and the n9.0.1 CLI running "+
+					"this graph agrees. A short final sample duration makes the container "+
+					"understate its own length by one frame; every frame is still present, "+
+					"which is why a frame count cannot see this.",
+					a, d, xfadeWantSec, halfFrameSec,
+					math.Abs(d-xfadeWantSec)*xfadeRate, xfadeRate,
+					xfadeFrames, xfadeRate, xfadeTransition, xfadeOffset, xfadeWantSec)
 			}
 		})
 	}
