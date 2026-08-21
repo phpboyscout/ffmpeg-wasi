@@ -66,14 +66,21 @@ static int concat_name_is_safe(const char *name) {
 //
 // The default is generous: this bounds a single read() or write() syscall, not a
 // whole job, and a host serving a large seek may legitimately take a while.
-// AFMPEG_NATIVE_TIMEOUT overrides it in seconds; 0 restores the old
-// block-forever behaviour for a host that wants it.
+// AFMPEG_NATIVE_TIMEOUT overrides it in seconds.
+//
+// It cannot be switched off. `0` used to mean block forever, for a host that
+// wanted it; no such host ever turned up, and under afmpeg spec 0043 the engine
+// runs behind a Landlock floor whose denials a component can sit on -- so
+// block-forever became a documented way to turn a sandbox denial into an
+// indefinite hang. It was the only setting that removed the sole bound on a
+// blocked bridge (afmpeg spec 0044 D5, ffmpeg-wasi#60).
 #define AFIO_TIMEOUT_SECS 120
 
 // afio_set_timeouts applies the send/receive deadline to a connected socket.
+// Returns 0, or a negative AVERROR when the caller asked for no deadline at all.
 // Best-effort: a kernel that refuses the option leaves the socket blocking, which
 // is what it did before, so this never fails an otherwise-working job.
-static void afio_set_timeouts(int fd) {
+static int afio_set_timeouts(int fd) {
     long secs = AFIO_TIMEOUT_SECS;
     const char *env = getenv("AFMPEG_NATIVE_TIMEOUT");
     if (env && *env) {
@@ -81,13 +88,26 @@ static void afio_set_timeouts(int fd) {
         long v = strtol(env, &end, 10);
         if (end != env && *end == 0 && v >= 0) secs = v;
     }
-    if (secs <= 0) return; // explicitly disabled
+    if (secs <= 0) {
+        // Refused, not quietly replaced with the default. A caller who wrote 0
+        // believes there is no deadline; leaving them believing something untrue
+        // about their own job is the shape of half the defects this engine has
+        // had (afmpeg spec 0044 D5).
+        fprintf(stderr,
+                "ffmpeg-wasi: AFMPEG_NATIVE_TIMEOUT=%s disables the bridge deadline "
+                "entirely, and that is no longer supported: a host that stops "
+                "answering would hang the job with no upper bound. Set a positive "
+                "number of seconds instead.\n",
+                env);
+        return AVERROR(EINVAL);
+    }
 
     struct timeval tv;
     tv.tv_sec = secs;
     tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    return 0;
 }
 
 // afio_fail marks a session unusable and returns the error.
@@ -154,7 +174,7 @@ static int afio_dial(const char *name, char mode) {
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
-    afio_set_timeouts(fd);
+    if (afio_set_timeouts(fd) < 0) { close(fd); return -1; }
 
     struct sockaddr_un a;
     memset(&a, 0, sizeof a);
