@@ -101,6 +101,11 @@ func canonical(b []byte) (string, bool) {
 var excluded = map[string]string{
 	"path": "echoes the request; the workspace addresses files differently per target " +
 		"(\"/in.wav\" vs \"in.wav\"), so it differs by construction",
+	"sandbox": "reports how the driver was INVOKED, not what it did with the media " +
+		"(afmpeg spec 0043 D3). The Landlock floor is installed only when the bridge is " +
+		"serving I/O, so the same job answers \"landlock\" over IPC and \"disabled\" on " +
+		"plain paths — a difference in the harness, not in the engine. Observed the moment " +
+		"the field was added, as a divergence on every bridged job.",
 }
 
 // scrub removes the excluded fields anywhere they appear, and strips the leading

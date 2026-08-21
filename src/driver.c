@@ -38,6 +38,7 @@
 #include "meta.h"
 #include "nativeio.h"
 #include "specopts.h"
+#include "sandbox.h"
 
 // AFMPEG_VOCAB_VERSION is the highest job-spec vocabulary version this engine
 // understands (spec 0007 §4 contract; afmpeg roadmap Phase 1 version-gating).
@@ -151,6 +152,10 @@ static int capabilities(void) {
 
     cJSON_AddNumberToObject(out, "vocab_version", AFMPEG_VOCAB_VERSION);
     cJSON_AddStringToObject(out, "ffmpeg_version", av_version_info());
+    // A host that requires confinement asserts this rather than assuming it, and
+    // CI asserts it on the native runner — so a build that silently lost its
+    // sandbox is a red gate rather than a discovery (spec 0043 D3).
+    cJSON_AddStringToObject(out, "sandbox", sandbox_state());
 
     cJSON *encoders  = cJSON_AddArrayToObject(out, "encoders");
     cJSON *decoders  = cJSON_AddArrayToObject(out, "decoders");
@@ -400,6 +405,11 @@ static int op_version(void) {
 }
 
 int main(int argc, char **argv) {
+    // After argv parsing, before any job: the dynamic loader has finished, so the
+    // floor costs nothing that is still needed, and nothing a job spec can name
+    // has been opened yet (afmpeg spec 0043 D2).
+    sandbox_install();
+
     if (argc < 2 || strcmp(argv[1], "--report") == 0) {
         return report();
     }

@@ -35,6 +35,7 @@
 #include "nativeio.h"
 #include "progress.h"
 #include "specopts.h"
+#include "sandbox.h"
 
 #define MAX_INPUTS 32
 #define MAX_GIN 32
@@ -2137,6 +2138,10 @@ int op_process(const cJSON *spec) {
 
     if (rc >= 0) {
         cJSON *res = cJSON_CreateObject();
+        // Every job result carries the confinement state, not just --capabilities:
+        // a host checking once at startup learns nothing about the job it just ran
+        // (spec 0043 D3).
+        cJSON_AddStringToObject(res, "sandbox", sandbox_state());
         cJSON *outs = cJSON_AddArrayToObject(res, "outputs");
         for (int i = 0; i < c.n_out; i++) {
             cJSON *od = cJSON_CreateObject();
