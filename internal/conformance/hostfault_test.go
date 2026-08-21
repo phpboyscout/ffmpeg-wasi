@@ -404,3 +404,86 @@ func TestAFailedImageWriteIsReported(t *testing.T) {
 		})
 	}
 }
+
+// TestAReportedReadFailureIsNotAnEndOfStream is the regression test
+// ffmpeg-wasi#20 could never have, and afmpeg spec 0041 D2 is what made it
+// possible.
+//
+// Under protocol v1 a Read reply was a count where zero meant end of file, with
+// no third answer. A host that could not serve a read could only lie — answer
+// zero, which the engine turns into AVERROR_EOF — or hang. So the fault could
+// not be delivered, and #20's fix shipped with a note saying exactly that.
+//
+// v2 makes the count signed. This test injects a host that stays connected and
+// reports the failure, which is the case that could not previously exist.
+//
+// # Why this is not a duplicate of the #15 test above
+//
+// #15 is the transport DYING mid-file: the connection vanishes and the engine
+// has to tell that apart from an end of stream. This is the transport STAYING UP
+// and the host saying it cannot serve the read. They are different failures with
+// different fixes, and v1 collapsed both into "the count was zero".
+//
+// # Why this asserts the DIAGNOSIS and not the exit code
+//
+// Because the exit code cannot discriminate, and assuming it could would have
+// shipped a test that passes either way. Built against an engine that ignores the
+// signed count entirely, this job still exits 1 — the negative count reads back
+// as 0xFFFFFFFF, which #24's over-long-count guard refuses, so the job fails for
+// a reason that has nothing to do with what the host said.
+//
+// Measured, same fixture, same injected fault:
+//
+//	engine handling the failure form   exit 1, "the host could not serve a read"
+//	engine ignoring it                 exit 1, "Input/output error" only
+//
+// So the value D2 adds here is not that the job fails — it already did — but that
+// the failure is ATTRIBUTABLE. A host fault and a malformed host are different
+// problems for whoever has to fix one, and reporting them identically is how the
+// wrong one gets investigated.
+func TestAReportedReadFailureIsNotAnEndOfStream(t *testing.T) {
+	t.Parallel()
+
+	for _, a := range nativeArtifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			// Control: the same job over an honest host must succeed, or the failure
+			// below could be the fixture rather than the injected fault.
+			good, sock, name := hostFaultSetup(t, a)
+			if code, stderr, _ := runOverIPC(t, a, good, sock, name); code != 0 {
+				t.Fatalf("%s: the control job failed over an honest host (exit %d) — "+
+					"the fixture or the bridge is wrong before any fault is injected.\n%s",
+					a, code, strings.TrimSpace(stderr))
+			}
+
+			bad, sock2, name2 := hostFaultSetup(t, a)
+			bad.FailReadsAfter = 2
+
+			code, stderr, signal := runOverIPC(t, a, bad, sock2, name2)
+
+			// The signal check is first for the same reason as #15's: a signalled
+			// process reports exit -1, which satisfies any "not zero" check.
+			if signal != "" {
+				t.Errorf("%s: the host reported a read failure and the engine was KILLED BY %s "+
+					"rather than reporting it (ffmpeg-wasi#20).", a, signal)
+			}
+			if code == 0 {
+				t.Errorf("%s: the host reported a read failure and the engine exited 0 "+
+					"(ffmpeg-wasi#20).\nThe caller gets a truncated file and is told it "+
+					"succeeded — which is the whole defect, and until protocol v2 there was "+
+					"no way to provoke it.\nstderr: %s", a, strings.TrimSpace(stderr))
+			}
+
+			// The discriminating half. Without it this test passes against an engine
+			// that never looks at the sign, because #24's bounds check refuses the
+			// count for an unrelated reason and the job fails anyway.
+			if !strings.Contains(stderr, "could not serve a read") {
+				t.Errorf("%s: the job failed, but not for the reason the host gave "+
+					"(ffmpeg-wasi#20).\nA reported read failure and a malformed count are "+
+					"different problems, and an engine that ignores the signed count reports "+
+					"them identically.\nstderr: %s", a, strings.TrimSpace(stderr))
+			}
+		})
+	}
+}

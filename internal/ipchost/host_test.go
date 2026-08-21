@@ -27,7 +27,16 @@ type client struct {
 	conn net.Conn
 }
 
-func dial(t *testing.T, sock string) *client {
+func dial(t *testing.T, sock string) *client { return dialAs(t, sock, protocolVersion) }
+
+// dialAs opens a session announcing a specific protocol version, and consumes
+// the host's answer when there is one.
+//
+// From v2 the host replies with the version it will speak. A client that did not
+// read it would take that byte as the reply to its Open — which is exactly what
+// happened when this constant was bumped, and the test that caught it reported
+// "Open replied status 2".
+func dialAs(t *testing.T, sock string, version byte) *client {
 	t.Helper()
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
@@ -35,9 +44,20 @@ func dial(t *testing.T, sock string) *client {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	if _, err := conn.Write([]byte{protocolVersion}); err != nil {
+	if _, err := conn.Write([]byte{version}); err != nil {
 		t.Fatalf("sending the version byte: %v", err)
 	}
+
+	if version >= protocolVersionNegotiated {
+		var agreed [1]byte
+		if _, err := io.ReadFull(conn, agreed[:]); err != nil {
+			t.Fatalf("reading the negotiated version: %v", err)
+		}
+		if agreed[0] != version {
+			t.Fatalf("host agreed version %d, want %d", agreed[0], version)
+		}
+	}
+
 	return &client{t: t, conn: conn}
 }
 
@@ -488,4 +508,189 @@ func TestTheSessionSequenceIsEnforced(t *testing.T) {
 				"session (ffmpeg-wasi#52).\nA driver that never opened anything would pass.")
 		}
 	})
+}
+
+// --- protocol v2 (afmpeg spec 0041) ---------------------------------------
+
+// move sends a session-level Move and returns the status byte.
+func (c *client) move(from, to string) byte {
+	c.t.Helper()
+	buf := binary.LittleEndian.AppendUint32([]byte{'M'}, uint32(len(from)))
+	buf = append(buf, from...)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(to)))
+	buf = append(buf, to...)
+	if _, err := c.conn.Write(buf); err != nil {
+		c.t.Fatalf("sending Move: %v", err)
+	}
+	var st [1]byte
+	if _, err := io.ReadFull(c.conn, st[:]); err != nil {
+		c.t.Fatalf("reading the Move status: %v", err)
+	}
+	return st[0]
+}
+
+// exists sends a session-level Exists and returns the status and size.
+func (c *client) exists(name string) (byte, uint64) {
+	c.t.Helper()
+	buf := binary.LittleEndian.AppendUint32([]byte{'E'}, uint32(len(name)))
+	buf = append(buf, name...)
+	if _, err := c.conn.Write(buf); err != nil {
+		c.t.Fatalf("sending Exists: %v", err)
+	}
+	var reply [9]byte
+	if _, err := io.ReadFull(c.conn, reply[:]); err != nil {
+		c.t.Fatalf("reading the Exists reply: %v", err)
+	}
+	return reply[0], binary.LittleEndian.Uint64(reply[1:])
+}
+
+// readRaw sends a Read and returns the signed count without consuming a payload,
+// so a test can see the failure form rather than only its consequences.
+func (c *client) readRaw(count uint32) int32 {
+	c.t.Helper()
+	buf := binary.LittleEndian.AppendUint32([]byte{'R'}, count)
+	if _, err := c.conn.Write(buf); err != nil {
+		c.t.Fatalf("sending Read: %v", err)
+	}
+	var n int32
+	if err := binary.Read(c.conn, binary.LittleEndian, &n); err != nil {
+		c.t.Fatalf("reading the Read count: %v", err)
+	}
+	return n
+}
+
+// A version 1 driver predates the negotiation, expects no answer, and must still
+// be served in full. The host ships before the engine that uses the new frames,
+// so this is the direction compatibility has to hold (afmpeg spec 0041 D5).
+func TestAVersionOneDriverIsStillServed(t *testing.T) {
+	t.Parallel()
+	_, sock, root := serve(t)
+	if err := os.WriteFile(filepath.Join(root, "in.bin"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := dialAs(t, sock, 1)
+	if st := c.open('r', "in.bin"); st != 0 {
+		t.Fatalf("Open status %d, want 0", st)
+	}
+	if got := string(c.read(64)); got != "hello" {
+		t.Fatalf("read %q, want %q", got, "hello")
+	}
+	c.close()
+}
+
+// The new frames are refused on a v1 session rather than served, because a v1
+// driver cannot have sent them and anything that does is not speaking the
+// contract it announced.
+func TestTheNewFramesAreRefusedOnAVersionOneSession(t *testing.T) {
+	t.Parallel()
+	h, sock, root := serve(t)
+	if err := os.WriteFile(filepath.Join(root, "a.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := dialAs(t, sock, 1)
+	buf := binary.LittleEndian.AppendUint32([]byte{'E'}, uint32(len("a.bin")))
+	buf = append(buf, "a.bin"...)
+	if _, err := c.conn.Write(buf); err != nil {
+		t.Fatalf("sending Exists: %v", err)
+	}
+	waitForError(t, h, "needs protocol v2")
+}
+
+// D3 — Move is a rename, and the test would fail against a copy.
+func TestMoveReplacesRatherThanCopies(t *testing.T) {
+	t.Parallel()
+	_, sock, root := serve(t)
+	if err := os.WriteFile(filepath.Join(root, "p.m3u8"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "p.m3u8.tmp"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if st := dial(t, sock).move("p.m3u8.tmp", "p.m3u8"); st != 0 {
+		t.Fatalf("Move status %d, want 0", st)
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "p.m3u8"))
+	if err != nil || string(got) != "new" {
+		t.Fatalf("after Move the playlist is %q (err %v), want %q", got, err, "new")
+	}
+	if _, err := os.Stat(filepath.Join(root, "p.m3u8.tmp")); err == nil {
+		t.Error("the source survives — that is a copy, and it loses the atomicity the muxer wanted")
+	}
+}
+
+// A move the host cannot do is reported, so the job fails by name rather than
+// silently taking the weaker guarantee (ffmpeg-wasi#35).
+func TestMoveReportsAFailureRatherThanPretending(t *testing.T) {
+	t.Parallel()
+	_, sock, _ := serve(t)
+	if st := dial(t, sock).move("absent.tmp", "wherever"); st == 0 {
+		t.Error("moving a file that is not there reported success")
+	}
+}
+
+// A path outside the root must not be renamed into or out of. Move is a write,
+// so it is the same containment question as Open and gets the same answer.
+func TestMoveCannotEscapeTheRoot(t *testing.T) {
+	t.Parallel()
+	h, sock, root := serve(t)
+	if err := os.WriteFile(filepath.Join(root, "in.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if st := dial(t, sock).move("in.bin", "../escaped.bin"); st == 0 {
+		t.Error("a move to a path outside the root reported success")
+	}
+	waitForError(t, h, "outside")
+}
+
+// D4 — Exists answers for one exact name, and absent is an ordinary answer.
+func TestExistsAnswersForOneName(t *testing.T) {
+	t.Parallel()
+	_, sock, root := serve(t)
+	if err := os.WriteFile(filepath.Join(root, "f_000.png"), []byte("0123456789"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st, size := dial(t, sock).exists("f_000.png")
+	if st != 0 || size != 10 {
+		t.Fatalf("Exists(present) = status %d size %d, want 0 and 10", st, size)
+	}
+
+	// The engine probes for files that may not exist — that is how image2 finds
+	// where a sequence ends — so a miss is an answer, not a fault.
+	if st, _ := dial(t, sock).exists("f_999.png"); st == 0 {
+		t.Error("Exists reported a file that is not there")
+	}
+}
+
+// D2 — a Read reply can say the read FAILED, which v1 could not express at all.
+//
+// This is the frame that makes ffmpeg-wasi#20 testable: its fix shipped with no
+// regression test and a note explaining that the fault could not be delivered.
+func TestAReadFailureIsDistinguishableFromEndOfFile(t *testing.T) {
+	t.Parallel()
+	h, sock, root := serve(t)
+	h.FailReadsAfter = 1
+	if err := os.WriteFile(filepath.Join(root, "in.bin"), []byte("abcdefghij"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := dial(t, sock)
+	if st := c.open('r', "in.bin"); st != 0 {
+		t.Fatalf("Open status %d, want 0", st)
+	}
+	if got := string(c.read(4)); got != "abcd" {
+		t.Fatalf("first read %q, want %q", got, "abcd")
+	}
+
+	// Zero would be indistinguishable from a clean end of file, which is the exact
+	// ambiguity that made the defect untestable.
+	if n := c.readRaw(4); n >= 0 {
+		t.Fatalf("Read count %d, want a negative failure form; 0 reads as EOF and "+
+			"anything positive as data", n)
+	}
 }

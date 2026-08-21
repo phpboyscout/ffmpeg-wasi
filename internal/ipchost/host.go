@@ -22,21 +22,34 @@
 //
 // The driver speaks IPC only when AFMPEG_NATIVE_SOCKET names a Unix socket. It
 // dials once per opened file, and each connection is one file session. The
-// connection opens with a single version byte (1), which the host validates.
+// connection opens with a single version byte, which the host validates; from
+// version 2 the host answers with the version it will speak, so a driver built
+// against a newer contract can degrade rather than guess (afmpeg spec 0041 D1).
+// A version 1 driver expects no answer and gets none, which is what makes the
+// negotiation additive rather than a break.
+//
 // Then frames, all integers little-endian:
 //
 //	Open   'O', mode ('r'|'w'), nameLen u32, name   -> status u8 (0 ok)
-//	Read   'R', count u32                           -> n u32, then n bytes
+//	Read   'R', count u32                           -> n i32, then n bytes
 //	Write  'W', len u32, bytes                      -> count written u32
 //	Seek   'S', offset i64, whence u8               -> new position i64
 //	Size   'Z'                                      -> size i64
 //	Close  'C'                                      -> nothing; ends the session
+//	Move   'M', fromLen u32, from, toLen u32, to    -> status u8 (0 ok)   [v2]
+//	Exists 'E', nameLen u32, name                   -> status u8, size u64 [v2]
+//
+// Move and Exists are session-level like Open: a connection carries one of the
+// three, and Move and Exists end the session with their reply.
 //
 // Two details the document calls out because they are easy to get wrong, and
 // which are the acceptance test for this package:
 //
 //   - A Read reply of 0 means END OF FILE, not a short read. The driver turns it
 //     into AVERROR_EOF. Return the bytes you have, or 0 when there are none left.
+//     From version 2 the count is SIGNED and a negative value means the read
+//     FAILED — which v1 could not say at all, so a host that could not serve a
+//     read could only lie or hang (afmpeg spec 0041 D2).
 //   - Write replies with a COUNT, not a status byte. The driver passes it
 //     straight to libav as the number of bytes written.
 //
@@ -62,8 +75,19 @@ import (
 // from the host genuinely going wrong.
 var errInjected = errors.New("ipchost: injected fault")
 
-// protocolVersion is the single byte a connection opens with.
-const protocolVersion = 1
+// protocolVersion is the highest version this host speaks; protocolVersionMin is
+// the oldest it still serves. A released v1 driver has to keep working against a
+// newer host, because the host ships first (afmpeg spec 0041 D5).
+const (
+	protocolVersion           = 2
+	protocolVersionMin        = 1
+	protocolVersionNegotiated = 2
+)
+
+// readFailed is the Read reply that says the host could not serve the read. Only
+// sent once version 2 is agreed; a v1 driver would read it as 0xFFFFFFFF and
+// refuse it against its own frame cap, so it fails safe either way.
+const readFailed int32 = -1
 
 // Host serves files under one root directory. Zero value is not usable; call
 // Listen.
@@ -84,9 +108,15 @@ type Host struct {
 	// handed over — what an honest host does when it runs out of room, and what a
 	// buggy one does by accident. libavformat never resends the remainder, so the
 	// engine must treat it as a failure (ffmpeg-wasi#45).
+	// FailReadsAfter reports a read FAILURE after N Read frames, using the v2
+	// signed reply rather than vanishing. CloseAfterReads is the transport dying;
+	// this is the host still there and saying it cannot serve the read, which v1
+	// had no way to express — and which is why the fix for ffmpeg-wasi#20 shipped
+	// with no regression test (afmpeg spec 0041 D2).
 	OverstateReadBy   uint32
 	CloseAfterReads   int
 	UnderstateWriteBy uint32
+	FailReadsAfter    int
 
 	reads atomic.Int64
 
@@ -172,8 +202,19 @@ func (h *Host) session(conn net.Conn) error {
 	if _, err := io.ReadFull(conn, version[:]); err != nil {
 		return fmt.Errorf("reading the version byte: %w", err)
 	}
-	if version[0] != protocolVersion {
-		return fmt.Errorf("the driver announced protocol version %d, want %d", version[0], protocolVersion)
+	if version[0] < protocolVersionMin || version[0] > protocolVersion {
+		return fmt.Errorf("the driver announced protocol version %d, want %d..%d",
+			version[0], protocolVersionMin, protocolVersion)
+	}
+
+	// From v2 the host says which version it will speak. A v1 driver expects no
+	// answer and would take this byte as the reply to its Open, so it is sent only
+	// from v2 up (afmpeg spec 0041 D1).
+	agreed := version[0]
+	if agreed >= protocolVersionNegotiated {
+		if _, err := conn.Write([]byte{agreed}); err != nil {
+			return fmt.Errorf("answering the version preamble: %w", err)
+		}
 	}
 
 	var f *os.File
@@ -211,6 +252,23 @@ func (h *Host) session(conn net.Conn) error {
 				return err
 			}
 
+		case 'M', 'E':
+			// Session-level like Open: the connection carries one of the three, and
+			// these two end it with their reply rather than opening a file.
+			if agreed < protocolVersionNegotiated {
+				return fmt.Errorf("frame %q needs protocol v%d, this session agreed v%d",
+					frame[0], protocolVersionNegotiated, agreed)
+			}
+			if attempted {
+				return fmt.Errorf("a %q frame arrived after an Open on the same "+
+					"connection; the contract is one operation per connection", frame[0])
+			}
+			attempted = true
+			if frame[0] == 'M' {
+				return h.doMove(conn)
+			}
+			return h.doExists(conn)
+
 		case 'C':
 			// Close is the end of a session, so there has to have been one. A
 			// connection that opens nothing and closes is a driver bug, and a host
@@ -225,11 +283,114 @@ func (h *Host) session(conn net.Conn) error {
 			if f == nil {
 				return fmt.Errorf("frame %q arrived before Open", frame[0])
 			}
-			if err := h.doFrame(conn, f, frame[0]); err != nil {
+			if err := h.doFrame(conn, f, frame[0], agreed); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// readName reads a length-prefixed name: nameLen u32, then the bytes.
+func (h *Host) readName(conn net.Conn, what string) (string, error) {
+	var n uint32
+	if err := binary.Read(conn, binary.LittleEndian, &n); err != nil {
+		return "", fmt.Errorf("reading the %s name length: %w", what, err)
+	}
+
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return "", fmt.Errorf("reading the %s name: %w", what, err)
+	}
+
+	return string(buf), nil
+}
+
+// doMove handles 'M': rename from to to, both resolved under the root.
+//
+// A muxer needs atomic replacement, not a copy: HLS writes its playlist to a
+// .tmp and renames so a concurrent reader sees a whole file or the previous one.
+// Copy-then-delete satisfies the layout and loses the property (afmpeg spec 0041
+// D3), so this host does the rename or says it could not.
+func (h *Host) doMove(conn net.Conn) error {
+	from, err := h.readName(conn, "move source")
+	if err != nil {
+		return err
+	}
+	to, err := h.readName(conn, "move target")
+	if err != nil {
+		return err
+	}
+	h.noteOpen(from)
+	h.noteOpen(to)
+
+	src, serr := h.resolve(from)
+	dst, derr := h.resolve(to)
+	if serr != nil || derr != nil {
+		// A path outside the root is a containment failure, not an ordinary miss,
+		// so it is recorded rather than answered as a plain error status.
+		if _, werr := conn.Write([]byte{1}); werr != nil {
+			return werr
+		}
+		if serr != nil {
+			return serr
+		}
+		return derr
+	}
+
+	if rerr := os.Rename(src, dst); rerr != nil {
+		// An ordinary outcome, not a host fault: a driver may ask to move something
+		// that is not there. It is told, and the job fails by name rather than
+		// silently taking the weaker guarantee.
+		_, werr := conn.Write([]byte{1})
+		return werr
+	}
+
+	_, err = conn.Write([]byte{0})
+
+	return err
+}
+
+// doExists handles 'E': is this exact name present, and how big is it.
+//
+// Narrow on purpose — not a directory listing. What it buys is that a probe and
+// an open resolve against the SAME filesystem, which is the disagreement
+// ffmpeg-wasi#36 was (afmpeg spec 0041 D4).
+func (h *Host) doExists(conn net.Conn) error {
+	name, err := h.readName(conn, "exists")
+	if err != nil {
+		return err
+	}
+	h.noteOpen(name)
+
+	reply := make([]byte, 9)
+
+	full, rerr := h.resolve(name)
+	if rerr != nil {
+		if _, werr := conn.Write(reply[:1]); werr != nil {
+			return werr
+		}
+		reply[0] = 1
+
+		return rerr
+	}
+
+	switch info, serr := os.Stat(full); {
+	case serr != nil:
+		// Absent is an ordinary answer: the engine probes for files that may not
+		// exist, which is how image2 finds where a sequence ends.
+		reply[0] = 1
+	default:
+		reply[0] = 0
+		size := info.Size()
+		if size < 0 {
+			size = 0
+		}
+		binary.LittleEndian.PutUint64(reply[1:], uint64(size))
+	}
+
+	_, err = conn.Write(reply)
+
+	return err
 }
 
 // doOpen handles 'O': mode, nameLen, name. It always replies with one status
@@ -285,7 +446,7 @@ func (h *Host) doOpen(conn net.Conn) (*os.File, error) {
 	return f, nil
 }
 
-func (h *Host) doFrame(conn net.Conn, f *os.File, tag byte) error {
+func (h *Host) doFrame(conn net.Conn, f *os.File, tag byte, agreed byte) error {
 	switch tag {
 	case 'R':
 		var count uint32
@@ -293,9 +454,27 @@ func (h *Host) doFrame(conn net.Conn, f *os.File, tag byte) error {
 			return fmt.Errorf("reading the Read count: %w", err)
 		}
 
-		if h.CloseAfterReads > 0 && int(h.reads.Add(1)) > h.CloseAfterReads {
+		n64 := h.reads.Add(1)
+
+		if h.CloseAfterReads > 0 && int(n64) > h.CloseAfterReads {
 			// Vanish mid-file. The engine sees a transport failure, not an EOF.
 			return errInjected
+		}
+
+		if h.FailReadsAfter > 0 && int(n64) > h.FailReadsAfter {
+			// Still here, and saying the read failed. This is the case v1 could not
+			// express at all: the reply was a count where zero meant end of file, so
+			// a failure arrived as a clean EOF — a truncated output and exit 0
+			// (ffmpeg-wasi#20, afmpeg spec 0041 D2).
+			if agreed < protocolVersionNegotiated {
+				return fmt.Errorf("FailReadsAfter needs protocol v%d; this session agreed v%d, "+
+					"which has no way to report a read failure", protocolVersionNegotiated, agreed)
+			}
+			if err := binary.Write(conn, binary.LittleEndian, readFailed); err != nil {
+				return fmt.Errorf("writing the Read failure: %w", err)
+			}
+
+			return nil
 		}
 
 		buf := make([]byte, count)

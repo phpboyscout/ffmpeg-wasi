@@ -54,7 +54,22 @@ static int concat_name_is_safe(const char *name) {
 // preamble, then Open('O',mode,u32 nameLen,name)→status(1); Read('R',u32)→u32 n,
 // data; Write('W',u32,data)→u32 n; Seek('S',u64,whence)→u64; Size('Z')→u64;
 // Close('C'). All integers little-endian. One connection per opened file.
-#define AFIO_PROTO_VERSION 1
+// AFIO_PROTO_VERSION is the highest version this engine speaks. From v2 the host
+// answers the preamble with the version it will use, so an engine built against a
+// newer contract learns what it is talking to rather than guessing (afmpeg spec
+// 0041 D1). A host too old to know v2 refuses the connection, which is loud --
+// and is why the host side ships first (0041 D5).
+#define AFIO_PROTO_VERSION 2
+
+// The first version where the host answers the preamble.
+#define AFIO_PROTO_NEGOTIATED 2
+
+// The oldest version this engine will accept a host agreeing to.
+#define AFIO_PROTO_MIN 1
+
+// afio_agreed is the version the host answered with on the last dial. Every
+// session in a job talks to the same host, so one value is enough.
+static uint8_t afio_agreed = AFIO_PROTO_VERSION;
 #define AFIO_BUF (64 * 1024)
 
 // How long one read or write on the IPC socket may block before the engine gives
@@ -192,6 +207,24 @@ static int afio_dial(const char *name, char mode) {
     if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0) { close(fd); return -1; }
 
     uint8_t ver = AFIO_PROTO_VERSION;
+    if (wr_full(fd, &ver, 1) < 0) { close(fd); return -1; }
+
+    // Read the version the host will actually speak before sending anything else.
+    // Getting this wrong is not a subtle bug: the answer would be consumed as the
+    // reply to the next frame, and every later frame reads one byte out of step.
+    uint8_t agreed = ver;
+    if (ver >= AFIO_PROTO_NEGOTIATED) {
+        if (rd_full(fd, &agreed, 1) < 0) { close(fd); return -1; }
+        if (agreed < AFIO_PROTO_MIN || agreed > ver) {
+            fprintf(stderr, "ffmpeg-wasi: the host answered protocol version %u; "
+                            "this engine speaks %u..%u\n",
+                    agreed, AFIO_PROTO_MIN, ver);
+            close(fd);
+            return -1;
+        }
+    }
+    afio_agreed = agreed;
+
     size_t nl = strlen(name);
     uint8_t hdr[6];
     hdr[0] = 'O';
@@ -199,7 +232,7 @@ static int afio_dial(const char *name, char mode) {
     put32(hdr + 2, (uint32_t)nl);
 
     uint8_t st;
-    if (wr_full(fd, &ver, 1) < 0 || wr_full(fd, hdr, sizeof hdr) < 0 ||
+    if (wr_full(fd, hdr, sizeof hdr) < 0 ||
         wr_full(fd, name, nl) < 0 || rd_full(fd, &st, 1) < 0 || st != 0) {
         close(fd);
         return -1;
@@ -217,6 +250,19 @@ static int afio_read(void *opaque, uint8_t *buf, int size) {
 
     uint8_t nb[4];
     if (rd_full(fd, nb, sizeof nb) < 0) return afio_fail(fd);
+
+    // Signed from v2: a negative count is the host saying the read FAILED.
+    //
+    // v1 had no way to say it. The reply was a count where zero meant end of
+    // file, so a failure arrived as a clean EOF and the job produced a truncated
+    // output and exited 0 -- which is what ffmpeg-wasi#20 was, and why its fix
+    // shipped with no regression test (afmpeg spec 0041 D2).
+    int32_t sn = (int32_t)get32(nb);
+    if (afio_agreed >= AFIO_PROTO_NEGOTIATED && sn < 0) {
+        fprintf(stderr, "ffmpeg-wasi: the host could not serve a read; failing the "
+                        "job rather than treating it as an end of stream\n");
+        return afio_fail(fd);
+    }
 
     uint32_t n = get32(nb);
     if (n == 0) return AVERROR_EOF;
