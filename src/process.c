@@ -1222,6 +1222,28 @@ static int write_copy_pkt(Ctx *c, Cpy *cp, AVRational src_tb, AVPacket *pkt) {
         }
     }
 
+    // A packet the demuxer gave no duration for leaves the muxer nothing to write
+    // for that sample, so the container ends one frame early — every packet
+    // present, the length understated (ffmpeg-wasi#59). Matroska keeps this in
+    // DefaultDuration, which the muxer writes when encoding but which does not
+    // survive a copy, so a copied stream loses it where an encoded one does not.
+    //
+    // Only where the demuxer supplied nothing. Variable-frame-rate material
+    // carries real per-packet durations, and replacing those with a uniform one
+    // would corrupt timing that was correct.
+    if (pkt->duration <= 0) {
+        const AVStream *ist = c->in[cp->in_idx]->streams[cp->st_idx];
+        const AVCodecParameters *par = ist->codecpar;
+        if (par->codec_type == AVMEDIA_TYPE_VIDEO &&
+            ist->avg_frame_rate.num > 0 && ist->avg_frame_rate.den > 0) {
+            pkt->duration = av_rescale_q(1, av_inv_q(ist->avg_frame_rate), src_tb);
+        } else if (par->codec_type == AVMEDIA_TYPE_AUDIO &&
+                   par->sample_rate > 0 && par->frame_size > 0) {
+            pkt->duration = av_rescale_q(par->frame_size,
+                                         (AVRational){1, par->sample_rate}, src_tb);
+        }
+    }
+
     av_packet_rescale_ts(pkt, src_tb, ost->time_base);
     pkt->stream_index = ost->index;
     pkt->pos = -1;
