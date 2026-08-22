@@ -108,3 +108,49 @@ func WAV(rate, channels, samples int) ([]byte, error) {
 
 	return b.Bytes(), nil
 }
+
+// PNGPan is frame i of a sequence a video codec can actually predict: a static
+// gradient with a small block that moves one pixel per frame.
+//
+// PNG's own generator is deliberately the opposite — every frame differs
+// wildly, so a dropped or duplicated frame is unmistakable. That makes it the
+// wrong instrument for anything about COMPRESSION: x264 sees a scene change on
+// every frame, emits a keyframe for each, and a test measuring inter-frame
+// coding would measure the fixture rather than the engine.
+//
+// Frames from this one are still distinguishable (the block is somewhere
+// different), so it does not give up the property PNG was written for; it just
+// gives the encoder something to predict.
+func PNGPan(w, h, i int) ([]byte, error) {
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("fixture: PNGPan needs positive dimensions, got %dx%d", w, h)
+	}
+
+	const block = 16
+
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	bx := i % max(w-block, 1)
+	by := h / 2
+
+	for y := range h {
+		for x := range w {
+			c := color.RGBA{
+				R: uint8((x * 2) % 256), //nolint:gosec // a gradient, deliberately wrapping
+				G: uint8((y * 2) % 256), //nolint:gosec // likewise
+				B: 100,
+				A: 255,
+			}
+			if x >= bx && x < bx+block && y >= by-block/2 && y < by+block/2 {
+				c = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+			}
+			img.Set(x, y, c)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("fixture: encoding PNG: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}

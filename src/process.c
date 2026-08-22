@@ -611,6 +611,20 @@ static int64_t out_cutoff_us(const Ctx *c, const Out *out) {
 static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
     Out *out = &c->out[go->out_idx];
     AVFormatContext *ofmt = out->ofmt;
+
+    // The decoder's picture type describes how the INPUT was coded and says
+    // nothing about how the output should be. libx264 treats it as an
+    // instruction: a frame arriving as AV_PICTURE_TYPE_I is forced to an IDR.
+    //
+    // An image sequence decodes as all-I by construction, so every output frame
+    // became a keyframe and the encoder never chose a P or a B -- measured at
+    // 4.8x the size the ffmpeg CLI produces from identical frames. It hid because
+    // a normal video input reproduces its OWN types, so the output always looked
+    // plausible (ffmpeg-wasi#61).
+    //
+    // fftools/ffmpeg_enc.c clears it for the same reason. NULL is the flush.
+    if (frame) frame->pict_type = AV_PICTURE_TYPE_NONE;
+
     int ret = avcodec_send_frame(go->enc, frame);
     if (ret < 0) return ret;
     int64_t cutoff = out_cutoff_us(c, out);
@@ -1203,10 +1217,48 @@ static int write_copy_pkt(Ctx *c, Cpy *cp, AVRational src_tb, AVPacket *pkt) {
     AVStream *ost = cp->ost;
     int64_t *rebase = &c->cpy_rebase_us[cp->in_idx][cp->out_idx];
 
-    int64_t t = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+    // DECODE order, not presentation order.
+    //
+    // With reordered video the two disagree, and cutting on PTS drops packets a
+    // surviving packet still needs: a reference can have a PTS at or after the
+    // cutoff while its DTS precedes a B-frame that depends on it. The reference
+    // goes, the dependent frame is inside the window and stays, the job exits 0,
+    // and the last GOP decodes with `co located POCs unavailable`
+    // (ffmpeg-wasi#55).
+    //
+    // This is what the ffmpeg CLI does. Measured with `-t 1.0 -c copy` on a
+    // reordered fixture: it keeps 27 packets, exactly the count with DTS below
+    // the cutoff, and the highest PTS it keeps is 1.12 -- past the window, on
+    // purpose, because that is what keeps the references intact.
+    //
+    // The engine's own demux-side cutoff already cuts on DTS. Only this lane
+    // disagreed, with itself.
+    // The window is anchored on PRESENTATION and decided on DECODE. Those are two
+    // different questions and the old code answered both with PTS.
+    //
+    // WHERE the window starts is a presentation question: `duration` means what a
+    // caller means by "ten seconds of video", and the first packet's PTS is the
+    // start of what they will see. Anchoring on DTS instead shortens the window by
+    // however far the stream reorders -- measured as two frames lost on a
+    // b-pyramid fixture, because the first DTS is negative.
+    //
+    // WHICH packets are in it is a decode question. A reference can have a PTS at
+    // or after the cutoff while its DTS precedes a B-frame that depends on it;
+    // dropping it on PTS leaves the dependent frame inside the window with its
+    // reference gone, the job exits 0, and the last GOP decodes with
+    // `co located POCs unavailable` (ffmpeg-wasi#55).
+    //
+    // That combination is what the ffmpeg CLI does. Measured against it on the
+    // same fixture at the same cutoff: 29 packets each, and every decoded frame
+    // byte-identical to the uncut source. The engine's own demux-side cutoff
+    // already decided membership on DTS; only this lane disagreed, with itself.
+    int64_t anchor = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+    int64_t t = pkt->dts != AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
     if (t != AV_NOPTS_VALUE) {
         int64_t t_us = av_rescale_q(t, src_tb, AV_TIME_BASE_Q);
-        if (*rebase == AV_NOPTS_VALUE) *rebase = t_us;
+        if (*rebase == AV_NOPTS_VALUE && anchor != AV_NOPTS_VALUE) {
+            *rebase = av_rescale_q(anchor, src_tb, AV_TIME_BASE_Q);
+        }
 
         // The window on the source timeline: duration counts from the pair's
         // start; end is absolute under copy_ts, output-relative otherwise.
