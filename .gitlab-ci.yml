@@ -430,7 +430,7 @@ sign:
     AWS_ROLE_ARN_2: arn:aws:iam::060730976733:role/ffmpeg-wasi-release-signing-v2-signer
     # The >= below is a floor, not a ceiling — a Renovate bump above it is safe.
     # renovate: datasource=gitlab-tags depName=phpboyscout/go-tool-base
-    GTB_VERSION: v0.39.0 # >= v0.33.0 for `gtb sign --append` (dual-sign window)
+    GTB_VERSION: v0.39.1 # >= v0.33.0 for `gtb sign --append` (dual-sign window)
     GOPRIVATE: gitlab.com/phpboyscout/*
   before_script:
     # Install gtb from the private module registry (CI-token git auth), then
