@@ -113,10 +113,16 @@ type Host struct {
 	// this is the host still there and saying it cannot serve the read, which v1
 	// had no way to express — and which is why the fix for ffmpeg-wasi#20 shipped
 	// with no regression test (afmpeg spec 0041 D2).
+	// MaxVersion caps the protocol this host will admit to speaking, so a test can
+	// stand in for a RELEASED host that predates v2. Zero means the current
+	// version. A host older than the negotiation does not answer with a lower
+	// number — it has none — it refuses the connection, which is what this
+	// reproduces (afmpeg spec 0041 D1).
 	OverstateReadBy   uint32
 	CloseAfterReads   int
 	UnderstateWriteBy uint32
 	FailReadsAfter    int
+	MaxVersion        byte
 
 	reads atomic.Int64
 
@@ -202,16 +208,21 @@ func (h *Host) session(conn net.Conn) error {
 	if _, err := io.ReadFull(conn, version[:]); err != nil {
 		return fmt.Errorf("reading the version byte: %w", err)
 	}
-	if version[0] < protocolVersionMin || version[0] > protocolVersion {
+	maxVer := byte(protocolVersion)
+	if h.MaxVersion > 0 {
+		maxVer = h.MaxVersion
+	}
+
+	if version[0] < protocolVersionMin || version[0] > maxVer {
 		return fmt.Errorf("the driver announced protocol version %d, want %d..%d",
-			version[0], protocolVersionMin, protocolVersion)
+			version[0], protocolVersionMin, maxVer)
 	}
 
 	// From v2 the host says which version it will speak. A v1 driver expects no
 	// answer and would take this byte as the reply to its Open, so it is sent only
 	// from v2 up (afmpeg spec 0041 D1).
 	agreed := version[0]
-	if agreed >= protocolVersionNegotiated {
+	if agreed >= protocolVersionNegotiated && maxVer >= protocolVersionNegotiated {
 		if _, err := conn.Write([]byte{agreed}); err != nil {
 			return fmt.Errorf("answering the version preamble: %w", err)
 		}

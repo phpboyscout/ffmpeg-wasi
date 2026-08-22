@@ -70,6 +70,18 @@ static int concat_name_is_safe(const char *name) {
 // afio_agreed is the version the host answered with on the last dial. Every
 // session in a job talks to the same host, so one value is enough.
 static uint8_t afio_agreed = AFIO_PROTO_VERSION;
+
+// afio_announce is the version this engine offers on a NEW connection.
+//
+// It starts at the highest we speak and drops to 1 for the rest of the job the
+// first time a host refuses that. A v1 host does not answer the preamble with a
+// lower number -- it has no negotiation at all, so it validates the byte, finds
+// a version it does not know, and closes. From this side that is a failed read,
+// which is indistinguishable from a host that died. So the only way to tell is
+// to try again as v1, and the only way to avoid trying twice per file is to
+// remember (afmpeg spec 0041 D1: an engine speaking v2 to a v1 host must
+// DEGRADE, not fail).
+static uint8_t afio_announce = AFIO_PROTO_VERSION;
 #define AFIO_BUF (64 * 1024)
 
 // How long one read or write on the IPC socket may block before the engine gives
@@ -183,7 +195,14 @@ static int afio_active(void) { return getenv("AFMPEG_NATIVE_SOCKET") != NULL; }
 
 // afio_dial connects, sends the version + Open frame, and returns the fd on a 0
 // status (or -1). mode is 'r' or 'w'.
+static int afio_dial_at(const char *name, char mode, uint8_t announce);
+
 static int afio_dial(const char *name, char mode) {
+    return afio_dial_at(name, mode, afio_announce);
+}
+
+static int afio_dial_at(const char *name, char mode, uint8_t announce) {
+    afio_announce = announce;
     const char *sock = getenv("AFMPEG_NATIVE_SOCKET");
     if (!sock || !name) return -1;
 
@@ -206,7 +225,7 @@ static int afio_dial(const char *name, char mode) {
     strncpy(a.sun_path, sock, sizeof(a.sun_path) - 1);
     if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0) { close(fd); return -1; }
 
-    uint8_t ver = AFIO_PROTO_VERSION;
+    uint8_t ver = afio_announce;
     if (wr_full(fd, &ver, 1) < 0) { close(fd); return -1; }
 
     // Read the version the host will actually speak before sending anything else.
@@ -214,7 +233,18 @@ static int afio_dial(const char *name, char mode) {
     // reply to the next frame, and every later frame reads one byte out of step.
     uint8_t agreed = ver;
     if (ver >= AFIO_PROTO_NEGOTIATED) {
-        if (rd_full(fd, &agreed, 1) < 0) { close(fd); return -1; }
+        if (rd_full(fd, &agreed, 1) < 0) {
+            // No answer. Either the host is older than the negotiation and closed
+            // on a version byte it did not recognise, or it is gone. Try once as
+            // v1 before deciding, and remember, so a job against an old host pays
+            // one extra dial rather than one per file.
+            close(fd);
+            afio_announce = AFIO_PROTO_MIN;
+            fprintf(stderr, "ffmpeg-wasi: the host did not answer a protocol v%u "
+                            "preamble; falling back to v%u for this job\n",
+                    (unsigned)AFIO_PROTO_VERSION, (unsigned)AFIO_PROTO_MIN);
+            return afio_dial_at(name, mode, AFIO_PROTO_MIN);
+        }
         if (agreed < AFIO_PROTO_MIN || agreed > ver) {
             fprintf(stderr, "ffmpeg-wasi: the host answered protocol version %u; "
                             "this engine speaks %u..%u\n",
