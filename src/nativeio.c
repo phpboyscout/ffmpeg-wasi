@@ -240,6 +240,61 @@ static int afio_dial(const char *name, char mode) {
     return fd;
 }
 
+// afio_session dials, negotiates, and sends one session-level frame that is not
+// an Open: 'M' (Move, two names) or 'E' (Exists, one name). Returns the connected
+// socket with the request sent and the reply still to read, or -1.
+//
+// Open has its own path because it keeps the connection for the file's lifetime;
+// these two answer and end, so the caller reads the reply and closes.
+static int afio_session(const char *a, const char *b, char frame) {
+    const char *sock = getenv("AFMPEG_NATIVE_SOCKET");
+    if (!sock || !a) return -1;
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    if (afio_set_timeouts(fd) < 0) { close(fd); return -1; }
+
+    struct sockaddr_un sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sun_family = AF_UNIX;
+    if (strlen(sock) >= sizeof(sa.sun_path)) { close(fd); return -1; }
+    strncpy(sa.sun_path, sock, sizeof(sa.sun_path) - 1);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { close(fd); return -1; }
+
+    uint8_t ver = AFIO_PROTO_VERSION;
+    if (wr_full(fd, &ver, 1) < 0) { close(fd); return -1; }
+
+    uint8_t agreed = ver;
+    if (ver >= AFIO_PROTO_NEGOTIATED) {
+        if (rd_full(fd, &agreed, 1) < 0) { close(fd); return -1; }
+        if (agreed < AFIO_PROTO_NEGOTIATED) {
+            // The host predates these frames. Refuse rather than fall back to
+            // something weaker without saying so.
+            fprintf(stderr, "ffmpeg-wasi: the host speaks protocol v%u, which has no "
+                            "%c frame; this operation needs v%u\n",
+                    agreed, frame, AFIO_PROTO_NEGOTIATED);
+            close(fd);
+            return -1;
+        }
+    }
+    afio_agreed = agreed;
+
+    uint8_t tag = (uint8_t)frame;
+    size_t la = strlen(a);
+    uint8_t len[4];
+    if (wr_full(fd, &tag, 1) < 0) { close(fd); return -1; }
+    put32(len, (uint32_t)la);
+    if (wr_full(fd, len, 4) < 0 || wr_full(fd, a, la) < 0) { close(fd); return -1; }
+
+    if (b) {
+        size_t lb = strlen(b);
+        put32(len, (uint32_t)lb);
+        if (wr_full(fd, len, 4) < 0 || wr_full(fd, b, lb) < 0) { close(fd); return -1; }
+    }
+
+    return fd;
+}
+
 // The AVIO callbacks; opaque carries the socket fd.
 static int afio_read(void *opaque, uint8_t *buf, int size) {
     int fd = (int)(intptr_t)opaque;
@@ -469,6 +524,23 @@ static int afio_open_concat_ipc(AVFormatContext **out, const AVInputFormat *cf,
 int afio_open_input(AVFormatContext **out, const char *path,
                     const AVInputFormat *ifmt, AVDictionary **opts) {
 #ifdef AFMPEG_NATIVE
+    // A demuxer that opens its own files gets the path, not a custom AVIO.
+    //
+    // image2 is AVFMT_NOFILE: it expands a pattern and opens each frame itself,
+    // and libav says so out loud -- "Custom AVIOContext makes no sense and will be
+    // ignored with AVFMT_NOFILE format". Handing it one meant this engine dialled
+    // the PATTERN as if it were a filename, the host quite rightly had no
+    // `f_%03d.png`, and a sequence could not be read over the bridge at all
+    // (ffmpeg-wasi#36).
+    //
+    // Since spec 0043 D1 the `file` protocol is bridged, so letting the demuxer
+    // open its own URLs is not a hole any more -- it is the seam. Probe and open
+    // both resolve against the caller's filesystem because they go through the
+    // same protocol, which is the disagreement #36 actually was.
+    if (afio_active() && ifmt && (ifmt->flags & AVFMT_NOFILE)) {
+        return avformat_open_input(out, path, ifmt, opts);
+    }
+
     if (afio_active()) {
         AVFormatContext *ic = avformat_alloc_context();
         if (!ic) return AVERROR(ENOMEM);
@@ -648,3 +720,111 @@ int afio_write_file(const char *path, const uint8_t *data, size_t len) {
     int closed = fclose(fp);
     return (put != len || closed != 0) ? AVERROR(EIO) : 0;
 }
+
+// ---- the URL-protocol layer (afmpeg spec 0043 D1) -------------------------
+//
+// Everything above serves AVFormatContext.pb and io_open child opens -- channels
+// 1 and 2. What follows serves channel 3: the URLs libav opens on its OWN
+// initiative, below every hook this engine installs.
+//
+// That channel is why image2 could not read a sequence over the bridge and why
+// HLS left its playlist as a .tmp. `avio_check` resolved on the HOST while
+// `io_open` resolved over the bridge, so probe and open disagreed about which
+// filesystem exists -- which is precisely what ffmpeg-wasi#36 was. Putting them
+// on one seam makes the disagreement impossible rather than patching around it.
+//
+// These are called from a carried patch to libavformat/file.c, applied on the
+// native build only. They are deliberately thin: the framing they speak is the
+// same protocol the AVIO callbacks above use.
+
+#ifdef AFMPEG_NATIVE
+
+// afmpeg_url_active reports whether the bridge should serve the URL layer.
+int afmpeg_url_active(void) { return afio_bridge_active(); }
+
+// afmpeg_url_open dials a session for one file and returns its socket, or a
+// negative AVERROR. `flags` is AVIO_FLAG_*; anything with WRITE opens for write.
+int afmpeg_url_open(const char *filename, int flags) {
+    if (!filename) return AVERROR(EINVAL);
+    // The `file:` prefix is libav's, not the host's -- the host is asked for the
+    // name the caller used.
+    if (strncmp(filename, "file:", 5) == 0) filename += 5;
+    int fd = afio_dial(filename, (flags & AVIO_FLAG_WRITE) ? 'w' : 'r');
+    return fd < 0 ? AVERROR(ENOENT) : fd;
+}
+
+int afmpeg_url_read(int fd, unsigned char *buf, int size) {
+    return afio_read((void *)(intptr_t)fd, buf, size);
+}
+
+int afmpeg_url_write(int fd, const unsigned char *buf, int size) {
+    return afio_write((void *)(intptr_t)fd, buf, size);
+}
+
+int64_t afmpeg_url_seek(int fd, int64_t pos, int whence) {
+    return afio_seek((void *)(intptr_t)fd, pos, whence);
+}
+
+int afmpeg_url_close(int fd) {
+    uint8_t c = 'C';
+    (void)wr_full(fd, &c, 1);
+    close(fd);
+    return 0;
+}
+
+// afmpeg_url_check answers avio_check with the Exists frame (spec 0041 D4).
+//
+// One connection, one operation: dial, announce, ask, read the reply, done.
+int afmpeg_url_check(const char *filename, int mask) {
+    if (!filename) return AVERROR(EINVAL);
+    if (strncmp(filename, "file:", 5) == 0) filename += 5;
+
+    int fd = afio_session(filename, NULL, 'E');
+    if (fd < 0) return AVERROR(EIO);
+
+    uint8_t reply[9];
+    int rc = rd_full(fd, reply, sizeof reply);
+    close(fd);
+    if (rc < 0) return AVERROR(EIO);
+    if (reply[0] != 0) return AVERROR(ENOENT);
+
+    // The engine cannot tell read from write permission over the bridge, and the
+    // host would not know either -- an afero.Fs it serves is the caller's own. A
+    // name that exists is readable and writable as far as this layer is concerned.
+    return mask & (AVIO_FLAG_READ | AVIO_FLAG_WRITE);
+}
+
+// afmpeg_url_move answers ff_rename with the Move frame (spec 0041 D3), so a
+// muxer can replace a file atomically instead of leaving a .tmp behind
+// (ffmpeg-wasi#35).
+int afmpeg_url_move(const char *src, const char *dst) {
+    if (!src || !dst) return AVERROR(EINVAL);
+    if (strncmp(src, "file:", 5) == 0) src += 5;
+    if (strncmp(dst, "file:", 5) == 0) dst += 5;
+
+    int fd = afio_session(src, dst, 'M');
+    if (fd < 0) return AVERROR(EIO);
+
+    uint8_t st;
+    int rc = rd_full(fd, &st, 1);
+    close(fd);
+    if (rc < 0) return AVERROR(EIO);
+
+    // A host that cannot rename atomically says so, and the job fails by name --
+    // never a silent fallback to copy-and-delete, which satisfies the file layout
+    // and loses the property the muxer wanted.
+    return st == 0 ? 0 : AVERROR(EIO);
+}
+
+// afmpeg_url_delete is refused rather than served.
+//
+// The protocol has no Delete frame, and inventing one here would mean the engine
+// could remove a file on a filesystem it is meant to be contained away from. The
+// components enabled in any profile do not need it; a job that somehow does gets
+// a clear ENOSYS instead of a deletion nobody asked for.
+int afmpeg_url_delete(const char *filename) {
+    (void)filename;
+    return AVERROR(ENOSYS);
+}
+
+#endif // AFMPEG_NATIVE

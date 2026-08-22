@@ -58,3 +58,16 @@ int afio_bridge_active(void);
 int afio_write_file(const char *path, const uint8_t *data, size_t len);
 
 #endif
+
+// The URL-protocol layer (afmpeg spec 0043 D1), called from the carried patch to
+// libavformat/file.c on the native build. Channel 3: the URLs libav opens on its
+// own initiative, below every hook this engine installs.
+int afmpeg_url_active(void);
+int afmpeg_url_open(const char *filename, int flags);
+int afmpeg_url_read(int fd, unsigned char *buf, int size);
+int afmpeg_url_write(int fd, const unsigned char *buf, int size);
+int64_t afmpeg_url_seek(int fd, int64_t pos, int whence);
+int afmpeg_url_close(int fd);
+int afmpeg_url_check(const char *filename, int mask);
+int afmpeg_url_move(const char *src, const char *dst);
+int afmpeg_url_delete(const char *filename);

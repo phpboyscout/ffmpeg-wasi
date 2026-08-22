@@ -19,6 +19,19 @@ cd "$FFMPEG_SRC"
 # protocol. A no-op for wasm (default io_open); see build/ffmpeg-concat-ioopen.patch.
 git apply "$HERE_LIBAV/ffmpeg-concat-ioopen.patch"
 
+# Route the `file` URL protocol through the native IPC bridge (afmpeg spec 0043
+# D1). NATIVE ONLY: the wasm target confines by the process boundary, where all
+# four channels already funnel through the wazero mount, and the symbols this
+# patch calls live in the native-only half of src/nativeio.c.
+#
+# This is the seam that puts probe and open on the SAME filesystem. Before it,
+# avio_check resolved on the host while io_open resolved over the bridge, so a
+# numbered image sequence could not be read (ffmpeg-wasi#36) and HLS left its
+# playlist as a .tmp because ff_rename never reached the host (#35).
+if [ "$TARGET" = native ]; then
+  git apply "$HERE_LIBAV/ffmpeg-file-bridge.patch"
+fi
+
 # The component allowlist per (PROFILE, VARIANT) — extracted to its own file so
 # the conformance suite reads the same definition this build uses (spec 0036 D3).
 # Sets ENABLE, OPENH264_FLAGS, GPL_FLAGS and COMPONENT_FLAGS.
