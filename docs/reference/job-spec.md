@@ -37,7 +37,8 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
     "map": ["[v]"],                     // graph pads / stream specifiers to mux
     "video_codec": "libx264",
     "audio_codec": "aac",
-    "options": { "crf": "23", "movflags": "+faststart" }
+    "video_options":  { "crf": "23" },   // the video encoder only
+    "format_options": { "movflags": "+faststart" }
   } ]
 }
 ```
@@ -55,7 +56,8 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 | `outputs[]` | One **output file** each. With a single output, `map` may be omitted (every graph pad is muxed into it); with **multiple outputs, each must set `map`** to claim its pads. |
 | `outputs[].map` | What to mux into this file — either graph output pad labels (bracketed, `["[loud]"]`, encoded) **or** *(v2)* input-stream specifiers (unbracketed: `"0:v"`, `"0:a:0"`, `"0:0"`, **stream-copied**). Graph input pads accept the same indexed form — `[0:v:1]` in a `filter` selects the second video stream *(v4)*. |
 | `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). *(v2)* The sentinel **`"copy"`** stream-copies the mapped input stream — no decode/encode, needs no codec, works for any codec in either variant. The output container is chosen from the path extension. |
-| `outputs[].options` | String key/values passed to the **encoder** (e.g. `{"crf":"28"}`). An option the encoder does not consume is an **error**, not a warning — the same rule as `inputs[].options`, and for the same reason: an option that is silently dropped produces a file built to settings you did not ask for. |
+| `outputs[].options` | String key/values offered to **every encoder this output opens** — so on an output with both `video_codec` and `audio_codec`, a video-only option like `crf` is offered to the audio encoder too and refused there. Use it for what both genuinely share (`threads`, `flags`), and *(v10)* the per-kind maps below for the rest. An option no encoder consumes is an **error**, not a warning — the same rule as `inputs[].options`, and for the same reason: an option that is silently dropped produces a file built to settings you did not ask for. |
+| `outputs[].video_options` / `audio_options` / `subtitle_options` | *(v10)* Options offered only to that kind's encoder, winning over `options` on a key collision. An output names at most one encoder per kind, so this is as precise as the codec selection itself. Note the check is a **name** check: every encoder inherits the generic `AVCodecContext` option table, so a video-only *generic* option (`g`, `bf`, `refs`) set on an audio encoder is accepted and silently does nothing — these maps are what stops that, not the check. |
 | `outputs[].format` | *(v5)* Force the **muxer** by name (`"hls"`, `"dash"`, `"segment"`, `"mpegts"`, …) instead of guessing from the path extension. |
 | `outputs[].format_options` | *(v5)* Options passed to the **muxer** (write_header) — segment timing/naming (`hls_time`, `hls_segment_filename`), fragmentation (`movflags`), etc. Distinct from `options` (the encoder). |
 | `outputs[].bitstream_filters` | *(v2)* Per copied stream, keyed by its `map` entry: a bitstream-filter name/chain (e.g. `{"0:v":"h264_mp4toannexb"}`), or `"none"` to force-disable. Absent → the muxer auto-inserts any container-required filter. |
@@ -305,6 +307,7 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | 7 | Metadata & chapters (afmpeg spec 0020): `outputs[].metadata` (container tags), `outputs[].chapters` (`"copy"`/index passthrough), `outputs[].stream_metadata` (per-map `language`/`disposition`/`tags`). Probe replies gain container `tags`/`chapters` and per-stream `tags`/`disposition`/`language` (additive). |
 | 8 | Subtitle streams (afmpeg spec 0019): `outputs[].subtitle_codec` (an encoder name or `"copy"`) + `N:s` subtitle map specifiers — extract/convert/copy subtitle tracks (the subtitle transcode lane). |
 | 9 | Progress side-channel (afmpeg spec 0031 phase B / spec 0032): top-level `"progress":true` on a `process` job emits NDJSON `{frame,out_time_us,total_size,duration_us}` records to `/dev/afmpeg-progress` as it muxes. Opt-in and additive — absent/`false` behaves exactly as v8. |
+| 10 | Per-encoder option maps (afmpeg spec 0045): `outputs[].video_options` / `audio_options` / `subtitle_options`, each reaching only its own encoder and winning over `outputs[].options` on a key collision. The subtitle encoder becomes configurable at all — it was opened with a NULL dictionary, so options addressed to it were dropped before libav saw them and the strict check could not fire. `options` keeps its v9 meaning, so a v9 spec runs unchanged. |
 
 **The gate (two sides):**
 

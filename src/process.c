@@ -70,7 +70,15 @@ typedef struct {
     const char *acodec;
     const char *scodec;    // subtitle encoder name, or "copy" (spec 0019); NULL → none
     const char *format;    // forced muxer name (spec 0015); NULL → guess by extension
+    // enc_opts is the common `options` dict — offered to every encoder this
+    // output opens. The three beside it are `video_options` / `audio_options` /
+    // `subtitle_options` (spec 0045 D1), each offered only to its own encoder
+    // and winning on a key collision. An output names at most one encoder per
+    // kind, so the options that configure them are addressed the same way.
     AVDictionary *enc_opts;
+    AVDictionary *venc_opts;
+    AVDictionary *aenc_opts;
+    AVDictionary *senc_opts;
     AVDictionary *fmt_opts; // muxer options → write_header (spec 0015)
     const cJSON *map; // array of "[label]" (graph pads) / "in:type[:idx]" (copy) strings
     const cJSON *bsf; // "bitstream_filters" object: map-key → bsf name/chain or "none"
@@ -499,6 +507,48 @@ static int add_buffersink(Ctx *c, AVFilterInOut *pad) {
     return 0;
 }
 
+// open_encoder_opts opens one encoder with the options addressed to it, and is
+// the only place any encoder in this file is opened — video, audio or subtitle.
+// That is deliberate: spec 0045 D3 makes the rule universal, and a rule with a
+// carve-out is one somebody has to remember.
+//
+// `common` is the output's `options` (every encoder); `kind` is its
+// `video_options` / `audio_options` / `subtitle_options`, copied second so it
+// wins on a key collision (0045 D1).
+//
+// Whatever the encoder did not consume, it did not understand. Ignoring that
+// meant a misspelled `crf` produced output built to the encoder's defaults with
+// exit 0 — and the caller cannot tell, because the option they asked for simply
+// was not applied. inputs[].options has refused this since spec 0024; the
+// encoder dictionaries did not (ffmpeg-wasi#54).
+//
+// The check is a NAME check, not a kind check: every encoder's AVClass chains to
+// the generic AVCodecContext table, so a video-flagged option set on an audio
+// encoder is accepted here and silently ignored by the codec (0045 OQ3). The
+// per-kind dictionaries are what stops that, not this check.
+static int open_encoder_opts(AVCodecContext *enc, const AVCodec *codec, const char *name,
+                             const AVDictionary *common, const AVDictionary *kind) {
+    AVDictionary *opts = NULL;
+    av_dict_copy(&opts, common, 0);
+    av_dict_copy(&opts, kind, 0);
+
+    int ret = avcodec_open2(enc, codec, &opts);
+    if (ret < 0) {
+        av_dict_free(&opts);
+        fprintf(stderr, "ffmpeg-wasi: process: open encoder %s failed\n", name);
+        return ret;
+    }
+    if (av_dict_count(opts) > 0) {
+        const AVDictionaryEntry *e = av_dict_iterate(opts, NULL);
+        fprintf(stderr, "ffmpeg-wasi: process: encoder %s does not have option %s\n",
+                name, e ? e->key : "?");
+        av_dict_free(&opts);
+        return AVERROR(EINVAL);
+    }
+    av_dict_free(&opts);
+    return 0;
+}
+
 // open_encoder configures and opens the encoder for one graph output from the
 // negotiated buffersink format, and adds the output stream to its muxer.
 static int open_encoder(Ctx *c, GOut *go) {
@@ -526,27 +576,9 @@ static int open_encoder(Ctx *c, GOut *go) {
     if (out->ofmt->oformat->flags & AVFMT_GLOBALHEADER)
         go->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
-    AVDictionary *opts = NULL;
-    av_dict_copy(&opts, out->enc_opts, 0);
-    int ret = avcodec_open2(go->enc, enc_codec, &opts);
-    if (ret < 0) {
-        av_dict_free(&opts);
-        fprintf(stderr, "ffmpeg-wasi: process: open encoder %s failed\n", enc_name);
-        return ret;
-    }
-    // Whatever the encoder did not consume, it did not understand. Ignoring that
-    // meant a misspelled `crf` produced output built to the encoder's defaults
-    // with exit 0 — and the caller cannot tell, because the option they asked for
-    // simply was not applied. inputs[].options has refused this since spec 0024;
-    // these two dictionaries did not (ffmpeg-wasi#54).
-    if (av_dict_count(opts) > 0) {
-        const AVDictionaryEntry *e = av_dict_iterate(opts, NULL);
-        fprintf(stderr, "ffmpeg-wasi: process: encoder %s does not have option %s\n",
-                enc_name, e ? e->key : "?");
-        av_dict_free(&opts);
-        return AVERROR(EINVAL);
-    }
-    av_dict_free(&opts);
+    int ret = open_encoder_opts(go->enc, enc_codec, enc_name, out->enc_opts,
+                                go->type == AVMEDIA_TYPE_VIDEO ? out->venc_opts : out->aenc_opts);
+    if (ret < 0) return ret;
 
     if (go->type == AVMEDIA_TYPE_AUDIO && !(enc_codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
         && go->enc->frame_size > 0)
@@ -973,6 +1005,18 @@ static int parse_output(Out *o, const cJSON *spec) {
     // unpredictably (spec 0027 §4C, defence-in-depth on trusted input).
     const cJSON *opts = cJSON_GetObjectItemCaseSensitive(spec, "options");
     if (opts_from_json(&o->enc_opts, opts, "outputs[].options") < 0) return 2;
+    // Per-kind encoder options (spec 0045 D1). `options` above reaches every
+    // encoder this output opens; these reach one each, and win on a collision.
+    // The scoping cannot be inferred downstream: avcodec_open2 resolves a name
+    // against the encoder's AVClass and never consults AV_OPT_FLAG_VIDEO_PARAM
+    // / AUDIO_PARAM, so an option meant for one kind is accepted by the other
+    // and silently ignored (0045 OQ3). Here is the only place the kind is said.
+    const cJSON *vopts = cJSON_GetObjectItemCaseSensitive(spec, "video_options");
+    if (opts_from_json(&o->venc_opts, vopts, "outputs[].video_options") < 0) return 2;
+    const cJSON *aopts = cJSON_GetObjectItemCaseSensitive(spec, "audio_options");
+    if (opts_from_json(&o->aenc_opts, aopts, "outputs[].audio_options") < 0) return 2;
+    const cJSON *sopts = cJSON_GetObjectItemCaseSensitive(spec, "subtitle_options");
+    if (opts_from_json(&o->senc_opts, sopts, "outputs[].subtitle_options") < 0) return 2;
     // Muxer options (spec 0015): a separate dict routed to write_header — segment
     // timing/naming, fragmentation flags (movflags), etc. — distinct from the
     // encoder `options` above (D-0015-B: no guessing which dict an option is for).
@@ -989,6 +1033,9 @@ static int parse_output(Out *o, const cJSON *spec) {
                 o->path, o->format ? " / " : "", o->format ? o->format : "");
         print_muxers();
         av_dict_free(&o->enc_opts); // this Out is never counted in n_out, so free here
+        av_dict_free(&o->venc_opts);
+        av_dict_free(&o->aenc_opts);
+        av_dict_free(&o->senc_opts);
         av_dict_free(&o->fmt_opts);
         return -1;
     }
@@ -1481,9 +1528,10 @@ static int setup_sub_stream(Ctx *c, Sub *su) {
         su->enc->subtitle_header_size = su->dec->subtitle_header_size;
     }
     if (out->ofmt->oformat->flags & AVFMT_GLOBALHEADER) su->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    if ((ret = avcodec_open2(su->enc, enc, NULL)) < 0) {
-        fprintf(stderr, "ffmpeg-wasi: process: open subtitle encoder %s failed\n", out->scodec); return ret;
-    }
+    // Was avcodec_open2(..., NULL): the subtitle encoder could not be configured
+    // at all, and the strict check could not fire on it because no dictionary
+    // ever reached it (spec 0045 D3).
+    if ((ret = open_encoder_opts(su->enc, enc, out->scodec, out->enc_opts, out->senc_opts)) < 0) return ret;
 
     su->ost = avformat_new_stream(out->ofmt, NULL);
     if (!su->ost) return AVERROR(ENOMEM);
@@ -2253,6 +2301,9 @@ end:
             afio_close_output(c.out[i].ofmt);
         if (c.out[i].ofmt) avformat_free_context(c.out[i].ofmt);
         av_dict_free(&c.out[i].enc_opts);
+        av_dict_free(&c.out[i].venc_opts);
+        av_dict_free(&c.out[i].aenc_opts);
+        av_dict_free(&c.out[i].senc_opts);
         av_dict_free(&c.out[i].fmt_opts);
     }
     for (int i = 0; i < c.n_gin; i++) avcodec_free_context(&c.gin[i].dec);

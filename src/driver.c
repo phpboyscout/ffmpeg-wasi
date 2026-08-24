@@ -68,9 +68,15 @@
 //       "progress":true on an op:"process" job makes the engine emit NDJSON
 //       {frame,out_time_us,total_size} records to /dev/afmpeg-progress as it
 //       muxes. Purely additive and opt-in — absent/false behaves exactly as v8.
+//  10 — per-encoder option maps (spec 0045): outputs[].video_options /
+//       audio_options / subtitle_options, each reaching only its own encoder
+//       and winning over the common outputs[].options on a key collision. The
+//       subtitle encoder gains options at all (it was opened with NULL). An
+//       output's `options` keeps its v9 meaning — every encoder that output
+//       opens — so a v9 spec runs unchanged.
 // A spec whose "version" exceeds this is rejected in main() rather than having
 // its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
-#define AFMPEG_VOCAB_VERSION 9
+#define AFMPEG_VOCAB_VERSION 10
 
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"
