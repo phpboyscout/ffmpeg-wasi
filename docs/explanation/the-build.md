@@ -1,6 +1,6 @@
 ---
 title: The build
-description: How libav* is cross-compiled to wasm32-wasi — the toolchain, the single-threaded config, setjmp/longjmp, and the wasi compat shims.
+description: How libav* is cross-compiled to wasm32-wasi: the toolchain, the single-threaded config, setjmp/longjmp, and the wasi compat shims.
 date: 2026-06-28
 tags: [explanation, build]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]
@@ -8,22 +8,22 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 # The build
 
-How `libav*` becomes a `.wasm`. The pipeline is four small scripts under `build/` —
+How `libav*` becomes a `.wasm`. The pipeline is four small scripts under `build/`:
 `toolchain.sh` (the shared cross env), `deps.sh` (the external codec libraries), `libav.sh`
-(FFmpeg's `libav*`), and `driver.sh` (the final link) — orchestrated by a Dockerfile; this page
+(FFmpeg's `libav*`), and `driver.sh` (the final link), orchestrated by a Dockerfile; this page
 explains the parts that aren't obvious.
 
 ## The toolchain (`build/toolchain.sh`)
 
-Everything is built with the [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) — an
+Everything is built with the [wasi-sdk](https://github.com/WebAssembly/wasi-sdk), an
 LLVM/clang toolchain targeting `wasm32-wasip1` with a `wasi-libc` sysroot. The notable flags:
 
-- **`--target=wasm32-wasip1 --sysroot=…`** — cross-compile to WASI.
-- **The WebAssembly feature set** — `-mtail-call -mbulk-memory -msimd128 -mextended-const
+- **`--target=wasm32-wasip1 --sysroot=…`**: cross-compile to WASI.
+- **The WebAssembly feature set**: `-mtail-call -mbulk-memory -msimd128 -mextended-const
   -mnontrapping-fptoint -msign-ext -mmutable-globals -mreference-types`. These are kept in
   lock-step with what the [afmpeg](https://gitlab.com/phpboyscout/afmpeg) runtime enables; a
   module built with a feature the runtime doesn't allow won't instantiate.
-- **`-Oz`** — optimise for size (the module is shipped over the wire).
+- **`-Oz`**: optimise for size (the module is shipped over the wire).
 
 ## Single-threaded by configuration
 
@@ -37,7 +37,7 @@ We also `--disable-asm` (no wasm assembly path) and `--disable-network`.
 FFmpeg's C uses `setjmp`/`longjmp` (notably in some codecs' error handling, and in libvpx's
 encoder). clang lowers these for wasm with **`-mllvm=-wasm-enable-sjlj
 -mllvm=-wasm-use-legacy-eh=false`**, which emits two host imports — `env.__wasm_setjmp` and
-`env.__wasm_longjmp` — resolved at link time against the sysroot's `libsetjmp.a`. The runtime
+`env.__wasm_longjmp`, resolved at link time against the sysroot's `libsetjmp.a`. The runtime
 provides the imports; afmpeg implements them with wazero's snapshotter, and the bundled `tools/run`
 harness does the same. This is why a stock WASI runtime can't load the module but our setup can.
 
@@ -47,7 +47,7 @@ harness does the same. This is why a stock WASI runtime can't load the module bu
 from wasi-sdk's 64 KB default to **8 MB**. Two things need it: the engine's `op_process` holds a
 large fixed-size context on the stack (it is sized for the
 [job caps](../reference/limits.md#how-many-inputs-outputs-and-streams-can-one-job-have)), and
-FFmpeg's native encoders recurse deeply — the mpegvideo/mjpeg path most of all. At 64 KB the stack
+FFmpeg's native encoders recurse deeply, the mpegvideo/mjpeg path most of all. At 64 KB the stack
 overflows into a wasm trap rather than a clean error, which is a miserable failure to diagnose. The
 native driver needs no equivalent: it uses the host's stack.
 
@@ -56,24 +56,24 @@ native driver needs no equivalent: it uses the host's stack.
 WASI is a smaller world than POSIX, and FFmpeg assumes POSIX. wasi-libc deliberately omits a
 few functions ("WASI has no …"). We bridge the gap minimally:
 
-- **`config.h` fixups** — `HAVE_SYSCTL`, `HAVE_MKSTEMP`, `HAVE_GETHRTIME`, `HAVE_SETRLIMIT`
+- **`config.h` fixups**: `HAVE_SYSCTL`, `HAVE_MKSTEMP`, `HAVE_GETHRTIME`, `HAVE_SETRLIMIT`
   are forced off so FFmpeg takes its portable fallbacks.
-- **`build/wasi-compat.h`** — force-included during the libav\* build (via `--extra-cflags`,
+- **`build/wasi-compat.h`**: force-included during the libav\* build (via `--extra-cflags`,
   so it's baked into `config.mak`) to **declare** functions wasi-libc's headers gate out
   (e.g. `dup`, `tempnam`), keeping the strict-C99 clang from erroring.
-- **`build/wasi-compat.c`** — **implements** the symbols the link actually needs. For
+- **`build/wasi-compat.c`**: **implements** the symbols the link actually needs. For
   example WASI has no `dup(2)` and no way to allocate a fresh lowest-available fd, so it is
-  a **stub that fails with `ENOSYS`** — enough to satisfy the link (libavformat's `file.o`
+  a **stub that fails with `ENOSYS`**, enough to satisfy the link (libavformat's `file.o`
   references `dup`) while the code paths that would call it are never exercised, because the
   real file I/O goes over the mounted filesystem.
 
-This shim layer is small and explicit — and it's exactly the kind of porting work that
+This shim layer is small and explicit, and it's exactly the kind of porting work that
 "owning a current FFmpeg build" means. It grows as new codecs/protocols pull in new corners
 of POSIX.
 
 Not every POSIX gap is a *link-time* one. Some are **runtime devices**. libavutil's
 `av_get_random_seed()`, for instance, reads `/dev/urandom` (its only compiled entropy source
-here) and otherwise falls back to a `clock()`-jitter loop that never terminates under WASI —
+here) and otherwise falls back to a `clock()`-jitter loop that never terminates under WASI,
 so any format needing a random id (the Matroska muxer seeds track UIDs this way) would hang.
 That gap is filled at the *runtime* layer, not here: the afmpeg host serves `/dev/urandom`
 from its vfs bridge. See afmpeg's
@@ -83,19 +83,19 @@ from its vfs bridge. See afmpeg's
 
 Both variants encode H.264 via [openh264](https://github.com/cisco/openh264) (the GPL variant
 additionally offers libx264). openh264 is C++ with a GNU-make build that doesn't know about wasm,
-so `build/deps.sh` cross-compiles it with a few deliberate overrides — `OS=linux` (steers the
+so `build/deps.sh` cross-compiles it with a few deliberate overrides: `OS=linux` (steers the
 Makefile only; the C preprocessor never sees `__linux__` for wasm), `ARCH=generic USE_ASM=No`
 (portable C path), `USE_STACK_PROTECTOR=No`, and `-fno-exceptions -fno-rtti`. Three small wasm
 adaptations make it build and run, all in `build/openh264-wasi.patch`:
 
-- **No `<sys/sysctl.h>` / `SCHED_FIFO`** — wasip1 lacks both; the patch teaches `WelsThreadLib`
+- **No `<sys/sysctl.h>` / `SCHED_FIFO`**: wasip1 lacks both; the patch teaches `WelsThreadLib`
   the `__wasi__` case (CPU count is simply 1).
-- **Single-threaded pthread/sem shim** (`build/openh264-threads.c`) — wasip1 has no thread
+- **Single-threaded pthread/sem shim** (`build/openh264-threads.c`): wasip1 has no thread
   spawning. The encoder runs single-threaded (libav\* is `--disable-pthreads`, so FFmpeg requests
   one thread), so the mutex/sem operations are no-op successes and `pthread_create` is never
   reached. The shim is archived **into** `libopenh264.a` so it satisfies both FFmpeg's configure
   probe and the final link.
-- **A 2-argument `ForceIntraFrame`** — openh264's C vtable (which FFmpeg calls through) declares
+- **A 2-argument `ForceIntraFrame`**: openh264's C vtable (which FFmpeg calls through) declares
   `ForceIntraFrame(self, bool)`, but its C++ method is `(bool, int iLayerId = -1)`. On native ABIs
   the arity slip is harmless; wasm's strict indirect-call typing traps on it, so the patch drops
   the parameter (hardcoding the upstream `-1` default).
@@ -112,10 +112,10 @@ wasm-ld-only flags are needed. The result is `dist/ffmpeg-wasi-<variant>.wasm`.
 
 ## The native driver (spec 0028)
 
-The *same* engine also compiles to a **native ELF** — one build system, two targets, selected
+The *same* engine also compiles to a **native ELF**: one build system, two targets, selected
 by the `TARGET` env var. The wasm path above is `TARGET=wasm` (the default, byte-identical to
-before the split). `TARGET=native` (`build/Dockerfile.native`) drops the wasi machinery — no
-wasi-sdk target/sysroot, no SjLj lowering, no emulated libs, no single-thread shims — and instead
+before the split). `TARGET=native` (`build/Dockerfile.native`) drops the wasi machinery (no
+wasi-sdk target/sysroot, no SjLj lowering, no emulated libs, no single-thread shims) and instead
 uses the host clang/gcc with **real threads + SIMD** and asm enabled. `build/toolchain.sh`,
 `build/deps.sh`, `build/libav.sh`, and `build/driver.sh` each branch on `TARGET`; the deps are
 built native (openh264/x264 with real asm, and per profile the software batch, plus x265/SVT-AV1
@@ -124,7 +124,7 @@ for `full`), and `driver.sh` links a native ELF (`-DAFMPEG_NATIVE`, `--start-gro
 The native driver serves its filesystem I/O over an **IPC bridge** instead of WASI syscalls:
 `src/nativeio.c` installs a custom seekable `AVIOContext` whose read/write/seek callbacks speak a
 framed protocol over a Unix socket, so the driver's I/O crosses the caller's `afero.Fs` (in
-afmpeg's `pkg/afmpeg/native`) exactly as the wasm build's WASI calls do — no host disk. Even the
+afmpeg's `pkg/afmpeg/native`) exactly as the wasm build's WASI calls do, with no host disk. Even the
 concat demuxer's per-segment opens route over the bridge: `build/ffmpeg-concat-ioopen.patch` (a
 two-line FFmpeg patch applied in `libav.sh`) forwards the demuxer's `io_open` into its sub-contexts,
 so a concat join of afero-only segments never touches host disk either. This is
@@ -147,20 +147,20 @@ Every input is pinned: the wasi-sdk image in each Dockerfile, the upstream FFmpe
 `build/deps.sh`. The tarball-fetched libraries are
 verified against a hard-coded digest and every mirror that disagrees is rejected, so an altered
 mirror cannot slip modified source into an artifact. `build/versions.lock` restates several of those
-pins in one place as a record — **no script reads it**, so it is a summary to keep in step rather
+pins in one place as a record. **No script reads it**, so it is a summary to keep in step rather
 than the mechanism. The [build options reference](../reference/build-options.md) lists every pin and
 where its authoritative value lives.
 
 A release tag is `<FFMPEG_VERSION>-<build-rev>` (e.g. `n9.0.1-1`); the build revision bumps when
 the toolchain or config changes for the same upstream FFmpeg. The tag's version half must match
-`build/ffmpeg-version.txt`, which is checked before any build job starts — a release cannot name an
+`build/ffmpeg-version.txt`, which is checked before any build job starts, so a release cannot name an
 FFmpeg version that no merge request ever built (spec 0035).
 
 ## What CI proves, and when
 
 A merge request that touches `build/**`, `src/**` or `.gitlab-ci.yml` builds the **whole**
 ten-artifact matrix, so an engine change is reviewed against artifacts rather than against a
-description of them. Everything else — a docs edit, a dependency bump — runs only the fast checks.
+description of them. Everything else (a docs edit, a dependency bump) runs only the fast checks.
 
 Those builds share one project-scoped `resource_group`, so at most one engine compile runs at a
 time. A full matrix therefore takes roughly 95 minutes of wall clock rather than the ~17 it would
@@ -173,6 +173,6 @@ publish.
 
 A **size-budget gate** (spec 0022) guards against accidental bloat: `build/size-budget.txt` sets a
 per-artifact byte ceiling, and the `size-budget` CI job (`build/check-size-budget.sh`) prints each
-artifact's size vs its budget — on merge requests as well as tags, since a size regression is worth
-catching in review — and flags an overage. It is advisory (`allow_failure`) until the ceilings are
+artifact's size vs its budget, on merge requests as well as tags, since a size regression is worth
+catching in review, and flags an overage. It is advisory (`allow_failure`) until the ceilings are
 calibrated from real builds.
