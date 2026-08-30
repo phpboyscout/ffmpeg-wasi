@@ -8,7 +8,7 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 # Limits & what is not supported
 
-Everything on this page is a **deliberate** boundary — either a compile-time cap in the engine or a
+Everything on this page is a **deliberate** boundary: either a compile-time cap in the engine or a
 capability left out of the build. None of it is a bug, and none of it is planned work unless it says
 so. Where something is genuinely absent, the alternative is named.
 
@@ -18,14 +18,14 @@ see [errors & exit codes](errors.md).
 
 ## Can I pass an `ffmpeg` command line?
 
-No. The engine accepts a [structured job spec](job-spec.md) and nothing else — there is no argument
+No. The engine accepts a [structured job spec](job-spec.md) and nothing else. There is no argument
 parser for `-i`, `-vf`, `-c:v` or any other CLI flag, because the `ffmpeg` command-line tool is not
 built (`--disable-programs`). This is the central design decision, not an omission:
 [Why libav-direct](../explanation/why-libav-direct.md) explains it.
 
 The one place ffmpeg's own syntax survives is the `filter` field, which is a real
-`filter_complex` string parsed by `avfilter_graph_parse2`. Everything around it — inputs, outputs,
-codecs, encoder and muxer options — is typed JSON.
+`filter_complex` string parsed by `avfilter_graph_parse2`. Everything around it (inputs, outputs,
+codecs, encoder and muxer options) is typed JSON.
 
 ## Can an input or output be a URL?
 
@@ -33,7 +33,7 @@ No. `libav*` is configured `--disable-network` in both the WASM and the native b
 protocols enabled are **`file`** and **`pipe`**. An `http://`, `https://`, `rtmp://` or `srt://`
 path is not openable, and the engine has no code to fetch one.
 
-Every path in a job spec resolves against the filesystem the host mounts — for the WASM module over
+Every path in a job spec resolves against the filesystem the host mounts: for the WASM module over
 WASI syscalls, for the native driver over the
 [IPC bridge](driver-invocation-abi.md#native-ipc-contract-backend-b). Download the media first and
 present it on that filesystem.
@@ -50,8 +50,8 @@ Only on the native driver.
   encoder runs on one thread. It also has no assembly path (`--disable-asm --disable-x86asm
   --disable-runtime-cpudetect`), so there is no SIMD-accelerated inner loop either. That combination
   is what lets it run on [wazero](https://wazero.io/), which has no thread-spawn primitive.
-- **The native driver has real threads and SIMD**, which is the entire reason it exists — the same
-  jobs run ~50× (openh264) to ~170× (libx264) faster on software encode — the encoder matters more
+- **The native driver has real threads and SIMD**, which is the entire reason it exists. The same
+  jobs run ~50× (openh264) to ~170× (libx264) faster on software encode, and the encoder matters more
   than the FFmpeg version, and much more than the range suggests ([measured](https://gitlab.com/phpboyscout/afmpeg/-/wikis/reports/2026-08-native-vs-wasm-speed)). See
   [choose a variant](../how-to/choose-a-variant.md#which-runtime).
 
@@ -76,14 +76,14 @@ libdav1d) in `intermediate` and `full` on **both** runtimes.
 
 ## Can I use a GPU or a hardware encoder?
 
-No. No hardware acceleration is enabled in any build — no NVENC, VAAPI, QSV, VideoToolbox or
+No. No hardware acceleration is enabled in any build: no NVENC, VAAPI, QSV, VideoToolbox or
 hwaccel decoder. Every codec is a software one. Hardware encoders are the remaining unimplemented
 members of the `full` profile and are deferred until a GPU-equipped runner exists.
 
 ## Which platforms does the native driver run on?
 
 **linux/amd64 only.** The published assets are `ffmpeg-wasi-driver-linux-amd64-*`; there is no
-macOS, Windows or arm64 driver. The build is not cross-architecture — `build/Dockerfile.native`
+macOS, Windows or arm64 driver. The build is not cross-architecture; `build/Dockerfile.native`
 compiles with the host toolchain on a `debian:bookworm-slim` base.
 
 If you need another platform, the **WASM module is architecture-independent** and runs anywhere a
@@ -112,7 +112,7 @@ of the copy budget.
   the engine applies a built-in default cap of 1000 frames.
 - **4096 targets, absolute.** The selector's target list is bounded at 4096 timestamps regardless of
   `count`, so an `interval` fine enough to imply more simply stops there.
-- **`count` above 4096 does not raise the ceiling** for the seeking selectors — it caps output, it
+- **`count` above 4096 does not raise the ceiling** for the seeking selectors. It caps output, it
   does not extend the target list. The `scene` selector streams rather than seeking, so `count` is
   its only bound.
 
@@ -124,7 +124,7 @@ host has not made `/tmp` writable.
 `inputs[].concat` joins like-codec files through libavformat's concat demuxer, which needs an
 `ffconcat` playlist to open. On the WASM target the engine materialises that playlist at
 `/tmp/afmpeg-concat-<n>.txt` before opening it. **A writable `/tmp` is therefore a requirement of
-the mounted filesystem for concat jobs**, and only for concat jobs — nothing else in the engine
+the mounted filesystem for concat jobs**, and only for concat jobs; nothing else in the engine
 writes a scratch file.
 
 The native driver does not have this requirement: with `AFMPEG_NATIVE_SOCKET` set it builds the
@@ -141,7 +141,7 @@ subtitles=filename=sub.srt:fontsdir=/fonts:force_style='FontName=DejaVu Sans'
 ```
 
 A `drawtext` filter with no `fontfile` fails; it does not fall back to a default face. Both filters
-need the **intermediate** profile — see [filters](filters.md).
+need the **intermediate** profile; see [filters](filters.md).
 
 ## What is deliberately left out of the codec and filter sets
 
@@ -149,10 +149,10 @@ The build starts from `--disable-everything` and enables an explicit allowlist, 
 listed in [codecs](codecs.md) or [filters](filters.md) is absent by construction. The omissions
 people ask about specifically:
 
-- **`eq`** — GPL-only in FFmpeg and not enabled in *either* variant. Use `curves`,
+- **`eq`**: GPL-only in FFmpeg and not enabled in *either* variant. Use `curves`,
   `colorbalance` or `colorchannelmixer` for level and gamma adjustment.
-- **DTS encode** — `dca` decodes; there is no DTS encoder, because FFmpeg's is experimental.
-- **TrueHD and AMR** — neither decode nor encode, in any profile.
+- **DTS encode**: `dca` decodes; there is no DTS encoder, because FFmpeg's is experimental.
+- **TrueHD and AMR**: neither decode nor encode, in any profile.
 - **Decode-only formats.** ProRes, DNxHD, DV, MPEG-2, MPEG-4 Part 2, VC-1, WMV3 and Theora decode in
   the `intermediate` profile but have **no encoder** enabled. A job that names one as
   `video_codec` fails with `process: unknown encoder <name>`.
@@ -161,7 +161,7 @@ people ask about specifically:
 
 ## What the sandbox does not protect against
 
-The WASM module confines a codec bug to the guest's linear memory — a memory-safety failure while
+The WASM module confines a codec bug to the guest's linear memory; a memory-safety failure while
 parsing untrusted media cannot reach the host. Two things it does not do:
 
 - **The native driver is not sandboxed.** It is an ordinary host process; the IPC bridge keeps its
@@ -174,6 +174,6 @@ parsing untrusted media cannot reach the host. Two things it does not do:
 
 ## Related
 
-- [Errors & exit codes](errors.md) — the message for each failure above.
-- [Build options](build-options.md) — the knobs that decide which of these limits apply.
-- [Variants & artifacts](variants.md) — what each profile ships.
+- [Errors & exit codes](errors.md): the message for each failure above.
+- [Build options](build-options.md): the knobs that decide which of these limits apply.
+- [Variants & artifacts](variants.md): what each profile ships.
