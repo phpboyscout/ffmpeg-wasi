@@ -51,7 +51,8 @@ Only on the native driver.
   --disable-runtime-cpudetect`), so there is no SIMD-accelerated inner loop either. That combination
   is what lets it run on [wazero](https://wazero.io/), which has no thread-spawn primitive.
 - **The native driver has real threads and SIMD**, which is the entire reason it exists — the same
-  jobs run 48–58× faster on software encode. See
+  jobs run ~50× (openh264) to ~170× (libx264) faster on software encode — the encoder matters more
+  than the FFmpeg version, and much more than the range suggests ([measured](https://gitlab.com/phpboyscout/afmpeg/-/wikis/reports/2026-08-native-vs-wasm-speed)). See
   [choose a variant](../how-to/choose-a-variant.md#which-runtime).
 
 Setting a `threads` option in `outputs[].options` does not change this on WASM; the encoder has no

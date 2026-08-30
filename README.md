@@ -58,7 +58,8 @@ See [variants & profiles](docs/reference/variants.md).
 drivers (`ffmpeg-wasi-driver-<os>-<arch>-[<profile>-]<variant>`) built with real threads + SIMD.
 Driven out-of-process by [afmpeg](https://gitlab.com/phpboyscout/afmpeg)'s native backend over a
 seekable AVIO-over-IPC bridge — still no host disk, the caller's filesystem is served over the
-socket — they run software encode **48–58× faster** than the sandboxed module, and unlock a third
+socket — they run software encode **~50× faster (openh264) to ~170× (libx264)** than the sandboxed
+module, and unlock a third
 **full** profile with **HEVC (x265)** and **AV1 (SVT-AV1)** encode. Same job-spec vocabulary, same
 signing chain — a drop-in speed tier, not a different API.
 

@@ -39,7 +39,8 @@ the full picture (and why shipping both together is clean).
 - **Native driver** (`ffmpeg-wasi-driver-linux-amd64-<…>`) — the same engine as a native ELF with
   threads + SIMD (spec 0028), driven out-of-process by afmpeg's
   [native backend](https://afmpeg.phpboyscout.uk/how-to/use-the-native-backend/). Reach for it when
-  you are encode- or throughput-bound (**48–58× faster** software encode), or need HEVC/AV1 (the
+  you are encode- or throughput-bound (**~50× faster (openh264) to ~170× (libx264)** software
+  encode), or need HEVC/AV1 (the
   full profile). linux/amd64 only for now.
 
 ## Which profile?

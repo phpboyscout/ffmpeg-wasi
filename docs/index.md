@@ -17,7 +17,8 @@ ffmpeg-wasi builds FFmpeg's `libav*` libraries and drives them with a small purp
 shipping the result as **two runtime targets**: a sandboxed `wasm32-wasi` module that runs media
 pipelines anywhere a WASI runtime does — designed for [wazero](https://wazero.io/), the pure-Go
 runtime, so Go programs can transcode/filter/mux **embedded, CGO-free, and sandboxed** — and a
-**native driver** (real threads + SIMD) that runs the same jobs at **48–58× the software-encode
+**native driver** (real threads + SIMD) that runs the same jobs at **~50× (openh264) to ~170×
+(libx264) the software-encode
 speed**.
 
 It is the **reference server-side FFmpeg for WebAssembly**: *current* (not the EOL build),
@@ -42,7 +43,8 @@ no HEVC or AV1 encode from the `.wasm` module, and a native driver for linux/amd
 
 > **Status: released.** Releases ship current FFmpeg (n9.0.1) as **lgpl** and **gpl** builds, in a
 > **lean** and an **intermediate** profile — both as portable **WASI modules** and as **native
-> drivers** (spec 0028, threads + SIMD, driven by afmpeg's native backend for 48–58× faster software
+> drivers** (spec 0028, threads + SIMD, driven by afmpeg's native backend for ~50× (openh264) to
+> ~170× (libx264) faster software
 > encode). The native driver adds a third **full** profile with HEVC (x265) and AV1 (SVT-AV1) encode.
 > The engine **transcodes** (decode → filter → encode → mux) over a virtual filesystem: the `probe`,
 > `process` (full `filter_complex`), `frames`, and `version` ops all work today. Design: afmpeg

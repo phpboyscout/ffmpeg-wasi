@@ -99,7 +99,7 @@ release (`nX.Y.Z-N`) publishes:
 | `ffmpeg-wasi-gpl.wasm` / `.gz` | the GPL **lean** module (and gzipped) |
 | `ffmpeg-wasi-intermediate-lgpl.wasm` / `.gz` | the LGPL **intermediate** module — lean + subtitles, LGPL encoders, native codec batch, burn-in |
 | `ffmpeg-wasi-intermediate-gpl.wasm` / `.gz` | the GPL **intermediate** module |
-| `ffmpeg-wasi-driver-linux-amd64-{lgpl,gpl}` / `.gz` | the **native Backend-B driver** (linux/amd64), lean profile — threads + SIMD, 48–58× faster software encode; driven by afmpeg's native backend (spec 0028) |
+| `ffmpeg-wasi-driver-linux-amd64-{lgpl,gpl}` / `.gz` | the **native Backend-B driver** (linux/amd64), lean profile — threads + SIMD, ~50× (openh264) to ~170× (libx264) faster software encode ([measured](https://gitlab.com/phpboyscout/afmpeg/-/wikis/reports/2026-08-native-vs-wasm-speed)); driven by afmpeg's native backend (spec 0028) |
 | `ffmpeg-wasi-driver-linux-amd64-intermediate-{lgpl,gpl}` / `.gz` | the native driver, **intermediate** profile — the full software-codec batch at native speed |
 | `ffmpeg-wasi-driver-linux-amd64-full-{lgpl,gpl}` / `.gz` | the native driver, **full** profile — intermediate + AV1 (SVT-AV1) + HEVC (x265, gpl only) |
 | `checksums.txt` | SHA-256 of every artifact (incl. `provenance.json`) — [verify before use](../how-to/choose-a-variant.md) |

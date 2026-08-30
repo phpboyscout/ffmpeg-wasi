@@ -129,7 +129,8 @@ concat demuxer's per-segment opens route over the bridge: `build/ffmpeg-concat-i
 two-line FFmpeg patch applied in `libav.sh`) forwards the demuxer's `io_open` into its sub-contexts,
 so a concat join of afero-only segments never touches host disk either. This is
 ["Backend B"](https://afmpeg.phpboyscout.uk/how-to/use-the-native-backend/): threads + SIMD give
-**48–58× faster software encode**, and the **full** profile adds the HEVC/AV1 encoders that are
+**~50× (openh264) to ~170× (libx264) faster software encode**, and the **full** profile adds the
+HEVC/AV1 encoders that are
 impractical in wasm. The native artifact is `dist/driver`, published as
 `ffmpeg-wasi-driver-linux-amd64-[<profile>-]<variant>` and signed alongside the wasm modules.
 
