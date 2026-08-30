@@ -10,14 +10,14 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 
 Understanding-oriented discussion.
 
-- **[Why libav-direct](why-libav-direct.md)** — the FFmpeg-7.0 threading wall, the EOL trap,
+- **[Why libav-direct](why-libav-direct.md)**: the FFmpeg-7.0 threading wall, the EOL trap,
   and why linking the libraries directly is the way under both. The headline story.
-- **[The licensing model](licensing.md)** — MIT tooling, LGPL/GPL artifacts, and why shipping
+- **[The licensing model](licensing.md)**: MIT tooling, LGPL/GPL artifacts, and why shipping
   both is clean.
-- **[The build](the-build.md)** — wasi-sdk, the single-threaded `libav*` config,
+- **[The build](the-build.md)**: wasi-sdk, the single-threaded `libav*` config,
   setjmp/longjmp lowering, the POSIX/WASI compat shims, and the native driver's seekable
   AVIO-over-IPC bridge.
-- **[Inside the engine](engine-internals.md)** — a maintainer's map of `src/`: what each
+- **[Inside the engine](engine-internals.md)**: a maintainer's map of `src/`: what each
   translation unit does, how a job flows through them, and the wasm/native split.
-- **[Release signing](signing.md)** — the KMS key only the tag pipeline can wield, the detached
+- **[Release signing](signing.md)**: the KMS key only the tag pipeline can wield, the detached
   signature over `checksums.txt`, what it defends, and where the public key lives.

@@ -13,16 +13,16 @@ filters), by [profile](variants.md). This is the container half of the picture;
 [codecs](codecs.md) is the codec half and [filters](filters.md) the filtergraph half.
 
 The build starts from `--disable-everything` and enables an explicit allowlist, so **a format not
-listed here is not present** — the muxer cannot be resolved and the job fails with
+listed here is not present**, the muxer cannot be resolved and the job fails with
 `process: cannot resolve output format`.
 
 ## How a container is chosen
 
 - **Reading.** libavformat probes the input. Set `inputs[].format` to force a demuxer by name
-  instead — required for headerless input such as `rawvideo` or raw PCM, where there is nothing to
+  instead; required for headerless input such as `rawvideo` or raw PCM, where there is nothing to
   probe. See [the job spec](job-spec.md#operations).
 - **Writing.** The muxer is guessed from the output path's extension. Set `outputs[].format` to
-  force one by name — required wherever the extension does not imply it (`hls`, `dash`, `segment`)
+  force one by name; required wherever the extension does not imply it (`hls`, `dash`, `segment`)
   or where you want a different muxer than the extension suggests.
 - **Muxer options** go in `outputs[].format_options`, never in `outputs[].options` (which reaches
   the *encoder*). Segment timing and naming, fragmentation flags and playlist settings are all
@@ -39,7 +39,7 @@ The asymmetry is deliberate: `lean` **reads** Ogg, AAC-in-ADTS, FLAC and raw str
 only the seven muxers above. Writing an `.ogg`, `.aac` or `.flac` file needs the `intermediate`
 profile.
 
-`concat` is the demuxer behind [`inputs[].concat`](job-spec.md#operations) — a stream-copy join of
+`concat` is the demuxer behind [`inputs[].concat`](job-spec.md#operations), a stream-copy join of
 like-codec files. It is present in every profile.
 
 ## Intermediate (+ over lean)
@@ -55,7 +55,7 @@ The native container batch, all in-tree and LGPL-clean, no external library:
 | **Audio containers** | `caf`, `aiff`, `au` | `ogg`, `adts`, `caf`, `aiff`, `au` |
 | **Subtitle sidecars** | `srt`, `ass`, `webvtt` | `srt`, `webvtt`, `ass` |
 
-Fragmented MP4 / CMAF is not a separate muxer — it is the `mp4` muxer driven with
+Fragmented MP4 / CMAF is not a separate muxer. It is the `mp4` muxer driven with
 `format_options: {"movflags": "+frag_keyframe+empty_moov"}`, available in every profile.
 
 ### Segmenting outputs write a set of files
@@ -71,7 +71,7 @@ its result entry rather than listing a single file.
    "format_options":{"hls_time":"4","hls_segment_filename":"seg_%03d.ts","hls_list_size":"0"}}]}
 ```
 
-Nothing is uploaded. HLS and DASH here mean *writing the files*; serving them is the host's job —
+Nothing is uploaded. HLS and DASH here mean *writing the files*; serving them is the host's job;
 the engine has no network ([why](limits.md#can-an-input-or-output-be-a-url)).
 
 ## Full (native)
@@ -82,7 +82,7 @@ The `full` profile adds no containers. Its additions are the heavy HEVC and AV1
 
 ## Bitstream filters
 
-The same four in **every** profile — a stream copy sometimes needs a container-specific rewrite of
+The same four in **every** profile. A stream copy sometimes needs a container-specific rewrite of
 the bitstream even though nothing is decoded:
 
 | BSF | What it does |
@@ -113,13 +113,13 @@ Two, in every profile:
 | `file` | every media path in a job spec, resolved against the mounted filesystem |
 | `pipe` | libav's internal pipe protocol |
 
-`libav*` is built `--disable-network`, so **no network protocol exists** — no `http`, `https`,
+`libav*` is built `--disable-network`, so **no network protocol exists**: no `http`, `https`,
 `rtmp`, `srt`, `rtsp` or `tcp`. A URL is not an openable path; see
 [limits](limits.md#can-an-input-or-output-be-a-url).
 
 ## Related
 
-- [Codecs](codecs.md) — what can be decoded and encoded inside these containers.
-- [The job-spec vocabulary](job-spec.md) — `inputs[].format`, `outputs[].format`,
+- [Codecs](codecs.md): what can be decoded and encoded inside these containers.
+- [The job-spec vocabulary](job-spec.md): `inputs[].format`, `outputs[].format`,
   `format_options` and `bitstream_filters`.
-- [Build options](build-options.md) — where the allowlist above is defined.
+- [Build options](build-options.md): where the allowlist above is defined.

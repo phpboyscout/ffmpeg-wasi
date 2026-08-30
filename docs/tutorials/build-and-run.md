@@ -1,6 +1,6 @@
 ---
 title: Build ffmpeg-wasi and run it
-description: A first end-to-end pass — build the module from source and run current FFmpeg under a pure-Go runtime.
+description: A first end-to-end pass: build the module from source and run current FFmpeg under a pure-Go runtime.
 date: 2026-06-28
 tags: [tutorial]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]
@@ -9,7 +9,7 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 # Build ffmpeg-wasi and run it
 
 In a few minutes you'll build current FFmpeg into a single WebAssembly module and watch it
-run under a **pure-Go** runtime — no native FFmpeg, no CGO, sandboxed. This is the "it really
+run under a **pure-Go** runtime, with no native FFmpeg, no CGO, and a sandbox. This is the "it really
 works" tour.
 
 ## What you need
@@ -22,7 +22,7 @@ works" tour.
   cd ffmpeg-wasi
   ```
 
-## Step 1 — build the module
+## Step 1: build the module
 
 ```sh
 docker build -f build/Dockerfile --build-arg VARIANT=lgpl --target artifact -o dist .
@@ -38,9 +38,9 @@ ls -lh dist/
 
 That single file **is** FFmpeg's media stack, compiled to WebAssembly.
 
-## Step 2 — run it under wazero
+## Step 2: run it under wazero
 
-The repo includes a small [wazero](https://wazero.io/) harness — a *pure-Go* WebAssembly
+The repo includes a small [wazero](https://wazero.io/) harness, a *pure-Go* WebAssembly
 runtime. Run the module through it:
 
 ```sh
@@ -69,7 +69,7 @@ decoders:
 
 ## What just happened
 
-- You compiled **current FFmpeg (n9.0.1)** — not an end-of-life pin — to a portable `.wasm`.
+- You compiled **current FFmpeg (n9.0.1)**, not an end-of-life pin, to a portable `.wasm`.
 - It ran under a **pure-Go runtime**: that harness cross-compiles to a single static binary
   with no CGO and no native FFmpeg anywhere.
 - Everything executed inside the **WebAssembly sandbox**.
@@ -87,6 +87,6 @@ does this for you and bridges the filesystem so you can run media jobs entirely 
 
 !!! tip "Transcoding works today"
     `--report` is just the smoke test. The engine also runs `probe` and the full
-    `filter_complex` `process` op — real decode→filter→encode→mux. From Go, drive it with
+    `filter_complex` `process` op: real decode→filter→encode→mux. From Go, drive it with
     [afmpeg](https://gitlab.com/phpboyscout/afmpeg)'s `RunJob` over an in-memory filesystem;
     the job shapes are in [the job-spec reference](../reference/job-spec.md).

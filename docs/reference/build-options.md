@@ -1,6 +1,6 @@
 ---
 title: Build options
-description: Every knob the build takes — the Docker build arguments, the environment variables the scripts read, the pinned dependency versions, and what happens when one is wrong.
+description: Every knob the build takes: the Docker build arguments, the environment variables the scripts read, the pinned dependency versions, and what happens when one is wrong.
 date: 2026-08-02
 tags: [reference, build]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]
@@ -23,7 +23,7 @@ the same three:
 
 | Argument | Default | Accepted | Effect |
 |---|---|---|---|
-| `VARIANT` | `lgpl` | `lgpl`, `gpl` | `gpl` adds `--enable-gpl` + libx264 (and libx265 in the `full` profile). Sets the artifact's licence — see [licensing](../explanation/licensing.md). |
+| `VARIANT` | `lgpl` | `lgpl`, `gpl` | `gpl` adds `--enable-gpl` + libx264 (and libx265 in the `full` profile). Sets the artifact's licence ; see [licensing](../explanation/licensing.md). |
 | `PROFILE` | `lean` | `lean`, `intermediate`, `full` | The capability class. `full` is **native-only**. |
 | `FFMPEG_VERSION` | *(from `build/ffmpeg-version.txt`)* | any FFmpeg release tag | Which upstream FFmpeg is cloned and built. Unset means the file's value; pass it only to override for a one-off experiment. |
 
@@ -60,7 +60,7 @@ unprefixed name so existing consumers are unaffected:
 | `build/ffmpeg-version.txt` missing or empty | `build/ffmpeg-version.sh` exits `2` |
 
 `VARIANT` is validated in `deps.sh` only. `libav.sh` treats anything other than `gpl` as the LGPL
-path, so a typo reaching `libav.sh` alone would silently build an LGPL artifact — always run
+path, so a typo reaching `libav.sh` alone would silently build an LGPL artifact, so always run
 `deps.sh` first, as both Dockerfiles and CI do.
 
 ## Environment variables the build scripts read
@@ -97,7 +97,7 @@ OUT=dist/ffmpeg-wasi-lgpl.wasm sh build/driver.sh
 |---|---|
 | `just build <variant> <profile>` | The WASM Docker build. Defaults `lgpl lean`. This is the default recipe. |
 | `just run <variant>` | Runs `dist/ffmpeg-wasi-<variant>.wasm` under the bundled wazero harness and prints the capability report. Defaults `lgpl`. |
-| `just lint` | `shellcheck build/*.sh` — the same check CI runs on a merge request. |
+| `just lint` | `shellcheck build/*.sh`, the same check CI runs on a merge request. |
 | `just docs-serve` | Serves this documentation site locally with `zensical serve`. |
 
 `just build` covers `lean` and `intermediate` only. The native driver has no recipe; invoke
@@ -132,8 +132,8 @@ advance it.
 
 ### Tarball digests are pinned alongside the version
 
-The libraries fetched as release tarballs — Opus, LAME, Ogg, Vorbis, WebP, FreeType, HarfBuzz,
-FriBidi and libass — are verified against a **SHA-256 hard-coded in `build/deps.sh`**, so a
+The libraries fetched as release tarballs (Opus, LAME, Ogg, Vorbis, WebP, FreeType, HarfBuzz,
+FriBidi and libass) are verified against a **SHA-256 hard-coded in `build/deps.sh`**, so a
 compromised or altered mirror cannot slip modified source into an artifact. Those digests are *not*
 environment-overridable.
 
@@ -142,7 +142,7 @@ mirror, rejects every download whose digest does not match, and then aborts with
 `fetch: all mirrors failed (or checksum mismatched)`. Bump the version constant and its
 `*_SHA256` constant in the same edit.
 
-The git-cloned libraries — openh264, x264, x265, SVT-AV1, dav1d, zlib and FFmpeg itself — carry no
+The git-cloned libraries (openh264, x264, x265, SVT-AV1, dav1d, zlib and FFmpeg itself) carry no
 digest and are pinned by tag or commit.
 
 ## `build/versions.lock` is a record, not an input
@@ -160,7 +160,7 @@ Treat it as a summary to keep in step, and change the authoritative file as well
 and read by CI, both Dockerfiles and `build/sign-release.sh`. On a release tag the two must agree:
 the tag's version prefix is checked against the file in the `validate` stage and a disagreement
 fails the pipeline before any build starts. So bumping FFmpeg is a merge request against that file
-— and because that merge request builds the whole matrix, the tag rests on evidence rather than on
+and because that merge request builds the whole matrix, the tag rests on evidence rather than on
 the first build ever attempted. See spec 0035.
 
 ## The size-budget gate
@@ -169,10 +169,10 @@ the first build ever attempted. See spec 0035.
 built artifact against its line and prints the result in the `size-budget` CI job on every tag. It
 is a tripwire for a profile ballooning, not a drift alarm, and the ceilings are deliberately
 generous. The job is **advisory** (`allow_failure`) until the ceilings are calibrated against real
-builds — an overage is reported, not enforced.
+builds; an overage is reported, not enforced.
 
 ## Related
 
-- [Build from source](../how-to/build-from-source.md) — the recipes, step by step.
-- [The build](../explanation/the-build.md) — why the toolchain, the shims and the two targets exist.
-- [Variants & artifacts](variants.md) — what each combination produces and how it is published.
+- [Build from source](../how-to/build-from-source.md): the recipes, step by step.
+- [The build](../explanation/the-build.md): why the toolchain, the shims and the two targets exist.
+- [Variants & artifacts](variants.md): what each combination produces and how it is published.

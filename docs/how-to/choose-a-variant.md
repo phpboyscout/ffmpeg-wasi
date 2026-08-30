@@ -24,9 +24,9 @@ graph TD
     B -->|No| L
 ```
 
-- **`ffmpeg-wasi-lgpl.wasm`** — the default. LGPL-2.1+, proprietary-compatible. H.264 encode
+- **`ffmpeg-wasi-lgpl.wasm`**: the default. LGPL-2.1+, proprietary-compatible. H.264 encode
   via openh264 (BSD); everything else in the [baseline](../reference/variants.md).
-- **`ffmpeg-wasi-gpl.wasm`** — LGPL plus `--enable-gpl` + libx264 for best-in-class H.264
+- **`ffmpeg-wasi-gpl.wasm`**: LGPL plus `--enable-gpl` + libx264 for best-in-class H.264
   encoding. The artifact is GPL-2.0+.
 
 When in doubt, start with **LGPL**. See [the licensing model](../explanation/licensing.md) for
@@ -34,9 +34,9 @@ the full picture (and why shipping both together is clean).
 
 ## Which runtime?
 
-- **WASM** (`ffmpeg-wasi-<…>.wasm`) — the default: a sandboxed, portable, arch-independent,
+- **WASM** (`ffmpeg-wasi-<…>.wasm`): the default: a sandboxed, portable, arch-independent,
   single-threaded module. Run it anywhere via [afmpeg](https://afmpeg.phpboyscout.uk) + wazero.
-- **Native driver** (`ffmpeg-wasi-driver-linux-amd64-<…>`) — the same engine as a native ELF with
+- **Native driver** (`ffmpeg-wasi-driver-linux-amd64-<…>`): the same engine as a native ELF with
   threads + SIMD (spec 0028), driven out-of-process by afmpeg's
   [native backend](https://afmpeg.phpboyscout.uk/how-to/use-the-native-backend/). Reach for it when
   you are encode- or throughput-bound (**~50× faster (openh264) to ~170× (libx264)** software
@@ -47,20 +47,20 @@ the full picture (and why shipping both together is clean).
 
 Each build comes in a capability profile (spec [0022](https://afmpeg.phpboyscout.uk/development/specs/0022-build-size-matrix/)):
 
-- **lean** (default, `ffmpeg-wasi-<variant>.wasm`) — web-delivery essentials at the smallest size.
-- **intermediate** (`ffmpeg-wasi-intermediate-<variant>.wasm`) — lean **+ every practical software
+- **lean** (default, `ffmpeg-wasi-<variant>.wasm`): web-delivery essentials at the smallest size.
+- **intermediate** (`ffmpeg-wasi-intermediate-<variant>.wasm`): lean **+ every practical software
   codec/format/filter**: the LGPL encoders (Opus/MP3/Vorbis/VP8-9/WebP), the native codec and
   container batches, and text/subtitle burn-in. Larger, but no separate build.
-- **full** (`ffmpeg-wasi-driver-linux-amd64-full-<variant>`) — intermediate **+ the heavy
+- **full** (`ffmpeg-wasi-driver-linux-amd64-full-<variant>`): intermediate **+ the heavy
   encoders**: AV1 (SVT-AV1, both variants) and HEVC (x265, **gpl only**). These need threads/SIMD, so
-  full is **native-only** — there is no WASM full module.
+  full is **native-only**: there is no WASM full module.
 
 Start with **lean**; reach for **intermediate** when you need a codec, container, or filter it
-doesn't carry, and **full** (native) for HEVC/AV1 encode — see the
+doesn't carry, and **full** (native) for HEVC/AV1 encode; see the
 [capability tables](../reference/variants.md#profiles-capability-classes).
 
 !!! warning "H.264 and AVC patents"
-    Both variants encode H.264, and both are self-compiled — so neither rides under Cisco's
+    Both variants encode H.264, and both are self-compiled, so neither rides under Cisco's
     openh264 binary patent grant. We ship encode under the AVC pool's royalty-free volume tier and
     will pull it on request; the obligation sunsets when the last AVC essential patent expires
     (2027-11-29 in the U.S.). Full detail in

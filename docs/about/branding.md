@@ -18,7 +18,7 @@ marks share the wider phpboyscout palette so the projects read as one family.
 ffmpeg-wasi's logo is a **split theatrical mask** threaded with faint circuit
 tracings. The mask is the point: ffmpeg-wasi isn't FFmpeg, it's a custom
 interface built straight over the `libav*` libraries that *masquerades* as
-FFmpeg. Its two halves — amber and petrol-teal — stand for its two backends,
+FFmpeg. Its two halves, amber and petrol-teal, stand for its two backends,
 WASM and native, behind one face.
 
 ---
@@ -27,7 +27,7 @@ WASM and native, behind one face.
 
 ### Vector (recommended)
 
-Scales indefinitely without quality loss — use it for the web, print and
+Scales indefinitely without quality loss, so use it for the web, print and
 high-resolution displays.
 
 - [Transparent (logo_transparent.svg)](../images/branding/logo_transparent.svg)
