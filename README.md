@@ -1,14 +1,14 @@
 # ffmpeg-wasi
 
-**Current FFmpeg, as a sandboxed WebAssembly module — for the server, not the browser.**
+**Current FFmpeg, as a sandboxed WebAssembly module, for the server and not the browser.**
 
 `ffmpeg-wasi` builds FFmpeg's media libraries (`libav*`) to `wasm32-wasi` and drives
 them with a small purpose-built engine, producing a single `.wasm` artifact that runs
-media pipelines **anywhere a WASI runtime does** — with no native FFmpeg install, no C
+media pipelines **anywhere a WASI runtime does**, with no native FFmpeg install, no C
 toolchain at deploy time, and no shelling out to a binary.
 
 It is designed to run under [**wazero**](https://wazero.io/), the zero-dependency,
-**pure-Go** WebAssembly runtime — so a Go program can transcode, filter, and mux media
+**pure-Go** WebAssembly runtime, so a Go program can transcode, filter, and mux media
 **embedded, CGO-free, and sandboxed**, cross-compiling to a single static binary.
 
 ## Why this exists
@@ -17,15 +17,15 @@ Every other "FFmpeg in WebAssembly" project hits the same two walls. We went und
 
 - **It's not the browser one.** The well-known `ffmpeg.wasm` is an *emscripten* build for
   the browser. `ffmpeg-wasi` is the opposite end: a **WASI** build for servers, edge, and
-  embedded Go — a different runtime, a different target, a different job.
+  embedded Go. A different runtime, a different target, a different job.
 - **It's current.** The WASI-capable builds we found when this started pinned **FFmpeg
-  5.1**, which no longer gets security backports — for a library whose entire job is
+  5.1**, which no longer gets security backports. For a library whose entire job is
   parsing untrusted media, that is the wall that matters. `ffmpeg-wasi` tracks current
   FFmpeg, and `build/ffmpeg-version.txt` is the single place that says which.
 - **It went under the threading wall.** FFmpeg 7.0+ rewrote its *command-line tool* to be
   multithreaded, which pure-Go runtimes can't run (no `wasi-threads` thread-spawn). So
-  instead of the CLI, **we link the libraries directly** — the libraries build
-  single-threaded with no trouble — and drive them with our own engine. That is what makes
+  instead of the CLI, **we link the libraries directly** (they build
+  single-threaded with no trouble) and drive them with our own engine. That is what makes
   *current* FFmpeg work CGO-free, and it is why this repository carries an engine at all
   rather than a build script.
 
@@ -33,48 +33,48 @@ What comes out is a `.wasm` module and a native ELF driver built from the same e
 source, both tracking current FFmpeg, both runnable from a Go program with no CGO.
 
 > **Status: it transcodes.** Current FFmpeg (n9.0.1) compiles to `wasm32-wasi` and runs
-> under wazero, and the engine does **real in-memory transcodes** — verified end-to-end:
+> under wazero, and the engine does **real in-memory transcodes**, verified end-to-end:
 > WAV → AAC, and H.264 → scaled → H.264 (libx264, GPL variant). `probe`, `process`, `frames`,
-> and `version` all work — `process` includes the full **multi-input `filter_complex`** (N
+> and `version` all work. `process` includes the full **multi-input `filter_complex`** (N
 > inputs → one graph) and **multi-output muxing** (each graph pad routed by `map` to its own
 > output file). Design:
 > [spec 0007](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
 
 ## What you get
 
-Every release ships the engine as **two runtime targets** — a portable **WASI module** and a
-**native driver** — in two licence **variants**, so you **pick the licence and the runtime that fit
+Every release ships the engine as **two runtime targets** (a portable **WASI module** and a
+**native driver**) in two licence **variants**, so you **pick the licence and the runtime that fit
 and skip building**:
 
 | Variant | Licence | H.264 encode | For |
 |---|---|---|---|
-| **`ffmpeg-wasi-lgpl.wasm`** | LGPL-2.1+ | openh264 (BSD) | the default — proprietary-compatible |
+| **`ffmpeg-wasi-lgpl.wasm`** | LGPL-2.1+ | openh264 (BSD) | the default, and proprietary-compatible |
 | **`ffmpeg-wasi-gpl.wasm`** | GPL-2.0+ | libx264 (best quality) | when you want x264 and accept GPL |
 
 **Profiles.** The **lean** profile above is web-delivery essentials at the smallest size; the
 **intermediate** profile (`ffmpeg-wasi-intermediate-<variant>.wasm`) adds every practical software
-codec/filter — the LGPL encoders, the native codec/container batches, and text/subtitle burn-in.
+codec/filter: the LGPL encoders, the native codec/container batches, and text/subtitle burn-in.
 See [variants & profiles](docs/reference/variants.md).
 
 **Native drivers (spec 0028).** Alongside the `.wasm` modules, each release publishes native ELF
 drivers (`ffmpeg-wasi-driver-<os>-<arch>-[<profile>-]<variant>`) built with real threads + SIMD.
 Driven out-of-process by [afmpeg](https://gitlab.com/phpboyscout/afmpeg)'s native backend over a
-seekable AVIO-over-IPC bridge — still no host disk, the caller's filesystem is served over the
-socket — they run software encode **~50× faster (openh264) to ~170× (libx264)** than the sandboxed
+seekable AVIO-over-IPC bridge. Still no host disk: the caller's filesystem is served over the
+socket, and they run software encode **~50× faster (openh264) to ~170× (libx264)** than the sandboxed
 module, and unlock a third
 **full** profile with **HEVC (x265)** and **AV1 (SVT-AV1)** encode. Same job-spec vocabulary, same
-signing chain — a drop-in speed tier, not a different API.
+signing chain. A drop-in speed tier, not a different API.
 
 Plus a checksum manifest (`checksums.txt`), a **detached OpenPGP signature** over it
-(`checksums.txt.sig` — KMS-held key, signable only by this project's tag pipeline via GitLab OIDC, verified
+(`checksums.txt.sig`, from a KMS-held key signable only by this project's tag pipeline via GitLab OIDC, verified
 offline by afmpeg), and a provenance manifest (the exact FFmpeg version, build tag, and commit,
-plus a per-variant record) — covering **every asset, the native drivers included**. Pin by URL +
+plus a per-variant record), covering **every asset, the native drivers included**. Pin by URL +
 SHA-256. Both variants encode H.264; the self-compiled openh264 in the
-LGPL variant carries an AVC **patent** caveat — see [licensing](docs/explanation/licensing.md#h264-encode-and-the-avc-patent-pool).
+LGPL variant carries an AVC **patent** caveat. See [licensing](docs/explanation/licensing.md#h264-encode-and-the-avc-patent-pool).
 
 ## Quick start (consuming it from Go)
 
-With [afmpeg](https://gitlab.com/phpboyscout/afmpeg) — the pure-Go binding that runs this
+With [afmpeg](https://gitlab.com/phpboyscout/afmpeg), the pure-Go binding that runs this
 module over an in-memory filesystem:
 
 ```go
@@ -89,16 +89,16 @@ rt, _ := afmpeg.New(ctx, afmpeg.WithModuleURL(
 The LGPL module encodes H.264 via openh264; swap `lgpl` → `gpl` for libx264 instead. Every release
 lists each asset's URL + SHA-256.)
 
-## Licensing — clean, and yours to choose
+## Licensing, and how to choose
 
-- **This repository's source — the build tooling and the engine (`src/driver.c`) — is
+- **This repository's source (the build tooling and the engine, `src/driver.c`) is
   [MIT](LICENSE).** It *orchestrates* the build and links nothing GPL, so it stays MIT and
   is yours to reuse.
 - **The released `.wasm` artifacts** carry the licence their contents demand: the **LGPL**
   variant (default libav\*) and the **GPL** variant (with libx264). Shipping both in one
-  release is mere aggregation — neither affects the other, nor this MIT source.
+  release is mere aggregation: neither affects the other, nor this MIT source.
 - Corresponding source for every release is the pinned upstream FFmpeg/x264/openh264 plus this
-  public repository — anyone can rebuild or relink.
+  public repository, so anyone can rebuild or relink.
 
 FFmpeg is a trademark of its respective owners; this project builds and redistributes
 FFmpeg's libraries and is not affiliated with the FFmpeg project.
