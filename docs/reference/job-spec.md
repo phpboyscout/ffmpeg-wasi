@@ -1,6 +1,6 @@
 ---
 title: The job-spec vocabulary
-description: The structured operations the engine accepts — process, probe, frames, and version — the compatibility contract with afmpeg.
+description: The structured operations the engine accepts (process, probe, frames, and version), the compatibility contract with afmpeg.
 date: 2026-06-28
 tags: [reference, api]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]
@@ -16,7 +16,7 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
 !!! note "Status"
     **`probe`, `process`, `frames`, and `version` all run today.** `process` supports **multiple inputs, the full
-    `filter_complex`, and multiple output files** — pad labels (`[0:v]`, `[1:a]`, … →
+    `filter_complex`, and multiple output files**: pad labels (`[0:v]`, `[1:a]`, … →
     `[vout]`, `[aout]`) parsed by `avfilter_graph_parse2`; each graph output pad is routed by
     `map` to the `outputs[]` entry that names it, encoded (video pads with `video_codec`,
     audio pads with `audio_codec`) and muxed into that file. With no `filter`, a passthrough
@@ -25,7 +25,7 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
 ## Operations
 
-### `process` — transcode / filter / mux
+### `process`: transcode / filter / mux
 
 ```jsonc
 {
@@ -45,27 +45,27 @@ it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
 | Field | Meaning |
 |---|---|
-| `version` | The job-spec **vocabulary version** the spec is written in (integer; absent == 0, the pre-gate baseline). The engine rejects a spec whose `version` exceeds what it supports — see [Versioning](#versioning). |
-| `progress` | *(v9)* Top-level opt-in. `true` makes the engine emit best-effort NDJSON progress records to `/dev/afmpeg-progress` as it muxes (see [the note below](#progress-side-channel)). Purely additive — absent/`false` behaves exactly as before. |
+| `version` | The job-spec **vocabulary version** the spec is written in (integer; absent == 0, the pre-gate baseline). The engine rejects a spec whose `version` exceeds what it supports See [Versioning](#versioning). |
+| `progress` | *(v9)* Top-level opt-in. `true` makes the engine emit best-effort NDJSON progress records to `/dev/afmpeg-progress` as it muxes (see [the note below](#progress-side-channel)). Purely additive Absent or `false` behaves exactly as before. |
 | `inputs[]` | Each input's path (resolved against the mounted filesystem) + demuxer options. |
 | `inputs[].concat` | *(v2)* An array of like-codec file paths joined into one continuous input via the **concat demuxer** (a stream-copy join; distinct from the `concat` filter, which re-encodes). When set, replaces `path`. |
-| `inputs[].seek` | *(v3)* `{"start": seconds, "mode": "fast"}` — or `"mode": "accurate"`. Starts the input at a point instead of decoding from the beginning. **fast** (default) seeks the demuxer to the keyframe at-or-before `start`; **accurate** additionally decodes-and-discards to the exact frame. Accurate cannot feed a copied stream (a copy cuts on keyframes) — that is a hard error. |
+| `inputs[].seek` | *(v3)* `{"start": seconds, "mode": "fast"}`, or `"mode": "accurate"`. Starts the input at a point instead of decoding from the beginning. **fast** (default) seeks the demuxer to the keyframe at-or-before `start`; **accurate** additionally decodes-and-discards to the exact frame. Accurate cannot feed a copied stream (a copy cuts on keyframes) , and that is a hard error. |
 | `inputs[].format` | *(v4)* Force the demuxer by name (e.g. `"rawvideo"`, `"s16le"`, `"mp4"`) instead of auto-probing. Required for headerless/raw inputs. |
-| `inputs[].options` | *(v4)* Demuxer options passed as an AVDictionary — raw geometry rides here (`{"video_size":"1280x720","pixel_format":"yuv420p","framerate":"25"}` for rawvideo; `{"sample_rate":"48000","ch_layout":"mono"}` for PCM). An unconsumed key is a typed error. |
-| `filter` | The full ffmpeg `filter_complex` string — `[0:v]scale=…[vout];[1:a]…[aout]`. Optional (passthrough graph for input 0 if omitted). |
+| `inputs[].options` | *(v4)* Demuxer options passed as an AVDictionary; raw geometry rides here (`{"video_size":"1280x720","pixel_format":"yuv420p","framerate":"25"}` for rawvideo; `{"sample_rate":"48000","ch_layout":"mono"}` for PCM). An unconsumed key is a typed error. |
+| `filter` | The full ffmpeg `filter_complex` string, `[0:v]scale=…[vout];[1:a]…[aout]`. Optional (passthrough graph for input 0 if omitted). |
 | `outputs[]` | One **output file** each. With a single output, `map` may be omitted (every graph pad is muxed into it); with **multiple outputs, each must set `map`** to claim its pads. |
-| `outputs[].map` | What to mux into this file — either graph output pad labels (bracketed, `["[loud]"]`, encoded) **or** *(v2)* input-stream specifiers (unbracketed: `"0:v"`, `"0:a:0"`, `"0:0"`, **stream-copied**). Graph input pads accept the same indexed form — `[0:v:1]` in a `filter` selects the second video stream *(v4)*. |
-| `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). *(v2)* The sentinel **`"copy"`** stream-copies the mapped input stream — no decode/encode, needs no codec, works for any codec in either variant. The output container is chosen from the path extension. |
-| `outputs[].options` | String key/values offered to **every encoder this output opens** — so on an output with both `video_codec` and `audio_codec`, a video-only option like `crf` is offered to the audio encoder too and refused there. Use it for what both genuinely share (`threads`, `flags`), and *(v10)* the per-kind maps below for the rest. An option no encoder consumes is an **error**, not a warning — the same rule as `inputs[].options`, and for the same reason: an option that is silently dropped produces a file built to settings you did not ask for. |
-| `outputs[].video_options` / `audio_options` / `subtitle_options` | *(v10)* Options offered only to that kind's encoder, winning over `options` on a key collision. An output names at most one encoder per kind, so this is as precise as the codec selection itself. Note the check is a **name** check: every encoder inherits the generic `AVCodecContext` option table, so a video-only *generic* option (`g`, `bf`, `refs`) set on an audio encoder is accepted and silently does nothing — these maps are what stops that, not the check. |
+| `outputs[].map` | What to mux into this file: either graph output pad labels (bracketed, `["[loud]"]`, encoded) **or** *(v2)* input-stream specifiers (unbracketed: `"0:v"`, `"0:a:0"`, `"0:0"`, **stream-copied**). Graph input pads accept the same indexed form : `[0:v:1]` in a `filter` selects the second video stream *(v4)*. |
+| `outputs[].video_codec` / `audio_codec` | The encoder for that media type, by name (e.g. `libx264`, `aac`). *(v2)* The sentinel **`"copy"`** stream-copies the mapped input stream : no decode/encode, no codec needed, and it works for any codec in either variant. The output container is chosen from the path extension. |
+| `outputs[].options` | String key/values offered to **every encoder this output opens**, so on an output with both `video_codec` and `audio_codec`, a video-only option like `crf` is offered to the audio encoder too and refused there. Use it for what both genuinely share (`threads`, `flags`), and *(v10)* the per-kind maps below for the rest. An option no encoder consumes is an **error**, not a warning , the same rule as `inputs[].options`, and for the same reason: an option that is silently dropped produces a file built to settings you did not ask for. |
+| `outputs[].video_options` / `audio_options` / `subtitle_options` | *(v10)* Options offered only to that kind's encoder, winning over `options` on a key collision. An output names at most one encoder per kind, so this is as precise as the codec selection itself. Note the check is a **name** check: every encoder inherits the generic `AVCodecContext` option table, so a video-only *generic* option (`g`, `bf`, `refs`) set on an audio encoder is accepted and silently does nothing . These maps are what stops that, not the check. |
 | `outputs[].format` | *(v5)* Force the **muxer** by name (`"hls"`, `"dash"`, `"segment"`, `"mpegts"`, …) instead of guessing from the path extension. |
-| `outputs[].format_options` | *(v5)* Options passed to the **muxer** (write_header) — segment timing/naming (`hls_time`, `hls_segment_filename`), fragmentation (`movflags`), etc. Distinct from `options` (the encoder). |
+| `outputs[].format_options` | *(v5)* Options passed to the **muxer** (write_header): segment timing/naming (`hls_time`, `hls_segment_filename`), fragmentation (`movflags`), etc. Distinct from `options` (the encoder). |
 | `outputs[].bitstream_filters` | *(v2)* Per copied stream, keyed by its `map` entry: a bitstream-filter name/chain (e.g. `{"0:v":"h264_mp4toannexb"}`), or `"none"` to force-disable. Absent → the muxer auto-inserts any container-required filter. |
 | `outputs[].duration` / `outputs[].end` | *(v3)* Stop the output after `duration` seconds (`-t`) or at position `end` (`-to`). **Mutually exclusive.** On the default zero-based timeline the two coincide; under `copy_ts`, `end` is an absolute source position. |
-| `outputs[].copy_ts` | *(v3)* `true` preserves source timestamps. Default `false` zero-bases the output — a fast-seeked clip starts at the keyframe actually landed on, an accurate one at the requested start. |
+| `outputs[].copy_ts` | *(v3)* `true` preserves source timestamps. Default `false` zero-bases the output; a fast-seeked clip starts at the keyframe actually landed on, an accurate one at the requested start. |
 
 A job is bounded: **32 inputs, 8 outputs, 32 graph input pads, 16 graph output pads, 32 stream
-copies and 16 subtitle streams**, all per job rather than per output. Crossing one fails the job —
+copies and 16 subtitle streams**, all per job rather than per output. Crossing one fails the job,
 see [limits](limits.md#how-many-inputs-outputs-and-streams-can-one-job-have).
 
 Working examples (verified end-to-end):
@@ -152,8 +152,8 @@ Working examples (verified end-to-end):
 **Subtitle streams (spec 0019).** `outputs[].subtitle_codec` transcodes a subtitle track named in
 `map` by an `N:s` specifier (e.g. `srt`, `webvtt`, `mov_text`, `ass`), or `"copy"` to remux it
 unchanged. An output may carry `subtitle_codec` alone (a sidecar `.srt`/`.vtt`) or beside video +
-audio (an embedded track). Subtitles ride their own decode→encode lane — they do not traverse the
-`filter` graph — so they are mapped by stream specifier, never a graph-pad label.
+audio (an embedded track). Subtitles ride their own decode→encode lane and do not traverse the
+`filter` graph, so they are mapped by stream specifier, never a graph-pad label.
 
 **Metadata (spec 0020).** `outputs[].metadata` is a `{key:value}` tag map set on the output
 container; `outputs[].chapters` is a passthrough directive (`"copy"` carries the first input's
@@ -170,7 +170,7 @@ On success the engine prints what it wrote, one entry per output file, e.g.
 
 If the graph ran an **analysis filter** (`cropdetect`, `blackdetect`, `silencedetect`, `ebur128`,
 `signalstats`, `astats`, …), the reply also carries an **`analysis`** array of the `lavfi.*`
-measurements those filters attach to frames — objects of `{ "t": <seconds>, "key": <name>, "value":
+measurements those filters attach to frames: objects of `{ "t": <seconds>, "key": <name>, "value":
 <string> }`, consecutive-deduplicated per key (spec 0017 §Q). It is omitted when no analysis filter
 ran. (`ebur128`/`astats` need their `metadata=1` option to populate it.) afmpeg surfaces it as
 `ProcessResult.Analysis`.
@@ -188,12 +188,12 @@ record at completion:
 
 `frame` counts muxed video packets, `out_time_us` is the furthest output timestamp reached,
 `total_size` the bytes muxed so far, and `duration_us` the job's target media duration (0 when
-unknown). The device is served by afmpeg's virtual filesystem — afmpeg's own runtime parses each
+unknown). The device is served by afmpeg's virtual filesystem, and afmpeg's own runtime parses each
 line and surfaces it on the `WithProgress` channel (afmpeg spec 0031 phase B). It is purely
 additive and opt-in: if the device is absent or `progress` is unset, every emit is a no-op and the
 encode is never blocked, slowed, or failed by progress I/O.
 
-### `probe` — report stream information
+### `probe`: report stream information
 
 ```jsonc
 { "op": "probe", "inputs": [ { "path": "in/clip.mp4" } ] }
@@ -210,10 +210,10 @@ WAV yields:
 
 Since **v7** (spec 0020) the reply additionally carries, where present, the container's `tags`
 object and `chapters` array (`start`/`end` in seconds + `title`), and on each stream its
-`language`, decoded `disposition` flag names, and `tags` — all additive, so an older consumer
+`language`, decoded `disposition` flag names, and `tags`, all additive, so an older consumer
 ignores them.
 
-### `frames` — extract still frames
+### `frames`: extract still frames
 
 ```jsonc
 {
@@ -232,11 +232,11 @@ ignores them.
 }
 ```
 
-Pulls one or more stills from a video to templated image files (afmpeg spec 0021) — the
+Pulls one or more stills from a video to templated image files (afmpeg spec 0021). The
 bread-and-butter "poster at 5s / thumbnail strip / contact sheet" chore as typed fields rather
 than an `fps`/`select` graph into an `image2` muxer. The seeking selectors (`timestamp` /
 `timestamps` / `interval`) fast-seek to the keyframe at-or-before each target and decode forward
-to the first frame ≥ target — cheap, not a full-stream decode; `scene` stream-decodes through
+to the first frame ≥ target: cheap, and not a full-stream decode; `scene` stream-decodes through
 the `select='gt(scene,T)'` or `thumbnail` filter (which need the **intermediate** profile). Each
 frame is optionally scaled, encoded, and written; the engine owns the naming and reports each:
 
@@ -246,23 +246,23 @@ frame is optionally scaled, encoded, and written; the engine owns the naming and
 
 `select` is a one-of (zero or multiple is rejected). `codec` defaults to `png`; `png` and `mjpeg`
 are in every profile, `webp` needs the **intermediate** profile. `path` must contain **zero or one**
-integer conversion — `%s`, `%n` and any other conversion are refused outright, and a token-less path
+integer conversion; `%s`, `%n` and any other conversion are refused outright, and a token-less path
 is only valid for a single frame.
 
 **The frame count is bounded twice.** `count` caps how many frames are emitted; with `count` absent
 it defaults to **1000**, so an uncapped `interval` over a long input cannot run away. Independently,
-the selector's target list is capped at **4096** timestamps, which `count` cannot raise — a
+the selector's target list is capped at **4096** timestamps, which `count` cannot raise, and a
 finer-grained `interval` simply stops there. The `scene` selector streams rather than seeking, so
 `count` is its only bound. See [limits](limits.md#how-many-frames-can-one-frames-job-emit).
 
-### `version` — report the vocabulary version
+### `version`: report the vocabulary version
 
 ```jsonc
 { "op": "version" }
 ```
 
 Prints the engine's highest supported vocabulary version + its FFmpeg build as JSON on
-stdout — the machine-readable channel a consumer preflights before running jobs. Needs no
+stdout, the machine-readable channel a consumer preflights before running jobs. Needs no
 input, so it works before any media is mounted:
 
 ```json
@@ -281,9 +281,9 @@ existing filtergraph knowledge transfers directly. Structured fields surround th
 
 ## Transport
 
-The spec is passed to the engine as **`argv[1]` — one argument, the whole JSON document**. There is
+The spec is passed to the engine as **`argv[1]`, one argument carrying the whole JSON document**. There is
 no other channel: the engine does not read a spec from a file, from stdin, or from an environment
-variable. Results — the probe JSON, or the process status — come back on stdout; errors on stderr
+variable. Results (the probe JSON, or the process status) come back on stdout; errors on stderr
 with a non-zero exit code. Only the media named *inside* the spec crosses afmpeg's filesystem
 bridge.
 
@@ -292,8 +292,8 @@ messages are in [errors & exit codes](errors.md).
 
 ## Versioning
 
-The vocabulary carries a **version** that increments additively — once per landed vocabulary
-spec, in merge order — so a new field never has to be guessed at by an older engine:
+The vocabulary carries a **version** that increments additively, once per landed vocabulary
+spec in merge order, so a new field never has to be guessed at by an older engine:
 
 | Version | Adds |
 |---|---|
@@ -302,24 +302,24 @@ spec, in merge order — so a new field never has to be guessed at by an older e
 | 2 | Stream copy / bitstream filters / concat demuxer (afmpeg spec 0013): the `copy` codec sentinel, unbracketed `in:type[:idx]` map specifiers, `outputs[].bitstream_filters`, `inputs[].concat`. |
 | 3 | Seeking & time ranges (afmpeg spec 0014): `inputs[].seek {start, mode}`, `outputs[].duration` \| `end` (mutually exclusive), `outputs[].copy_ts`. Probe replies gain `start_sec`. |
 | 4 | Input options & formats (afmpeg spec 0024): `inputs[].format` (forced demuxer), `inputs[].options` (demuxer dict, incl. raw geometry), and `N:v:K` indexed graph-input stream selection. |
-| 5 | Container coverage (afmpeg spec 0015): `outputs[].format` (forced muxer), `outputs[].format_options` (muxer dict — segmenting/fragmentation); a `segmented` result marker. The container (de)muxer batch itself is a build-profile matter (intermediate), not a vocabulary one. |
-| 6 | Frame extraction (afmpeg spec 0021): the new `op:"frames"` — pull stills by `select` with one of `timestamp` \| `timestamps` \| `interval` \| `scene`, to a templated `path`, with optional `codec`/`scale`/`count`. |
+| 5 | Container coverage (afmpeg spec 0015): `outputs[].format` (forced muxer), `outputs[].format_options` (muxer dict for segmenting/fragmentation); a `segmented` result marker. The container (de)muxer batch itself is a build-profile matter (intermediate), not a vocabulary one. |
+| 6 | Frame extraction (afmpeg spec 0021): the new `op:"frames"`: pull stills by `select` with one of `timestamp` \| `timestamps` \| `interval` \| `scene`, to a templated `path`, with optional `codec`/`scale`/`count`. |
 | 7 | Metadata & chapters (afmpeg spec 0020): `outputs[].metadata` (container tags), `outputs[].chapters` (`"copy"`/index passthrough), `outputs[].stream_metadata` (per-map `language`/`disposition`/`tags`). Probe replies gain container `tags`/`chapters` and per-stream `tags`/`disposition`/`language` (additive). |
-| 8 | Subtitle streams (afmpeg spec 0019): `outputs[].subtitle_codec` (an encoder name or `"copy"`) + `N:s` subtitle map specifiers — extract/convert/copy subtitle tracks (the subtitle transcode lane). |
-| 9 | Progress side-channel (afmpeg spec 0031 phase B / spec 0032): top-level `"progress":true` on a `process` job emits NDJSON `{frame,out_time_us,total_size,duration_us}` records to `/dev/afmpeg-progress` as it muxes. Opt-in and additive — absent/`false` behaves exactly as v8. |
-| 10 | Per-encoder option maps (afmpeg spec 0045): `outputs[].video_options` / `audio_options` / `subtitle_options`, each reaching only its own encoder and winning over `outputs[].options` on a key collision. The subtitle encoder becomes configurable at all — it was opened with a NULL dictionary, so options addressed to it were dropped before libav saw them and the strict check could not fire. `options` keeps its v9 meaning, so a v9 spec runs unchanged. |
+| 8 | Subtitle streams (afmpeg spec 0019): `outputs[].subtitle_codec` (an encoder name or `"copy"`) + `N:s` subtitle map specifiers , to extract, convert or copy subtitle tracks (the subtitle transcode lane). |
+| 9 | Progress side-channel (afmpeg spec 0031 phase B / spec 0032): top-level `"progress":true` on a `process` job emits NDJSON `{frame,out_time_us,total_size,duration_us}` records to `/dev/afmpeg-progress` as it muxes. Opt-in and additive Absent or `false` behaves exactly as v8. |
+| 10 | Per-encoder option maps (afmpeg spec 0045): `outputs[].video_options` / `audio_options` / `subtitle_options`, each reaching only its own encoder and winning over `outputs[].options` on a key collision. The subtitle encoder becomes configurable at all : it was opened with a NULL dictionary, so options addressed to it were dropped before libav saw them and the strict check could not fire. `options` keeps its v9 meaning, so a v9 spec runs unchanged. |
 
 **The gate (two sides):**
 
 - **Engine (runtime).** Every `process`/`probe` spec is stamped by the consumer with the
   `version` it was written in. If that exceeds the engine's `AFMPEG_VOCAB_VERSION`, the engine
-  rejects the whole spec — stderr message + a **distinct exit code `3`** (`version-too-new`, so a
-  caller can tell "upgrade the engine" from the malformed-spec code `2`) — rather than silently
+  rejects the whole spec: a stderr message plus a **distinct exit code `3`** (`version-too-new`, so a
+  caller can tell "upgrade the engine" from the malformed-spec code `2`), rather than silently
   dropping the fields it doesn't understand.
 - **Consumer (preflight).** afmpeg reads `op:"version"` once at construction and fails loudly if
   the module is a gated engine older than the vocabulary it emits, turning a would-be silent
   field-drop at first job into a clear startup error. A module that doesn't answer `op:"version"`
-  (a pre-gate engine, or a generic non-ffmpeg-wasi module) is tolerated — it carries no
+  (a pre-gate engine, or a generic non-ffmpeg-wasi module) is tolerated, since it carries no
   vocabulary contract to check.
 
 The engine's current version is in the `--report` output and via `op:"version"`.
