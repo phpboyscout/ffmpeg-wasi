@@ -143,6 +143,24 @@ ffmpeg-version:
   # never gets a second one.
   interruptible: true
   timeout: 2h
+  # A worker that disappears is not a build failure. The AWS fleet is 100% spot
+  # (infra main.tf: on_demand_base_capacity = 0) and its instances are also cycled
+  # by fleet updates, so a long compile can lose its runner mid-job and come back
+  # as `runner_system_failure` — with `ssh tunnel: EOF` or
+  # `EC2InstanceStateInvalidException` in the trace and nothing wrong with the
+  # code. GitLab distinguishes that class from a real failure, so recovering from
+  # it automatically costs nothing and never masks a genuine one.
+  #
+  # These jobs are the most exposed in the estate: an FFmpeg compile runs 3-15
+  # minutes, an order of magnitude more wall clock in which to be reclaimed than a
+  # ten-second lint. On 2026-08-24 the n9.0.1-3 release pipeline lost 6 of 10
+  # builds this way, one of them 579s into an x265 build, and each needed a human
+  # to press retry.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
   before_script:
     # curl + xz-utils + meson/ninja are needed by the intermediate profile (its
     # external libs are fetched tarballs; harfbuzz/fribidi are meson builds). They
@@ -213,6 +231,24 @@ build:gpl:intermediate:
   resource_group: "$CI_PROJECT_PATH_SLUG-engine-build"
   interruptible: true
   timeout: 2h
+  # A worker that disappears is not a build failure. The AWS fleet is 100% spot
+  # (infra main.tf: on_demand_base_capacity = 0) and its instances are also cycled
+  # by fleet updates, so a long compile can lose its runner mid-job and come back
+  # as `runner_system_failure` — with `ssh tunnel: EOF` or
+  # `EC2InstanceStateInvalidException` in the trace and nothing wrong with the
+  # code. GitLab distinguishes that class from a real failure, so recovering from
+  # it automatically costs nothing and never masks a genuine one.
+  #
+  # These jobs are the most exposed in the estate: an FFmpeg compile runs 3-15
+  # minutes, an order of magnitude more wall clock in which to be reclaimed than a
+  # ten-second lint. On 2026-08-24 the n9.0.1-3 release pipeline lost 6 of 10
+  # builds this way, one of them 579s into an x265 build, and each needed a human
+  # to press retry.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
   variables:
     TARGET: native
     PROFILE: lean
