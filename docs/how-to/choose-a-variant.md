@@ -89,13 +89,13 @@ the URL **and** the SHA-256 so an unexpected artifact is rejected:
 
 ```go
 rt, _ := afmpeg.New(ctx, afmpeg.WithModuleURL(
-    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n9.0.1-1/ffmpeg-wasi-lgpl.wasm",
-    afmpeg.WithSHA256("0c4bf74a01317f9c2aa8e76033b3a7f22f6ba7821adbe37fab031ba64873fa5a"),
+    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n9.0.1-3/ffmpeg-wasi-lgpl.wasm",
+    afmpeg.WithSHA256("5378b7d1f60591b6a4d92182ea576c309c1c8c95135b8aa9dcb1e1a9f47b1f3c"),
 ))
 ```
 
 Each [release](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases) lists every asset's URL
-and `checksums.txt`. For `n9.0.1-1` the GPL module's SHA-256 is
-`6120d22490a73cf97e03510f998e65f7e6f11bef44383d144676fb42681c0627`. For exactly what went into
+and `checksums.txt`. For `n9.0.1-3` the GPL module's SHA-256 is
+`87f44ca7e94f29e949b2f4a567e455d8d042c33e2811291a1b2c5a63c2ae0ecc`. For exactly what went into
 a build (FFmpeg version, build tag, commit, and per-variant licence/encoder/profile), read its
 `provenance.json`.

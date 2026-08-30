@@ -18,17 +18,19 @@ Every other "FFmpeg in WebAssembly" project hits the same two walls. We went und
 - **It's not the browser one.** The well-known `ffmpeg.wasm` is an *emscripten* build for
   the browser. `ffmpeg-wasi` is the opposite end: a **WASI** build for servers, edge, and
   embedded Go — a different runtime, a different target, a different job.
-- **It's current, not EOL.** The existing WASI-capable build pins **FFmpeg 5.1**, which is
-  **end-of-life** — no security backports for a library whose entire job is parsing
-  untrusted media. `ffmpeg-wasi` tracks **current, maintained FFmpeg**.
+- **It's current.** The WASI-capable builds we found when this started pinned **FFmpeg
+  5.1**, which no longer gets security backports — for a library whose entire job is
+  parsing untrusted media, that is the wall that matters. `ffmpeg-wasi` tracks current
+  FFmpeg, and `build/ffmpeg-version.txt` is the single place that says which.
 - **It went under the threading wall.** FFmpeg 7.0+ rewrote its *command-line tool* to be
   multithreaded, which pure-Go runtimes can't run (no `wasi-threads` thread-spawn). So
   instead of the CLI, **we link the libraries directly** — the libraries build
-  single-threaded with no trouble — and drive them with our own engine. That's the trick
-  nobody else has done, and it's what makes *current* FFmpeg work CGO-free.
+  single-threaded with no trouble — and drive them with our own engine. That is what makes
+  *current* FFmpeg work CGO-free, and it is why this repository carries an engine at all
+  rather than a build script.
 
-The result: the **reference server-side FFmpeg for WebAssembly** — current, sandboxed,
-pure-Go-embeddable.
+What comes out is a `.wasm` module and a native ELF driver built from the same engine
+source, both tracking current FFmpeg, both runnable from a Go program with no CGO.
 
 > **Status: it transcodes.** Current FFmpeg (n9.0.1) compiles to `wasm32-wasi` and runs
 > under wazero, and the engine does **real in-memory transcodes** — verified end-to-end:
@@ -77,13 +79,13 @@ module over an in-memory filesystem:
 
 ```go
 rt, _ := afmpeg.New(ctx, afmpeg.WithModuleURL(
-    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n9.0.1-1/ffmpeg-wasi-lgpl.wasm",
-    afmpeg.WithSHA256("0c4bf74a01317f9c2aa8e76033b3a7f22f6ba7821adbe37fab031ba64873fa5a"),
+    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n9.0.1-3/ffmpeg-wasi-lgpl.wasm",
+    afmpeg.WithSHA256("5378b7d1f60591b6a4d92182ea576c309c1c8c95135b8aa9dcb1e1a9f47b1f3c"),
 ))
 // ... run a media job entirely in memory ...
 ```
 
-(That's the LGPL module from [`n9.0.1-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-1).
+(That's the LGPL module from [`n9.0.1-3`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-3).
 The LGPL module encodes H.264 via openh264; swap `lgpl` → `gpl` for libx264 instead. Every release
 lists each asset's URL + SHA-256.)
 

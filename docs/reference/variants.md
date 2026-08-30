@@ -90,7 +90,7 @@ record. `--report` is a smoke test that probes a fixed handful of names, not an 
 ## Release artifacts
 
 Releases are published [here](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases); the
-latest is [`n9.0.1-1`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-1). Each
+latest is [`n9.0.1-3`](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-3). Each
 release (`nX.Y.Z-N`) publishes:
 
 | Asset | What |
