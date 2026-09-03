@@ -277,35 +277,25 @@ sign:
       aud: sts.amazonaws.com
   variables:
     AWS_REGION: eu-west-2
-    AWS_ROLE_ARN: arn:aws:iam::049815585546:role/ffmpeg-wasi-release-signing-v1-signer
+    AWS_ROLE_ARN: arn:aws:iam::060730976733:role/ffmpeg-wasi-release-signing-v2-signer
     AWS_ROLE_SESSION_NAME: ffmpeg-wasi-release-${CI_COMMIT_TAG}
     # A job variable, not a before_script export — GitLab runs each script line
     # in its own shell, so exports don't persist (gtb's aws-kms backend reads
     # this path + AWS_ROLE_ARN to assume the role via web-identity).
     AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/oidc-token
-    SIGNING_KEY_ALIAS: alias/ffmpeg-wasi-release-signing-v1
+    # v2 (prod account) is the sole signer since the 2026-07-24 rotation's
+    # dual-sign window closed. v1 lived in the old account 049815585546,
+    # being closed; afmpeg keeps its public key so older releases verify.
+    SIGNING_KEY_ALIAS: alias/ffmpeg-wasi-release-signing-v2
     # The OpenPGP UID + creation time are FIXED so every mint reproduces the same
-    # key fingerprint (710881C1DDAEABD138E53004A2166E59EB6060E1) — the one afmpeg
-    # pins. Changing any of these rotates the key.
+    # key fingerprint (4C96ECB35C7446619FF78EB1ED1344E576B7BBBF) — the one afmpeg
+    # >= v0.12.0 pins. Changing any of these rotates the key.
     SIGNING_KEY_NAME: ffmpeg-wasi Release Signing
-    SIGNING_KEY_EMAIL: ffmpeg-wasi-release@phpboyscout.uk
-    SIGNING_KEY_CREATED: "2026-06-30T00:00:00Z"
-    # --- Dual-sign overlap window (2026-07-24 key rotation) -----------
-    # Secondary v2 key in the new prod account; build/sign-release.sh
-    # merges its signature into the same checksums.txt.sig via `gtb sign
-    # --append`, so shipped afmpeg builds (trusting only v1) and new
-    # builds (trusting v1+v2) both verify. The v2 email/created pin
-    # reproduces fingerprint 4C96ECB35C7446619FF78EB1ED1344E576B7BBBF —
-    # the one afmpeg >= v0.12.0 pins. DELETE these four variables to
-    # close the window (see infra spec 2026-07-24-prod-rebuild-and-rekey
-    # D2a/D5 — the old account may only be closed after the window).
-    SIGNING_KEY_ALIAS_2: alias/ffmpeg-wasi-release-signing-v2
-    SIGNING_KEY_EMAIL_2: ffmpeg-wasi-release-v2@phpboyscout.uk
-    SIGNING_KEY_CREATED_2: "2026-07-24T11:43:51Z"
-    AWS_ROLE_ARN_2: arn:aws:iam::060730976733:role/ffmpeg-wasi-release-signing-v2-signer
+    SIGNING_KEY_EMAIL: ffmpeg-wasi-release-v2@phpboyscout.uk
+    SIGNING_KEY_CREATED: "2026-07-24T11:43:51Z"
     # The >= below is a floor, not a ceiling — a Renovate bump above it is safe.
     # renovate: datasource=gitlab-tags depName=phpboyscout/go-tool-base
-    GTB_VERSION: v0.40.0 # >= v0.33.0 for `gtb sign --append` (dual-sign window)
+    GTB_VERSION: v0.40.0
     GOPRIVATE: gitlab.com/phpboyscout/*
   before_script:
     # Install gtb from the private module registry (CI-token git auth), then

@@ -16,7 +16,7 @@ set -eu
 
 : "${CI_COMMIT_TAG:?set CI_COMMIT_TAG, e.g. n8.1.2-4}"
 : "${CI_COMMIT_SHA:?set CI_COMMIT_SHA}"
-: "${SIGNING_KEY_ALIAS:?set SIGNING_KEY_ALIAS, e.g. alias/ffmpeg-wasi-release-signing-v1}"
+: "${SIGNING_KEY_ALIAS:?set SIGNING_KEY_ALIAS, e.g. alias/ffmpeg-wasi-release-signing-v2}"
 : "${AWS_REGION:?set AWS_REGION}"
 # The OpenPGP UID + creation time are FIXED so every mint reproduces the same key
 # fingerprint — the one afmpeg pins. Do not change without rotating the pinned key.
