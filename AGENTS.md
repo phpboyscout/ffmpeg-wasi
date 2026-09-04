@@ -105,6 +105,11 @@ survived it.
   one thing that cuts a release.
 - Never cut a release yourself. That is the maintainer's call, every time.
 - No AI attribution in anything published, and never at-mention anyone.
+- The build matrix lives in `build/engine.gitlab-ci.yml`, included by
+  `.gitlab-ci.yml`. It is a separate file so `changes:` can name it: editing the
+  release, signing or pages jobs must not rebuild ten FFmpeg artifacts. Keep the
+  name ending in `.gitlab-ci.yml` — Renovate's gitlabci manager matches on that,
+  and it is what keeps the build images tracked.
 - The build matrix is serialised behind one project-scoped `resource_group`, a
   deliberate trade for the shared runners explained at the top of
   `.gitlab-ci.yml`. Do not remove it to make a release faster.

@@ -158,9 +158,17 @@ FFmpeg version that no merge request ever built (spec 0035).
 
 ## What CI proves, and when
 
-A merge request that touches `build/**`, `src/**` or `.gitlab-ci.yml` builds the **whole**
-ten-artifact matrix, so an engine change is reviewed against artifacts rather than against a
-description of them. Everything else (a docs edit, a dependency bump) runs only the fast checks.
+A merge request that touches `build/**` or `src/**` builds the **whole** ten-artifact matrix, so an
+engine change is reviewed against artifacts rather than against a description of them. Everything
+else (a docs edit, a dependency bump, a change to the release or signing jobs) runs only the fast
+checks.
+
+The build matrix lives in `build/engine.gitlab-ci.yml` rather than in `.gitlab-ci.yml`, and that is
+what makes the sentence above true. `changes:` works on whole files, so while the ten jobs sat in
+the root pipeline file, every edit to it rebuilt everything: over the 21 days to 2026-09-03, 54% of
+this project's merge-request minutes went to merge requests that touched no engine file at all. A
+merge request that rewires the build still rebuilds, because the file it must edit is under
+`build/`.
 
 Those builds share one project-scoped `resource_group`, so at most one engine compile runs at a
 time. A full matrix therefore takes roughly 95 minutes of wall clock rather than the ~17 it would

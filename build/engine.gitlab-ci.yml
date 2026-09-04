@@ -1,0 +1,226 @@
+# ffmpeg-wasi — the engine build matrix.
+#
+# Split out of `.gitlab-ci.yml` on 2026-09-04 so that `changes:` can name it
+# precisely. These ten jobs compile FFmpeg and cost ~95 minutes of runner time
+# per full matrix, so what triggers them matters as much as what they do; the
+# rest of the pipeline (release, signing, pages, notify) can change without
+# paying for a rebuild. See `.engine-build-rules` below.
+#
+# Included by `.gitlab-ci.yml`. Everything the build stage does lives here.
+#
+# The name ends in `.gitlab-ci.yml` on purpose: Renovate's gitlabci manager
+# matches `\.gitlab-ci\.ya?ml$`, so the wasi-sdk and debian image tags below
+# stay tracked here exactly as they were in the root file. A name like
+# `ci-engine.yml` would have orphaned them silently.
+
+# The rules every engine build job shares (spec 0035 D1/D2). A tag builds the
+# matrix as it always has; a merge request builds it too, but only when it touched
+# something that can change the artifact. Rules short-circuit on first match, so a
+# tag matches the first entry and each job still runs exactly once.
+#
+# `build/**` covers this file, so a merge request that rewires the build still
+# builds — that is why the engine jobs live here rather than in `.gitlab-ci.yml`.
+# Listing `.gitlab-ci.yml` instead, as this rule did until 2026-09-04, made every
+# CI-only change build the whole matrix: measured over the 21 days to 2026-09-03,
+# 1,115 of this project's 2,052 merge-request minutes (54%) went to merge requests
+# that touched no engine file at all — component-pin bumps, an image unpin, a
+# retry-rule edit, a docs pass.
+#
+# A hidden job rather than a YAML anchor: anchors are per-file and do not survive
+# `include:`, and `size-budget` in `.gitlab-ci.yml` shares these rules.
+.engine-build-rules:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        paths:
+          - build/**/*
+          - src/**/*
+
+.build:
+  stage: build
+  image: ghcr.io/webassembly/wasi-sdk:wasi-sdk-30
+  # Only FFmpeg-version tags (e.g. n8.1.2-1) build artifacts; repo-meta tags like
+  # 0.1.0 do not trigger an FFmpeg build. Plus engine-touching merge requests.
+  extends: .engine-build-rules
+  # At most one engine compile at a time, project-scoped (spec 0035 D7).
+  resource_group: "$CI_PROJECT_PATH_SLUG-engine-build"
+  # A superseded merge-request pipeline must release that group rather than hold
+  # it building an artifact nobody will read (spec 0035 D8). Safe on tags: GitLab
+  # only auto-cancels a pipeline superseded on the same ref, and a release tag
+  # never gets a second one.
+  interruptible: true
+  timeout: 2h
+  # A worker that disappears is not a build failure. The AWS fleet is 100% spot
+  # (infra main.tf: on_demand_base_capacity = 0) and its instances are also cycled
+  # by fleet updates, so a long compile can lose its runner mid-job and come back
+  # as `runner_system_failure` — with `ssh tunnel: EOF` or
+  # `EC2InstanceStateInvalidException` in the trace and nothing wrong with the
+  # code. GitLab distinguishes that class from a real failure, so recovering from
+  # it automatically costs nothing and never masks a genuine one.
+  #
+  # These jobs are the most exposed in the estate: an FFmpeg compile runs 3-15
+  # minutes, an order of magnitude more wall clock in which to be reclaimed than a
+  # ten-second lint. On 2026-08-24 the n9.0.1-3 release pipeline lost 6 of 10
+  # builds this way, one of them 579s into an x265 build, and each needed a human
+  # to press retry.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  before_script:
+    # curl + xz-utils + meson/ninja are needed by the intermediate profile (its
+    # external libs are fetched tarballs; harfbuzz/fribidi are meson builds). They
+    # are harmless for the lean profile, which uses neither.
+    - apt-get update && apt-get install -y --no-install-recommends git make pkg-config gzip ca-certificates curl xz-utils meson ninja-build && rm -rf /var/lib/apt/lists/*
+  script:
+    # build/ffmpeg-version.txt is the source of truth and the `ffmpeg-version` job
+    # has already reconciled it with any tag (spec 0035 D3). Assign then export as
+    # two statements so a failure here is not masked by export's exit status.
+    - FFMPEG_VERSION="$(sh build/ffmpeg-version.sh)"
+    - export FFMPEG_VERSION
+    # Artifact name: lean keeps the legacy ffmpeg-wasi-<variant>.wasm; a non-lean
+    # profile carries the profile in the name (spec 0022). PROFILE reaches deps.sh
+    # and libav.sh via the environment (a GitLab job variable), defaulting to lean.
+    - 'if [ "${PROFILE:-lean}" = lean ]; then NAME="ffmpeg-wasi-${VARIANT}"; else NAME="ffmpeg-wasi-${PROFILE}-${VARIANT}"; fi'
+    - echo "Building ${NAME} for FFmpeg ${FFMPEG_VERSION}"
+    - sh build/deps.sh
+    - sh build/libav.sh
+    - mkdir -p dist
+    - OUT="dist/${NAME}.wasm" sh build/driver.sh
+    - cp "dist/${NAME}.wasm" "${NAME}.wasm"
+    - gzip -k -9 "${NAME}.wasm"
+  artifacts:
+    paths:
+      - "ffmpeg-wasi-*.wasm*"
+    expire_in: 1 week
+
+build:lgpl:
+  extends: .build
+  variables:
+    VARIANT: lgpl
+
+build:gpl:
+  extends: .build
+  variables:
+    VARIANT: gpl
+
+# The intermediate profile (spec 0022): lean + every practical software codec/
+# filter (subtitles, LGPL encoders, native codec batch, burn-in). Published
+# alongside lean so a consumer gets the full advertised capability.
+build:lgpl:intermediate:
+  extends: .build
+  variables:
+    VARIANT: lgpl
+    PROFILE: intermediate
+
+build:gpl:intermediate:
+  extends: .build
+  variables:
+    VARIANT: gpl
+    PROFILE: intermediate
+
+# The native Backend-B drivers (spec 0028): our libav-direct engine compiled to a
+# native ELF (linux/amd64) with threads + SIMD via TARGET=native — published and
+# signed alongside the wasm modules, so a consumer can fetch a *certified* native
+# driver (afmpeg native.WithNativeRelease) for ~50x (openh264) to ~170x (libx264)
+# faster software encode -- the encoder moves it far more than the FFmpeg version
+# does; see the 2026-08 re-measurement report on afmpeg's wiki. It
+# runs the same build scripts as the wasm jobs, in a native toolchain image, in
+# three capability profiles: lean (H.264 encode + the native baseline),
+# intermediate (lean + the native Opus/MP3/Vorbis/WebP/VP8-9 + subtitle/burn-in
+# batch — parity with the wasm intermediate module), and full (intermediate + the
+# heavy native-only encoders x265/HEVC (gpl) + SVT-AV1 (both); HW-accel deferred).
+.build-native:
+  stage: build
+  image: debian:bookworm-slim
+  extends: .engine-build-rules
+  # Same group as the wasm builds — one engine compile at a time across both
+  # targets, not one per target (spec 0035 D7).
+  resource_group: "$CI_PROJECT_PATH_SLUG-engine-build"
+  interruptible: true
+  timeout: 2h
+  # A worker that disappears is not a build failure. The AWS fleet is 100% spot
+  # (infra main.tf: on_demand_base_capacity = 0) and its instances are also cycled
+  # by fleet updates, so a long compile can lose its runner mid-job and come back
+  # as `runner_system_failure` — with `ssh tunnel: EOF` or
+  # `EC2InstanceStateInvalidException` in the trace and nothing wrong with the
+  # code. GitLab distinguishes that class from a real failure, so recovering from
+  # it automatically costs nothing and never masks a genuine one.
+  #
+  # These jobs are the most exposed in the estate: an FFmpeg compile runs 3-15
+  # minutes, an order of magnitude more wall clock in which to be reclaimed than a
+  # ten-second lint. On 2026-08-24 the n9.0.1-3 release pipeline lost 6 of 10
+  # builds this way, one of them 579s into an x265 build, and each needed a human
+  # to press retry.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  variables:
+    TARGET: native
+    PROFILE: lean
+  before_script:
+    # curl/xz-utils/meson/ninja-build are the intermediate dep toolchain, cmake the
+    # full one (x265/SVT-AV1); harmless for lean. Mirrors the native Dockerfile.
+    - apt-get update && apt-get install -y --no-install-recommends git make cmake pkg-config gzip ca-certificates build-essential nasm zlib1g-dev curl xz-utils meson ninja-build && rm -rf /var/lib/apt/lists/*
+  script:
+    # See the wasm .build note — assign, then export, so the guard can fail.
+    - FFMPEG_VERSION="$(sh build/ffmpeg-version.sh)"
+    - export FFMPEG_VERSION
+    # Lean keeps the platform-only name; other profiles carry the profile before
+    # the variant, mirroring the wasm intermediate naming (spec 0022 parity).
+    - 'if [ "${PROFILE:-lean}" = lean ]; then NAME="ffmpeg-wasi-driver-linux-amd64-${VARIANT}"; else NAME="ffmpeg-wasi-driver-linux-amd64-${PROFILE}-${VARIANT}"; fi'
+    - echo "Building ${NAME} for FFmpeg ${FFMPEG_VERSION}"
+    - sh build/deps.sh
+    - sh build/libav.sh
+    - mkdir -p dist
+    - OUT="dist/${NAME}" sh build/driver.sh
+    - cp "dist/${NAME}" "${NAME}"
+    - gzip -k -9 "${NAME}"
+  artifacts:
+    paths:
+      - "ffmpeg-wasi-driver-*"
+    expire_in: 1 week
+
+build:native:lgpl:
+  extends: .build-native
+  variables:
+    VARIANT: lgpl
+
+build:native:gpl:
+  extends: .build-native
+  variables:
+    VARIANT: gpl
+
+# Native intermediate: the full software-codec batch compiled native (threads +
+# SIMD). Same driver, wider codec reach — Opus/MP3/Vorbis/WebP/VP8-9 + subtitles
+# at native speed. Published as ffmpeg-wasi-driver-linux-amd64-intermediate-<variant>.
+build:native:lgpl:intermediate:
+  extends: .build-native
+  variables:
+    VARIANT: lgpl
+    PROFILE: intermediate
+
+build:native:gpl:intermediate:
+  extends: .build-native
+  variables:
+    VARIANT: gpl
+    PROFILE: intermediate
+
+# Native full: intermediate + the heavy native-only encoders (spec 0023) — SVT-AV1
+# (both variants) + x265/HEVC (gpl only). Published as
+# ffmpeg-wasi-driver-linux-amd64-full-<variant>.
+build:native:lgpl:full:
+  extends: .build-native
+  variables:
+    VARIANT: lgpl
+    PROFILE: full
+
+build:native:gpl:full:
+  extends: .build-native
+  variables:
+    VARIANT: gpl
+    PROFILE: full
