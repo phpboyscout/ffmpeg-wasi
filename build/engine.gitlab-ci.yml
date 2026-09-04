@@ -31,11 +31,44 @@
 .engine-build-rules:
   rules:
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+    - if: '$FULL_MATRIX == "1"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         paths:
           - build/**/*
           - src/**/*
+
+# The heavier half of the matrix: the intermediate and full profiles, which are
+# 93% of the build minutes a merge request spends (1,753 of 1,878 measured over
+# the 21 days to 2026-09-03) and are the whole reason a full matrix is ~95
+# minutes rather than ~14.
+#
+# They build on a release tag, on demand, and on a merge request that changes
+# something able to alter what a non-lean profile CONTAINS — the dependency
+# builder, the component allowlist, the FFmpeg configure step, the pinned
+# dependency versions, the FFmpeg version itself, the patches applied to it, the
+# toolchain, or this file. A change to the driver or its sources cannot add or
+# drop a codec, and the lean pair already proves it compiles and links.
+#
+# What that trades: a break specific to x265, SVT-AV1 or the intermediate codec
+# batch, introduced by a change outside this list, would not be seen until the
+# release tag. Run the matrix by hand before tagging if that worries you for a
+# given change: `FULL_MATRIX=1` on a pipeline run builds everything, on any
+# branch or merge request.
+.heavy-build-rules: &heavy-build-rules
+  - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
+  - if: '$FULL_MATRIX == "1"'
+  - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    changes:
+      paths:
+        - build/deps.sh
+        - build/enable-lists.sh
+        - build/libav.sh
+        - build/toolchain.sh
+        - build/versions.lock
+        - build/ffmpeg-version.txt
+        - build/*.patch
+        - build/engine.gitlab-ci.yml
 
 .build:
   stage: build
@@ -111,12 +144,14 @@ build:gpl:
 # alongside lean so a consumer gets the full advertised capability.
 build:lgpl:intermediate:
   extends: .build
+  rules: *heavy-build-rules
   variables:
     VARIANT: lgpl
     PROFILE: intermediate
 
 build:gpl:intermediate:
   extends: .build
+  rules: *heavy-build-rules
   variables:
     VARIANT: gpl
     PROFILE: intermediate
@@ -200,12 +235,14 @@ build:native:gpl:
 # at native speed. Published as ffmpeg-wasi-driver-linux-amd64-intermediate-<variant>.
 build:native:lgpl:intermediate:
   extends: .build-native
+  rules: *heavy-build-rules
   variables:
     VARIANT: lgpl
     PROFILE: intermediate
 
 build:native:gpl:intermediate:
   extends: .build-native
+  rules: *heavy-build-rules
   variables:
     VARIANT: gpl
     PROFILE: intermediate
@@ -215,12 +252,14 @@ build:native:gpl:intermediate:
 # ffmpeg-wasi-driver-linux-amd64-full-<variant>.
 build:native:lgpl:full:
   extends: .build-native
+  rules: *heavy-build-rules
   variables:
     VARIANT: lgpl
     PROFILE: full
 
 build:native:gpl:full:
   extends: .build-native
+  rules: *heavy-build-rules
   variables:
     VARIANT: gpl
     PROFILE: full

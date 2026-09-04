@@ -158,8 +158,12 @@ FFmpeg version that no merge request ever built (spec 0035).
 
 ## What CI proves, and when
 
-A merge request that touches `build/**` or `src/**` builds the **whole** ten-artifact matrix, so an
-engine change is reviewed against artifacts rather than against a description of them. Everything
+A merge request that touches `build/**` or `src/**` builds the **lean** pair for each target — four
+artifacts, about 14 minutes — which is what proves the engine still compiles and links. The
+intermediate and full profiles, 93% of the build time, build on a release tag, when a merge request
+changes something that can alter what a non-lean profile contains (the dependency builder, the
+component allowlist, the configure step, the pinned versions, the FFmpeg version, its patches, the
+toolchain, or the engine pipeline file), or on demand with `FULL_MATRIX=1`. Everything
 else (a docs edit, a dependency bump, a change to the release or signing jobs) runs only the fast
 checks.
 
