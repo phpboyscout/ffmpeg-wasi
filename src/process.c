@@ -60,6 +60,10 @@ typedef struct {
     // decoder has nowhere to go. That is an ordinary end of stream for this pad,
     // not a failure of the job (ffmpeg-wasi#11).
     int closed;
+    // The time base this pad's buffersrc was DECLARED with. Decoded frames carry
+    // timestamps in the demuxer's packet time base, which is not always the same
+    // thing, so push_frame rescales into this. See add_buffersrc.
+    AVRational src_tb;
 } GIn;
 
 // One output file: its muxer, codecs, options, and the graph pad labels it takes.
@@ -371,6 +375,7 @@ static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int 
         bufsrc = avfilter_get_by_name("buffer");
         AVRational fr = c->in[in_idx]->streams[st]->avg_frame_rate;
         if (!fr.num) fr = c->in[in_idx]->streams[st]->r_frame_rate;
+        g->src_tb = g->dec->pkt_timebase;
         snprintf(args, sizeof(args),
                  "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d:frame_rate=%d/%d",
                  g->dec->width, g->dec->height, g->dec->pix_fmt,
@@ -388,6 +393,17 @@ static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int 
         char lay[64];
         av_channel_layout_describe(&chl, lay, sizeof(lay));
         av_channel_layout_uninit(&chl);
+        // 1/sample_rate, deliberately, and NOT the demuxer's packet time base the
+        // video branch uses. Audio needs sample resolution: opus in webm carries
+        // 1/1000, where a 1024-sample frame is 21.33 ticks, so consecutive frames
+        // round onto the same millisecond and the muxer refuses the duplicate dts.
+        //
+        // The frames arriving here are in the PACKET time base, though, so
+        // push_frame rescales them into this one. Declaring the rate without
+        // converting is what made every audio timestamp wrong by
+        // pkt_timebase.den/sample_rate -- 320x too large for mp3-in-mp3
+        // (1/14112000), 48x too small for opus-in-webm.
+        g->src_tb = (AVRational){1, g->dec->sample_rate};
         snprintf(args, sizeof(args),
                  "time_base=1/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
                  g->dec->sample_rate, g->dec->sample_rate,
@@ -843,6 +859,22 @@ static int push_frame(Ctx *c, int gi, AVFrame *frame) {
     if (g->closed) {           // the graph stopped taking frames from this pad
         av_frame_unref(frame);
         return 0;
+    }
+
+    // A decoded frame's timestamp is in the DEMUXER's time base; the buffersrc was
+    // declared with g->src_tb. For video those are the same value and this is a
+    // no-op, but audio declares 1/sample_rate for resolution, so the two differ
+    // whenever the container does not count in samples -- which is most of them.
+    // Without this the graph reads every audio timestamp at the wrong scale.
+    {
+        AVRational ftb = g->dec->pkt_timebase;
+        if (ftb.num > 0 && ftb.den > 0 && g->src_tb.num > 0 && g->src_tb.den > 0 &&
+            av_cmp_q(ftb, g->src_tb) != 0) {
+            if (frame->pts != AV_NOPTS_VALUE)
+                frame->pts = av_rescale_q(frame->pts, ftb, g->src_tb);
+            if (frame->duration > 0)
+                frame->duration = av_rescale_q(frame->duration, ftb, g->src_tb);
+        }
     }
 
     ret = av_buffersrc_add_frame_flags(g->src, frame, AV_BUFFERSRC_FLAG_KEEP_REF);

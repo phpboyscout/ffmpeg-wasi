@@ -569,3 +569,65 @@ func TestWebMMuxesWithoutStalling(t *testing.T) {
 		})
 	}
 }
+
+// TestProcessKeepsAudioFromAContainerThatCountsInMilliseconds is the regression
+// for ffmpeg-wasi's audio timestamps being read at the wrong scale.
+//
+// A decoded frame's timestamp is in the DEMUXER's time base. The audio buffersrc
+// is deliberately declared at 1/sample_rate — audio needs sample resolution, and
+// a 1024-sample frame is 21.33 ticks of Matroska's 1/1000, so consecutive frames
+// would round onto the same millisecond and the muxer would refuse the duplicate
+// dts. Declaring the finer rate without CONVERTING into it is what was wrong: the
+// graph read every timestamp at pkt_timebase.den/sample_rate of its true value.
+//
+// The WAV fixture cannot catch this, and that is exactly why it survived: a WAV
+// counts in samples, so the two time bases coincide and the bug is invisible.
+// Matroska counts in milliseconds, so this remuxes the fixture through it first
+// and then windows the result — 48000/1000 = 48x too small, which collapsed the
+// timestamps. mp3-in-mp3 (1/14112000) went 320x the other way and cut the audio
+// to three frames while leaving the video untouched.
+//
+// The window matters: `duration` is what turns a wrong timestamp into a lost
+// stream, because a sink is marked finished as soon as a frame claims to have
+// passed it.
+func TestProcessKeepsAudioFromAContainerThatCountsInMilliseconds(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+			ws := mediaWorkspace(t, a)
+
+			// Step one: the same 2s of audio, in a container whose time base is
+			// 1/1000 rather than 1/48000.
+			runJob(t, ws, a, map[string]any{
+				"op":     "process",
+				"inputs": []any{map[string]any{"path": ws.Path("in.wav")}},
+				"outputs": []any{map[string]any{
+					"path": ws.Path("ms.mkv"), "audio_codec": "flac",
+				}},
+			})
+
+			// Step two: window it. adelay is in the graph because it is the filter
+			// a coarse time base breaks first, and because delaying a clip onto a
+			// timeline is the ordinary reason to have several audio tracks at all.
+			const window = 1.5
+			runJob(t, ws, a, map[string]any{
+				"op":     "process",
+				"inputs": []any{map[string]any{"path": ws.Path("ms.mkv")}},
+				"filter": "[0:a]adelay=100|100,volume=1.000[aout]",
+				"outputs": []any{map[string]any{
+					"path": ws.Path("windowed.mkv"), "map": []any{"[aout]"},
+					"audio_codec": "flac", "duration": window,
+				}},
+			})
+
+			in := probe(t, ws, a, ws.Path("windowed.mkv")).Inputs[0]
+			if len(in.Streams) != 1 {
+				t.Fatalf("%s: the windowed output has %d streams, want 1", a, len(in.Streams))
+			}
+			// The whole window, not a fraction of it. Before the fix this was
+			// roughly window/48 — an output that reported success and carried
+			// almost no audio.
+			wantDuration(t, a, "the windowed audio duration", in.DurationSec, window)
+		})
+	}
+}
