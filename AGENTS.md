@@ -16,8 +16,10 @@ binding that executes the module this repo produces. The pairing is real but is
 not a Go module dependency in either direction, so neither `go.mod` shows it and
 a change here can break afmpeg quietly.
 
-It has no phpboyscout toolkit dependencies, and its `justfile` defines `lint`
-but no aggregate `ci` target, unlike most Go repos here.
+It has no phpboyscout toolkit dependencies. `just ci` runs what the pipeline
+gates on — shellcheck over `build/*.sh`, the FFmpeg version resolution, and the
+test suite — and deliberately nothing more, so a green run predicts a green
+pipeline rather than merely suggesting one.
 
 It does not ship the `ffmpeg` command line, and will not grow one: FFmpeg 7.0+
 made the CLI multithreaded and a pure-Go WASI runtime cannot spawn threads, so
