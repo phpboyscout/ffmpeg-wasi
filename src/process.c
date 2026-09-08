@@ -153,6 +153,10 @@ typedef struct {
     int out_idx;
     char label[64]; // the graph pad label, for per-stream metadata routing (0020)
     int done;       // the output window is satisfied; stop pulling (ffmpeg-wasi#19)
+    // Where the next audio frame belongs if the sink hands one over with no
+    // timestamp, in the sink's time base. Runs on from each frame's pts plus its
+    // sample count. See pull_sinks.
+    int64_t next_pts;
 } GOut;
 
 typedef struct {
@@ -552,6 +556,7 @@ static int add_buffersink(Ctx *c, AVFilterInOut *pad) {
     GOut *go = &c->gout[c->n_gout];
     go->type = type;
     go->out_idx = out_idx;
+    go->next_pts = 0; // the output timeline's origin, until a frame moves it on
     snprintf(go->label, sizeof(go->label), "%s", pad->name ? pad->name : ""); // for 0020 routing
     const AVFilter *bufsink = avfilter_get_by_name(type == AVMEDIA_TYPE_VIDEO ? "buffersink" : "abuffersink");
     char nm[32];
@@ -896,6 +901,32 @@ static int pull_sinks(Ctx *c) {
             if (ret == AVERROR_EOF) { c->gout[i].done = 1; ret = 0; break; }
             if (ret == AVERROR(EAGAIN)) { ret = 0; break; }
             if (ret < 0) goto done;
+
+            // A filter may hand over an audio frame with no timestamp at all,
+            // and amix does: padding a shorter input to `duration=longest`
+            // produces a tail of frames whose pts is AV_NOPTS_VALUE, one per
+            // 1024 samples for the length of the longest adelay. Passed on as-is
+            // they reach the muxer naked, and mp4 answers "Encoder did not
+            // produce proper pts, making some up" -- so the tail of the file is
+            // timed by the muxer's guess rather than by the graph
+            // (ffmpeg-wasi#66).
+            //
+            // Continue the timeline instead, which is what fftools does with its
+            // own next_pts (ffmpeg_filter.c). Audio only: every frame is exactly
+            // nb_samples long, so the next position is arithmetic rather than a
+            // guess. Video has no such invariant, and upstream reconstructs it
+            // there from frame-rate machinery this engine does not have.
+            //
+            // It goes ahead of the window check below because that check reads a
+            // pts: an untimed frame skipped it, so `duration` never cut this tail
+            // off and a bounded mix ran to its full length.
+            if (c->gout[i].type == AVMEDIA_TYPE_AUDIO) {
+                if (f->pts == AV_NOPTS_VALUE) f->pts = c->gout[i].next_pts;
+                int rate = av_buffersink_get_sample_rate(c->gout[i].sink);
+                c->gout[i].next_pts =
+                    ts_add(f->pts, rate > 0 ? av_rescale_q(f->nb_samples, (AVRational){1, rate}, tb)
+                                            : f->nb_samples);
+            }
 
             // A graph can outlive its input — `loop=loop=-1` is how a still image
             // is animated, and it keeps producing forever once the input is gone.

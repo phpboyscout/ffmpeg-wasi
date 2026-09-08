@@ -810,3 +810,69 @@ func TestProcessTranscodesJitteredContainerTimestamps(t *testing.T) {
 		})
 	}
 }
+
+// TestProcessAppliesTheOutputWindowToAMixPaddedTail is the regression for
+// ffmpeg-wasi#66: `duration` was silently not enforced on an output fed by a mix.
+//
+// amix padding a shorter input up to `duration=longest` emits its tail with no
+// timestamps at all — one frame per 1024 samples, for the length of the longest
+// adelay. The engine passed those on as it found them, and a frame with no pts
+// answers no question about where it sits, so the window check in pull_sinks
+// skipped it and the padded tail was never cut off. The same naked frames then
+// reached the muxer, which timed them by its own guess and said so.
+//
+// The window is the assertion because it is the part a caller can see. mp4's
+// guess happens to agree with the arithmetic, so the file was right by luck and
+// only the length gave the fault away.
+func TestProcessAppliesTheOutputWindowToAMixPaddedTail(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			caps, err := engine.Query(context.Background(), a.Runner())
+			if err != nil {
+				t.Fatalf("%s: querying capabilities: %v", a, err)
+			}
+			if !slices.Contains(caps.Encoders, "aac") {
+				t.Skipf("%s carries no aac encoder", a)
+			}
+
+			ws := mediaWorkspace(t, a)
+
+			// Two copies of the 2.0s fixture, the second delayed, mixed to
+			// `longest`: the mix runs to 2.7s and its last 0.7s is amix's padding,
+			// which is the part that arrives untimed.
+			const delayMs = 700
+			const want = 2.2 // inside the padded tail, so the window has to cut it
+
+			runJob(t, ws, a, map[string]any{
+				"op": "process",
+				"inputs": []any{
+					map[string]any{"path": ws.Path("in.wav")},
+					map[string]any{"path": ws.Path("in.wav")},
+				},
+				"filter": fmt.Sprintf(
+					"[0:a]adelay=0|0[t0];[1:a]adelay=%d|%d[t1];"+
+						"[t0][t1]amix=inputs=2:normalize=0:duration=longest[aout]", delayMs, delayMs),
+				"outputs": []any{map[string]any{
+					"path": ws.Path("bounded.mp4"), "map": []any{"[aout]"},
+					"audio_codec": "aac", "duration": want,
+				}},
+			})
+
+			out := probe(t, ws, a, ws.Path("bounded.mp4")).Inputs[0]
+			if len(out.Streams) != 1 {
+				t.Fatalf("%s: the bounded output has %d streams, want 1", a, len(out.Streams))
+			}
+
+			// Unbounded this mix is 2.7s. Asserting the window rather than a
+			// ceiling keeps a truncated output from passing too.
+			unbounded := fixture.WAVDuration(sampleRate, sampleCount) + float64(delayMs)/1000
+			if math.Abs(out.DurationSec-unbounded) < durationTolerance {
+				t.Errorf("%s: bounded output is %.3fs, the whole unbounded mix (%.3fs) — "+
+					"the window did not reach amix's untimed padding", a, out.DurationSec, unbounded)
+			}
+			wantDuration(t, a, "the bounded mix", out.DurationSec, want)
+		})
+	}
+}
