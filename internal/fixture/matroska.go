@@ -1,6 +1,7 @@
 package fixture
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -58,6 +59,10 @@ var (
 	idCluster   = []byte{0x1F, 0x43, 0xB6, 0x75}
 	idTimecode  = []byte{0xE7}
 	idSimpleBlk = []byte{0xA3}
+	idAudio     = []byte{0xE1}
+	idSampFreq  = []byte{0xB5}
+	idChannels  = []byte{0x9F}
+	idBitDepth  = []byte{0x62, 0x64}
 )
 
 // vint encodes a length as an EBML variable-size integer, always in 8 bytes so
@@ -229,4 +234,125 @@ func MatroskaAtTimecode(ms uint64) []byte {
 	block := concat([]byte{0x81}, []byte{0x00, 0x00}, []byte{0x00}, []byte("x"))
 	cluster := el(idCluster, concat(uintEl(idTimecode, ms), el(idSimpleBlk, block)))
 	return concat(header, el(idSegment, concat(info, tracks, cluster)))
+}
+
+// A_PCM/INT/LIT is the one audio codec every profile decodes, so a fixture built
+// on it never skips for want of a decoder (spec 0036 D7). It also means the
+// samples a test asserts on are the samples written here, with no codec delay,
+// pre-skip or lossy reconstruction in between.
+const jitterCodecID = "A_PCM/INT/LIT"
+
+// MatroskaJitteredAudioDuration is the exact span of the file that
+// MatroskaJitteredAudio returns for the same arguments: the last packet's
+// timestamp plus one packet. Stated as arithmetic so a test asserts the engine
+// against a number neither the engine nor the writer below computed for it.
+func MatroskaJitteredAudioDuration(rate, samples, packets int, gapsMs []int) float64 {
+	at := 0
+	for i := range packets - 1 {
+		at += gapsMs[i%len(gapsMs)]
+	}
+	return float64(at)/1000 + float64(samples)/float64(rate)
+}
+
+// MatroskaJitteredAudio returns a Matroska file whose audio packet timestamps do
+// not tile the samples they carry.
+//
+// Every packet holds `samples` frames, but consecutive packets are placed at the
+// millisecond spacings in gapsMs, cycled. That is the shape a browser
+// MediaRecorder produces (ffmpeg-wasi#65): 60ms opus packets landing 37-68ms
+// apart, because the container carries wall-clock arrival times rather than
+// sample counts. Nothing else this suite can author has it — WAV and the
+// engine's own muxers both count in samples, so their timestamps tile by
+// construction.
+//
+// A gap SHORTER than the packet is the one that matters: the samples then
+// overlap their predecessor's, and a fixed-frame-size encoder turns that overlap
+// into a timestamp that goes backwards. A file whose gaps only ever exceed the
+// packet has holes instead, which everything downstream tolerates.
+//
+// Like the real thing, the packets carry no declared duration — the container
+// says only where each one starts, and its length is the sample count.
+func MatroskaJitteredAudio(rate, channels, samples, packets int, gapsMs []int) ([]byte, error) {
+	if rate <= 0 || samples <= 0 || packets <= 0 {
+		return nil, fmt.Errorf("fixture: MatroskaJitteredAudio needs a positive rate, samples and packets, got %d/%d/%d",
+			rate, samples, packets)
+	}
+	if channels != 1 && channels != 2 {
+		return nil, fmt.Errorf("fixture: MatroskaJitteredAudio supports 1 or 2 channels, got %d", channels)
+	}
+	if len(gapsMs) == 0 {
+		return nil, fmt.Errorf("fixture: MatroskaJitteredAudio needs at least one gap")
+	}
+	for i, g := range gapsMs {
+		if g <= 0 {
+			return nil, fmt.Errorf("fixture: gap %d is %dms; timestamps must advance", i, g)
+		}
+	}
+
+	// The same guard MatroskaWithChapters carries, against a typo turning the
+	// per-packet cluster loop into an unbounded allocation.
+	span := 0
+	for i := range packets - 1 {
+		span += gapsMs[i%len(gapsMs)]
+	}
+	if span > maxFixtureSeconds*1000 {
+		return nil, fmt.Errorf("fixture: %d packets span %dms, past the %ds bound", packets, span, maxFixtureSeconds)
+	}
+
+	header := el(idEBML, concat(
+		el([]byte{0x42, 0x86}, []byte{1}),
+		el([]byte{0x42, 0xF7}, []byte{1}),
+		el([]byte{0x42, 0xF2}, []byte{4}),
+		el([]byte{0x42, 0xF3}, []byte{8}),
+		strEl([]byte{0x42, 0x82}, "matroska"),
+		el([]byte{0x42, 0x87}, []byte{4}),
+		el([]byte{0x42, 0x85}, []byte{2}),
+	))
+
+	// The declared duration of one packet, which is what makes the jitter visible:
+	// a reader comparing this against the spacing sees packets that do not abut.
+	packetMs := float64(samples) / float64(rate) * 1000
+
+	info := el(idInfo, concat(
+		uintEl(idTimeScale, 1000000), // 1ms per tick, as a browser writes it
+		floatEl(idDuration, float64(span)+packetMs),
+		strEl([]byte{0x4D, 0x80}, "ffmpeg-wasi/internal/fixture"),
+		strEl([]byte{0x57, 0x41}, "ffmpeg-wasi/internal/fixture"),
+	))
+
+	tracks := el(idTracks, el([]byte{0xAE}, concat(
+		uintEl(idTrackNum, 1),
+		uintEl(idTrackUID, 1),
+		uintEl(idTrackType, 2), // audio
+		strEl(idCodecID, jitterCodecID),
+		el(idAudio, concat(
+			floatEl(idSampFreq, float64(rate)),
+			uintEl(idChannels, uint64(channels)),
+			uintEl(idBitDepth, 16),
+		)),
+	)))
+
+	// One cluster per packet, so a packet's timestamp is its cluster's and the
+	// block's own relative timecode stays zero. Blocks within a cluster would need
+	// signed relative timecodes, which buys nothing a test here wants to say.
+	var clusters []byte
+	at, sample := 0, 0
+	for i := range packets {
+		var data bytes.Buffer
+		for range samples {
+			v := int16(math.Sin(2*math.Pi*440*float64(sample)/float64(rate)) * 0.5 * math.MaxInt16)
+			for range channels {
+				binary.Write(&data, binary.LittleEndian, uint16(v)) //nolint:errcheck // bytes.Buffer never fails
+			}
+			sample++
+		}
+		block := concat([]byte{0x81}, []byte{0x00, 0x00}, []byte{0x80}, data.Bytes())
+		clusters = append(clusters, el(idCluster, concat(
+			uintEl(idTimecode, uint64(at)),
+			el(idSimpleBlk, block),
+		))...)
+		at += gapsMs[i%len(gapsMs)]
+	}
+
+	return concat(header, el(idSegment, concat(info, tracks, clusters))), nil
 }

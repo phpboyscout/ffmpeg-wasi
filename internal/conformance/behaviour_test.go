@@ -720,3 +720,93 @@ func TestProcessMixesSeveralDelayedTracksIntoAFixedFrameEncoder(t *testing.T) {
 		})
 	}
 }
+
+// The jitter a browser MediaRecorder writes, measured off the eleven clips in the
+// reel that raised ffmpeg-wasi#65: every packet carries 60ms of audio, and
+// consecutive packets are placed 37-68ms apart because the container stores when
+// each one arrived rather than where its samples belong.
+//
+// The 37 matters more than the rest. A packet placed 37ms after a 60ms
+// predecessor overlaps it by 1104 samples, and the overlap is what breaks; the
+// gentler spacings on their own do not. An earlier reduction that cycled only
+// 48-68 passed, which is how the outlier was identified as the trigger.
+const (
+	jitterPacketSamples = sampleRate / 1000 * 60 // 60ms
+	jitterPackets       = 34                     // ~2.0s, a clip's worth
+)
+
+var jitterGapsMs = []int{65, 66, 54, 48, 64, 68, 64, 66, 37, 64, 66}
+
+// TestProcessTranscodesJitteredContainerTimestamps is the regression for
+// ffmpeg-wasi#65: a reel whose voiceover was eleven browser recordings aborted at
+// the muxer with "non monotonically increasing dts", where the identical job
+// through the ffmpeg CLI produced a file.
+//
+// The reel is not the shape of the bug. One clip is, with no filtergraph at all:
+// the mix, the eleven inputs and the delays were all incidental, and the same
+// abort reproduces on a single transcode. What is required is a source whose
+// packet timestamps OVERLAP and a FIXED-frame-size encoder. libavfilter's
+// frame-size adapter gives each output frame the pts of the input frame at its
+// queue head plus the samples skipped within it, rather than running a sample
+// counter, so an overlapping input pts becomes a backward output pts. aac is the
+// fixed encoder an mp4 carries; flac absorbs it, which is why only some outputs
+// ever showed it.
+//
+// The engine now clamps a non-advancing dts at the muxer exactly as
+// fftools/ffmpeg_mux.c does, which is the only reason the CLI survives this media
+// — it emits the same reversal and nudges it forward with a warning.
+func TestProcessTranscodesJitteredContainerTimestamps(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			caps, err := engine.Query(context.Background(), a.Runner())
+			if err != nil {
+				t.Fatalf("%s: querying capabilities: %v", a, err)
+			}
+			if !slices.Contains(caps.Encoders, "aac") {
+				t.Skipf("%s carries no aac encoder, so it has no fixed-frame-size audio encoder", a)
+			}
+
+			ws := mediaWorkspace(t, a)
+
+			mkv, err := fixture.MatroskaJitteredAudio(sampleRate, channels,
+				jitterPacketSamples, jitterPackets, jitterGapsMs)
+			if err != nil {
+				t.Fatalf("building the jittered fixture: %v", err)
+			}
+			if _, err := ws.Write("jittered.mkv", mkv); err != nil {
+				t.Fatalf("%s: %v", a, err)
+			}
+
+			// Prove the fixture is media before asserting anything about transcoding
+			// it: a file the demuxer rejects would fail this test for a reason that
+			// has nothing to do with timestamps.
+			in := probe(t, ws, a, ws.Path("jittered.mkv")).Inputs[0]
+			if len(in.Streams) != 1 || in.Streams[0].Type != "audio" {
+				t.Fatalf("%s: the jittered fixture carries %d streams, want one audio stream", a, len(in.Streams))
+			}
+			wantDuration(t, a, "the jittered fixture", in.DurationSec,
+				fixture.MatroskaJitteredAudioDuration(sampleRate, jitterPacketSamples, jitterPackets, jitterGapsMs))
+
+			// The job completing is most of the assertion — it used to abort with
+			// "Invalid argument" after the muxer refused the packet.
+			runJob(t, ws, a, map[string]any{
+				"op":     "process",
+				"inputs": []any{map[string]any{"path": ws.Path("jittered.mkv")}},
+				"outputs": []any{map[string]any{
+					"path": ws.Path("dejittered.mp4"), "audio_codec": "aac",
+				}},
+			})
+
+			// A clamped timestamp must not cost the audio: the whole span still has
+			// to be there, or the fix traded an abort for a truncated file.
+			out := probe(t, ws, a, ws.Path("dejittered.mp4")).Inputs[0]
+			if len(out.Streams) != 1 {
+				t.Fatalf("%s: the transcode has %d streams, want 1", a, len(out.Streams))
+			}
+			wantDuration(t, a, "the transcoded audio", out.DurationSec,
+				fixture.MatroskaJitteredAudioDuration(sampleRate, jitterPacketSamples, jitterPackets, jitterGapsMs))
+		})
+	}
+}

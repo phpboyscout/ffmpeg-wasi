@@ -44,6 +44,11 @@
 #define MAX_CPY 32
 #define MAX_SUB 16
 
+// Every muxed stream comes from one of the three lanes, so their maxima are the
+// ceiling on how many streams one output can carry. Stated as the sum rather
+// than as a literal so it cannot drift out of step with them.
+#define MAX_MUX_STREAMS (MAX_GOUT + MAX_CPY + MAX_SUB)
+
 // COPY_CODEC is the codec sentinel that marks a mapped stream for packet
 // passthrough (no decode/encode) — mirrors ffmpeg's `-c copy` (spec 0013).
 #define COPY_CODEC "copy"
@@ -96,6 +101,11 @@ typedef struct {
     const cJSON *metadata;
     const cJSON *chapters;
     const cJSON *stream_metadata;
+
+    // The last dts handed to the muxer for each of this output's streams, indexed
+    // by stream index. AV_NOPTS_VALUE until the stream's first packet. See
+    // mux_fixup_ts.
+    int64_t last_dts[MAX_MUX_STREAMS];
 } Out;
 
 // One copied stream: an input (input, stream) wired straight to an output stream,
@@ -188,12 +198,107 @@ typedef struct {
     Progress *prog;
 } Ctx;
 
+// ts_add / ts_sub saturate instead of wrapping.
+//
+// #23 range-checked the numbers that arrive in the JOB SPEC. These are the ones
+// that arrive in the MEDIA, and nothing checks those: a demuxed timestamp near
+// INT64_MAX makes `rebase + duration` or `pts - offset` overflow, and signed
+// overflow is UNDEFINED in C -- on the native build, with optimisation, that is
+// not a guess about what happens next. The visible outcomes are a cutoff that
+// goes negative (an empty output reported as success) or timestamps the muxer
+// rejects.
+//
+// This is inside afmpeg's stated threat model in a way #23 was not: "safely
+// process untrusted media" means the file is hostile, not the caller.
+static int64_t ts_add(int64_t a, int64_t b) {
+    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
+    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
+    return a + b;
+}
+
+static int64_t ts_sub(int64_t a, int64_t b) {
+    if (b < 0 && a > INT64_MAX + b) return INT64_MAX;
+    if (b > 0 && a < INT64_MIN + b) return INT64_MIN;
+    return a - b;
+}
+
+// median3 returns the middle of three values without summing them. fftools writes
+// this as a+b+c minus the min and the max, and that sum overflows on two large
+// media timestamps -- the undefined behaviour ts_add above exists to keep out of
+// this file. Same answer, no intermediate that can wrap.
+static int64_t median3(int64_t a, int64_t b, int64_t c) {
+    return FFMAX(FFMIN(a, b), FFMIN(FFMAX(a, b), c));
+}
+
+// mux_fixup_ts is fftools/ffmpeg_mux.c's timestamp guard, which this engine drives
+// libav without and so never had.
+//
+// libavformat REFUSES a dts that does not advance -- it fails the write with
+// EINVAL, which aborts the whole job. The ffmpeg CLI never hits that because
+// fftools clamps first: it nudges the offending dts to the last one plus a tick,
+// warns, and carries on. Everything that reaches a muxer through the CLI is
+// filtered this way, so "the CLI renders this file and we do not" was, for the
+// media in ffmpeg-wasi#65, this and nothing else -- measured, on the same clip,
+// against the same FFmpeg.
+//
+// The media that needs it is ordinary. A browser MediaRecorder timestamps packets
+// by arrival, so a 60ms packet can be stamped 37ms after its predecessor; the
+// samples then overlap, and libavfilter's fixed-frame-size adapter takes each
+// output frame's pts from the input frame at its queue head rather than from a
+// running sample count, so the overlap becomes a backward step at the encoder.
+// Reconstructing timestamps on the decode side would not help: upstream's
+// audio_ts_process only absorbs sub-millisecond rounding and resets on a FORWARD
+// gap, so the CLI carries the same reversal this far and clamps it here too.
+static void mux_fixup_ts(Out *out, AVStream *ost, AVPacket *pkt) {
+    // Unreachable while the three lanes are the only things that add a stream, so
+    // this guards a future fourth: better a lost fixup than a write past last_dts.
+    if (ost->index < 0 || ost->index >= MAX_MUX_STREAMS) return;
+    int64_t *last = &out->last_dts[ost->index];
+
+    enum AVMediaType type = ost->codecpar->codec_type;
+    if (!(out->ofmt->oformat->flags & AVFMT_NOTIMESTAMPS)) {
+        // Every timestamped stream gets this one, including the data and
+        // attachment streams an absolute map can carry -- only the clamp below is
+        // restricted by media type, which is how upstream splits it too.
+        if (pkt->dts != AV_NOPTS_VALUE && pkt->pts != AV_NOPTS_VALUE && pkt->dts > pkt->pts) {
+            fprintf(stderr, "ffmpeg-wasi: process: stream %d has dts %lld past pts %lld, guessing\n",
+                    ost->index, (long long)pkt->dts, (long long)pkt->pts);
+            // The guess is the middle of the two and the earliest dts the muxer
+            // would still accept. Before the stream's first packet that floor is
+            // AV_NOPTS_VALUE, which is below every real timestamp, so the median
+            // picks pts -- the same answer upstream lands on.
+            pkt->pts = pkt->dts = median3(pkt->pts, pkt->dts, ts_add(*last, 1));
+        }
+        if ((type == AVMEDIA_TYPE_AUDIO || type == AVMEDIA_TYPE_VIDEO || type == AVMEDIA_TYPE_SUBTITLE) &&
+            pkt->dts != AV_NOPTS_VALUE && *last != AV_NOPTS_VALUE) {
+            // A format flagged TS_NONSTRICT (Matroska, mpegts) accepts a repeated
+            // dts, so only a strict one needs the extra tick.
+            int64_t max = ts_add(*last, !(out->ofmt->oformat->flags & AVFMT_TS_NONSTRICT));
+            if (pkt->dts < max) {
+                // Upstream's own noise rule: an audio stream slipping a tick or two
+                // is the rounding every mux does and saying so on each packet would
+                // bury the cases that matter.
+                if (max - pkt->dts > 2 || type == AVMEDIA_TYPE_VIDEO)
+                    fprintf(stderr,
+                            "ffmpeg-wasi: process: stream %d dts %lld does not advance on %lld, "
+                            "moving it to %lld\n",
+                            ost->index, (long long)pkt->dts, (long long)*last, (long long)max);
+                if (pkt->pts >= pkt->dts) pkt->pts = FFMAX(pkt->pts, max);
+                pkt->dts = max;
+            }
+        }
+    }
+    *last = pkt->dts;
+}
+
 // pmux muxes one finished output packet, first reporting it to the progress
 // side-channel (spec 0032): the output pts (rescaled to µs) advances the media
 // clock, the packet size adds to the byte total, and a video packet counts a
 // frame. progress state is inert when the job did not ask for it. pkt is read
 // before the write consumes it.
-static int pmux(Ctx *c, AVFormatContext *ofmt, AVStream *ost, AVPacket *pkt) {
+static int pmux(Ctx *c, Out *out, AVStream *ost, AVPacket *pkt) {
+    mux_fixup_ts(out, ost, pkt);
+
     if (c->prog) {
         int is_video = ost->codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
         int64_t ot = pkt->pts != AV_NOPTS_VALUE
@@ -202,7 +307,7 @@ static int pmux(Ctx *c, AVFormatContext *ofmt, AVStream *ost, AVPacket *pkt) {
         progress_note(c->prog, is_video, ot, pkt->size);
     }
 
-    return av_interleaved_write_frame(ofmt, pkt);
+    return av_interleaved_write_frame(out->ofmt, pkt);
 }
 
 // The job spec is untrusted input, so the two things it carries numbers in — map
@@ -632,30 +737,6 @@ static int64_t job_seek_offset_us(const Ctx *c) {
     return 0;
 }
 
-// ts_add / ts_sub saturate instead of wrapping.
-//
-// #23 range-checked the numbers that arrive in the JOB SPEC. These are the ones
-// that arrive in the MEDIA, and nothing checks those: a demuxed timestamp near
-// INT64_MAX makes `rebase + duration` or `pts - offset` overflow, and signed
-// overflow is UNDEFINED in C -- on the native build, with optimisation, that is
-// not a guess about what happens next. The visible outcomes are a cutoff that
-// goes negative (an empty output reported as success) or timestamps the muxer
-// rejects.
-//
-// This is inside afmpeg's stated threat model in a way #23 was not: "safely
-// process untrusted media" means the file is hostile, not the caller.
-static int64_t ts_add(int64_t a, int64_t b) {
-    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
-    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
-    return a + b;
-}
-
-static int64_t ts_sub(int64_t a, int64_t b) {
-    if (b < 0 && a > INT64_MAX + b) return INT64_MAX;
-    if (b > 0 && a < INT64_MIN + b) return INT64_MIN;
-    return a - b;
-}
-
 // out_cutoff_us returns where output `out` stops on its own timeline (us), or
 // INT64_MAX for no window. On the default zero-based timeline `duration` and
 // `end` coincide (the output starts at 0); under copy_ts the timeline is the
@@ -672,7 +753,6 @@ static int64_t out_cutoff_us(const Ctx *c, const Out *out) {
 
 static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
     Out *out = &c->out[go->out_idx];
-    AVFormatContext *ofmt = out->ofmt;
 
     // The decoder's picture type describes how the INPUT was coded and says
     // nothing about how the output should be. libx264 treats it as an
@@ -732,7 +812,7 @@ static int drain_encoder(Ctx *c, GOut *go, AVFrame *frame) {
 
         av_packet_rescale_ts(pkt, go->enc->time_base, go->ost->time_base);
         pkt->stream_index = go->ost->index;
-        ret = pmux(c, ofmt, go->ost, pkt);
+        ret = pmux(c, out, go->ost, pkt);
         av_packet_unref(pkt);
     }
     av_packet_free(&pkt);
@@ -1006,6 +1086,7 @@ static int opts_from_json(AVDictionary **out, const cJSON *obj, const char *what
 
 // parse_output reads one `outputs[]` entry into an Out + allocates its muxer.
 static int parse_output(Out *o, const cJSON *spec) {
+    for (int i = 0; i < MAX_MUX_STREAMS; i++) o->last_dts[i] = AV_NOPTS_VALUE;
     o->path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "path"));
     o->vcodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "video_codec"));
     o->acodec = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(spec, "audio_codec"));
@@ -1398,7 +1479,7 @@ static int write_copy_pkt(Ctx *c, Cpy *cp, AVRational src_tb, AVPacket *pkt) {
     av_packet_rescale_ts(pkt, src_tb, ost->time_base);
     pkt->stream_index = ost->index;
     pkt->pos = -1;
-    return pmux(c, out->ofmt, ost, pkt);
+    return pmux(c, out, ost, pkt);
 }
 
 // copy_one passes one source packet to a single copy target: through its BSF (a
@@ -1660,7 +1741,7 @@ static int write_sub_pkt(Ctx *c, Sub *su, AVSubtitle *sub) {
     pkt->dts = pkt->pts;
     pkt->duration = av_rescale_q(dur_us, AV_TIME_BASE_Q, su->ost->time_base);
     pkt->stream_index = su->ost->index;
-    ret = pmux(c, out->ofmt, su->ost, pkt);
+    ret = pmux(c, out, su->ost, pkt);
     av_packet_free(&pkt);
     return ret;
 }
