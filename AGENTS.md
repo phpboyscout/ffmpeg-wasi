@@ -21,7 +21,7 @@ but no aggregate `ci` target, unlike most Go repos here.
 
 It does not ship the `ffmpeg` command line, and will not grow one: FFmpeg 7.0+
 made the CLI multithreaded and a pure-Go WASI runtime cannot spawn threads, so
-this repo links `libav*` directly and drives it with its own engine, the six
+this repo links `libav*` directly and drives it with its own engine, the eight
 files in `src/`. That engine answers a JSON job spec rather than an argv,
 dispatched on `"op"` in `src/driver.c`. The Go here is not a library either:
 `internal/` is the conformance harness and `tools/run` a smoke runner, and
@@ -42,14 +42,16 @@ recovers `(target, profile, variant)` from the filename instead of trusting an
 environment variable. A release is cut by pushing an `nX.Y.Z-N` tag, not by a
 commit type.
 
-**The engine is the moving part**, and moving a great deal. Around fifty issues
-in the #11 to #60 range are open, nearly all engine defects, almost all raised
-in a single three-day wave. MR !99 is the other half of that picture: it fixes
-forty-two of them and is not merged, and it touches `src/`, `build/`,
-`internal/conformance/`, `internal/fixture/` and `internal/engine/`, so anything
-in those directories is about to move under you. Read that branch before
-reproducing a defect, and treat the issue list as a record of what has been
-written down rather than an inventory of what is broken.
+**The engine was the moving part, and it has largely stopped moving.** The wave
+of engine defects that dominated this repo — nearly all of #11 to #62, almost
+all raised in a single three-day burst — is closed: forty-two of them at once in
+!99, the rest since. One issue is open, #63, and it is labelled
+`phase::deferred` — a discarded return value with no reachable failure.
+
+So the issue list is no longer an inventory of what is broken; it is a record of
+what was. A new symptom is more likely to be genuinely new than to be one of
+those written up already, and worth reducing on its own terms rather than
+matched against the backlog.
 
 ## The traps
 
@@ -70,6 +72,20 @@ artefact is silently absent from the matrix instead of failing. And the `/dev`
 entries `internal/engine/workspace.go` creates are ordinary files, not devices,
 so passing here is not evidence that a host serving real ones behaves the same.
 
+**There is no fftools here, and that is usually where the missing behaviour
+is.** `src/` drives `libav*` directly, so every repair the `ffmpeg` CLI performs
+on its own behalf in `fftools/` is absent unless somebody ported it. The symptom
+is always the same sentence: "the identical job through the ffmpeg CLI works."
+
+Before theorising about the layer that failed, run the CLI on the offending
+media and read its stderr, because it may not be fixing anything either — merely
+surviving. A session went into decode-side timestamp work on #65 premised on a
+reconstruction the CLI does not do: it emits the same backward timestamps and
+clamps them at the muxer, which was the piece missing here. #66 was the same
+shape one filter along. Upstream is one curl away and worth reading rather than
+recalling: `raw.githubusercontent.com/FFmpeg/FFmpeg/<tag>/fftools/<file>`, at the
+tag in `build/ffmpeg-version.txt`.
+
 **Both lanes agreeing is not both lanes being right.** The parity layer compares
 what two artefacts answer for the same job, so a fault the WASM and native
 builds share is invisible to it by construction. That is exactly how #11 and #12
@@ -79,7 +95,7 @@ survived it.
 
 | When | Skill |
 |---|---|
-| Picking up one of the open engine issues | `triage-an-issue` |
+| Picking up an engine issue, or judging a new report | `triage-an-issue` |
 | Reproducing a defect before you touch the fix | `diagnose-with-a-red-loop` |
 | Writing or judging a conformance test | `test-first-discipline` |
 | Trusting a build, a green run or a benchmark you did not just produce | `verify-dont-trust` |
