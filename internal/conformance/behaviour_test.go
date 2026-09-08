@@ -631,3 +631,92 @@ func TestProcessKeepsAudioFromAContainerThatCountsInMilliseconds(t *testing.T) {
 		})
 	}
 }
+
+// TestProcessMixesSeveralDelayedTracksIntoAFixedFrameEncoder is the regression for
+// a reel of browser recordings failing at the muxer with a backward dts.
+//
+// The earlier millisecond fix (above) corrected the DECODE side: frames arrive in
+// the demuxer's time base and are rescaled into the buffersrc's. This is the same
+// mistake at the other end. The audio encoder's time base was set to
+// 1/sample_rate on the assumption that a sink produces that, where the video
+// branch beside it asks the sink what it actually produces. A graph that only
+// resamples does produce 1/sample_rate, which is why every earlier test agreed.
+//
+// amix does not. Mixing several delayed inputs produces a sink time base of the
+// mixer's choosing, and the frames coming out of it were then read as though they
+// were sample counts. With a VARIABLE frame-size encoder the error is absorbed;
+// with a fixed one — aac, which is what an mp4 reel carries — the encoder queues
+// frames it believes go backwards, and the muxer refuses the packet.
+//
+// The shape here is a reel's: several clips of the same length, each delayed onto
+// its own place on the timeline, mixed to one track. Three is the smallest number
+// that mixes and delays; the reel that found it had eleven.
+func TestProcessMixesSeveralDelayedTracksIntoAFixedFrameEncoder(t *testing.T) {
+	for _, a := range artifacts(t) {
+		t.Run(a.String(), func(t *testing.T) {
+			t.Parallel()
+
+			caps, err := engine.Query(context.Background(), a.Runner())
+			if err != nil {
+				t.Fatalf("%s: querying capabilities: %v", a, err)
+			}
+			if !slices.Contains(caps.Encoders, "aac") {
+				t.Skipf("%s carries no aac encoder, so it has no fixed-frame-size audio encoder", a)
+			}
+
+			ws := mediaWorkspace(t, a)
+
+			// The clips a reel actually mixes: a container counting in
+			// milliseconds, not the sample-counting WAV whose time bases coincide.
+			runJob(t, ws, a, map[string]any{
+				"op":     "process",
+				"inputs": []any{map[string]any{"path": ws.Path("in.wav")}},
+				"outputs": []any{map[string]any{
+					"path": ws.Path("clip.mkv"), "audio_codec": "flac",
+				}},
+			})
+
+			const tracks = 3
+
+			inputs := make([]any, 0, tracks)
+			chain := ""
+			labels := ""
+
+			for i := range tracks {
+				inputs = append(inputs, map[string]any{"path": ws.Path("clip.mkv")})
+				// Delays that are not whole frames of the encoder: 1024 samples at
+				// 48kHz is 21.33ms, so 700ms lands mid-frame, which is where a
+				// mis-scaled timestamp shows up as going backwards.
+				chain += fmt.Sprintf("[%d:a]adelay=%d|%d,volume=0.500[t%d];", i, i*700, i*700, i)
+				labels += fmt.Sprintf("[t%d]", i)
+			}
+
+			chain += fmt.Sprintf("%samix=inputs=%d:normalize=0:duration=longest[aout]", labels, tracks)
+
+			runJob(t, ws, a, map[string]any{
+				"op":     "process",
+				"inputs": inputs,
+				"filter": chain,
+				"outputs": []any{map[string]any{
+					"path": ws.Path("mixed.mp4"), "map": []any{"[aout]"},
+					"audio_codec": "aac",
+				}},
+			})
+
+			// The job completing is most of the assertion — it used to abort with
+			// "non monotonically increasing dts to muxer". The stream check is what
+			// stops a silently empty output passing for a fix.
+			in := probe(t, ws, a, ws.Path("mixed.mp4")).Inputs[0]
+			if len(in.Streams) != 1 {
+				t.Fatalf("%s: the mixed output has %d streams, want 1", a, len(in.Streams))
+			}
+
+			// The last clip starts at 1.4s and the fixture is 2s, so the mix runs
+			// to ~3.4s. Asserting a floor rather than the exact value keeps this
+			// about the timestamps rather than about aac's padding.
+			if in.DurationSec < 3.0 {
+				t.Errorf("%s: mixed audio is %.2fs, want the whole mix (~3.4s)", a, in.DurationSec)
+			}
+		})
+	}
+}

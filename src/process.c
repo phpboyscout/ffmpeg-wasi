@@ -587,7 +587,21 @@ static int open_encoder(Ctx *c, GOut *go) {
         go->enc->sample_fmt = av_buffersink_get_format(go->sink);
         go->enc->sample_rate = av_buffersink_get_sample_rate(go->sink);
         av_buffersink_get_ch_layout(go->sink, &go->enc->ch_layout);
-        go->enc->time_base = (AVRational){1, go->enc->sample_rate};
+        // ASK THE SINK, as the video branch above does. Frames are sent to the
+        // encoder in the sink's time base and nothing rescales them on the way,
+        // so declaring a different one here misreads every audio timestamp.
+        //
+        // 1/sample_rate was assumed because that is what a sink producing plain
+        // resampled audio reports, which is every graph the earlier tests had.
+        // amix does not: mixing several delayed inputs negotiates its own, and
+        // the frames then arrived claiming to go backwards. A variable-frame-size
+        // encoder absorbs that; aac queues the frame and the muxer refuses the
+        // packet ("non monotonically increasing dts").
+        //
+        // The fallback stays 1/sample_rate for a sink that reports nothing.
+        go->enc->time_base = av_buffersink_get_time_base(go->sink);
+        if (!go->enc->time_base.num)
+            go->enc->time_base = (AVRational){1, go->enc->sample_rate};
     }
     if (out->ofmt->oformat->flags & AVFMT_GLOBALHEADER)
         go->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
