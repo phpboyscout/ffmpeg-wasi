@@ -4,20 +4,13 @@
 #
 # Usage: docker build -f build/Dockerfile.native --target artifact -o dist .
 #        → dist/driver  (a native ELF the afmpeg pkg/afmpeg/native host drives)
-FROM debian:bookworm-slim AS build
+# renovate: datasource=docker depName=registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build
+FROM registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.0 AS build
 # Unset means "whatever build/ffmpeg-version.txt says" — see build/Dockerfile.
 ARG FFMPEG_VERSION=
 ARG VARIANT=lgpl
 ARG PROFILE=lean
 ENV TARGET=native
-# build-essential + nasm give native asm/threads; curl/xz-utils/meson/ninja-build
-# are the intermediate-profile dep toolchain (same set as the wasm image), only
-# exercised when PROFILE=intermediate pulls the Opus/WebP/VP8-9/subtitle libs; cmake
-# is the full-profile toolchain (x265/SVT-AV1 are cmake builds).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        git make cmake pkg-config ca-certificates build-essential nasm zlib1g-dev \
-        curl xz-utils meson ninja-build \
-        && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
 # External encoders (openh264, + libx264 on gpl) first — cached across engine
 # edits, so iterating on the driver reuses the deps + libav layers. Native builds

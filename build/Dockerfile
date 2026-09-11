@@ -1,7 +1,8 @@
 # Build FFmpeg's libav* + the libav-direct engine → a wasm32-wasi module.
 # Usage: docker build -f build/Dockerfile --build-arg VARIANT=lgpl \
 #          --build-arg PROFILE=lean --target artifact -o dist .
-FROM ghcr.io/webassembly/wasi-sdk:wasi-sdk-30 AS build
+# renovate: datasource=docker depName=registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build
+FROM registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.0 AS build
 # No default: unset means "whatever build/ffmpeg-version.txt says" (spec 0035 D3).
 # A literal default here was a second copy of the version that could drift from
 # the file. Pass --build-arg FFMPEG_VERSION=nX.Y.Z only to override for a one-off
@@ -9,9 +10,6 @@ FROM ghcr.io/webassembly/wasi-sdk:wasi-sdk-30 AS build
 ARG FFMPEG_VERSION=
 ARG VARIANT=lgpl
 ARG PROFILE=lean
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        git make pkg-config ca-certificates curl xz-utils meson ninja-build \
-        && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
 # Build external codec dependencies (per variant + profile) and libav* first —
 # cached across engine edits, so iterating on the driver reuses both. deps.sh is
