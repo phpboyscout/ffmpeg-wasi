@@ -148,6 +148,14 @@ meson_list() {
 # toolchain's $CFLAGS — harfbuzz + fribidi are meson-only. c_args/cpp_args carry the
 # exact same wasm target flags as the rest of the build. needs_exe_wrapper=true: the
 # sandbox can't run the wasm output during the build.
+# The binaries key is spelled pkgconfig, NOT pkg-config. The hyphenated form is a
+# newer alias that meson honours for the HOST machine only from 1.3 or so; on 1.0
+# a cross build finds no pkg-config at all and every dependency comes back
+# missing. That surfaced from harfbuzz as "Dependency 'freetype2' is required but
+# not found", a long way from a key spelling in this file. It held for as long as
+# it did only because the wasm image carried no meson and the job apt-installed
+# Ubuntu noble's. Checked both ways: the canonical key works on 1.0.1 and 1.3.2,
+# the alias only on 1.3.2.
 write_meson_cross() {
   # shellcheck disable=SC2086  # $CFLAGS is deliberately split into per-flag args
   cargs=$(meson_list $CFLAGS)
@@ -159,7 +167,7 @@ c = 'clang'
 cpp = 'clang++'
 ar = 'llvm-ar'
 strip = 'llvm-strip'
-pkg-config = 'pkg-config'
+pkgconfig = 'pkg-config'
 
 [host_machine]
 system = 'wasi'
