@@ -902,24 +902,14 @@ static int pull_sinks(Ctx *c) {
             if (ret == AVERROR(EAGAIN)) { ret = 0; break; }
             if (ret < 0) goto done;
 
-            // A filter may hand over an audio frame with no timestamp at all,
-            // and amix does: padding a shorter input to `duration=longest`
-            // produces a tail of frames whose pts is AV_NOPTS_VALUE, one per
-            // 1024 samples for the length of the longest adelay. Passed on as-is
-            // they reach the muxer naked, and mp4 answers "Encoder did not
-            // produce proper pts, making some up" -- so the tail of the file is
-            // timed by the muxer's guess rather than by the graph
-            // (ffmpeg-wasi#66).
-            //
-            // Continue the timeline instead, which is what fftools does with its
-            // own next_pts (ffmpeg_filter.c). Audio only: every frame is exactly
-            // nb_samples long, so the next position is arithmetic rather than a
-            // guess. Video has no such invariant, and upstream reconstructs it
-            // there from frame-rate machinery this engine does not have.
-            //
-            // It goes ahead of the window check below because that check reads a
-            // pts: an untimed frame skipped it, so `duration` never cut this tail
-            // off and a bounded mix ran to its full length.
+            // amix pads a shorter input up to `duration=longest` with frames
+            // carrying no timestamp at all. Fed on as they arrive, the muxer times
+            // the tail by guesswork and the window check below -- which reads a
+            // pts -- skips them, so `duration` never cuts that tail off
+            // (ffmpeg-wasi#66). Continue the timeline instead, as fftools does
+            // with its own next_pts. Audio only: a frame is exactly nb_samples
+            // long, so the next position is arithmetic; video has no such
+            // invariant.
             if (c->gout[i].type == AVMEDIA_TYPE_AUDIO) {
                 if (f->pts == AV_NOPTS_VALUE) f->pts = c->gout[i].next_pts;
                 int rate = av_buffersink_get_sample_rate(c->gout[i].sink);
@@ -941,10 +931,12 @@ static int pull_sinks(Ctx *c) {
             }
             // Harvest any analysis-filter metadata riding on this frame (spec 0017 §Q).
             collect_analysis(c, f, av_buffersink_get_time_base(c->gout[i].sink));
-            // The buffersink already sets frame->pts in the sink's timebase
-            // (which is the encoder's), so feed it as-is — overriding it (e.g.
-            // with best_effort_timestamp, a decoder concept) breaks filters like
-            // xfade that synthesise their own timestamps.
+            // Every other pts is the buffersink's, in the sink's timebase (which
+            // is the encoder's), and is fed as-is. Overriding one the sink DID
+            // set -- with best_effort_timestamp, say, a decoder concept -- breaks
+            // filters like xfade that synthesise their own timestamps. The block
+            // above fills in only the frames the sink left unset, which is a
+            // different thing.
             ret = drain_encoder(c, &c->gout[i], f);
             av_frame_unref(f);
             if (ret < 0) goto done;
