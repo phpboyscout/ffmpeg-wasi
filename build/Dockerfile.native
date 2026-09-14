@@ -5,7 +5,7 @@
 # Usage: docker build -f build/Dockerfile.native --target artifact -o dist .
 #        → dist/driver  (a native ELF the afmpeg pkg/afmpeg/native host drives)
 # renovate: datasource=docker depName=registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build
-FROM registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.0 AS build
+FROM registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.2 AS build
 # Unset means "whatever build/ffmpeg-version.txt says" — see build/Dockerfile.
 ARG FFMPEG_VERSION=
 ARG VARIANT=lgpl
