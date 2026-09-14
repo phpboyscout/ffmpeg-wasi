@@ -131,7 +131,7 @@ ffmpeg-version:
 # to an already long pipeline for no benefit (0036 D8).
 test:
   stage: test
-  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.2.0
+  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.2.1
   rules: *engine-test-rules
   interruptible: true
   # Same optional needs as size-budget: run against whatever the pipeline built.
@@ -217,7 +217,7 @@ size-budget:
 # (phpboyscout/infra) pins it to this project's `n*` tag pipelines.
 sign:
   stage: sign
-  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.2.0
+  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.2.1
   # Tag-only, unconditionally, and its `needs` stay mandatory (spec 0035 D5). A
   # merge request must never assume the signing role, mint a signature or publish.
   # The `optional: true` relaxation on size-budget must not spread here.
