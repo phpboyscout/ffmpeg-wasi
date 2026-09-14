@@ -10,6 +10,22 @@
 # before configure/make:  . build/toolchain.sh
 set -eu
 
+# require_tools <name>... — fail now, naming what is absent, rather than at the
+# first command that happens to need it. A missing git sent deps.sh through five
+# clone retries with backoff and then blamed GitHub, 75 seconds after the apt
+# failure that was the real fault (ffmpeg-wasi#67). The retry loop exists for a
+# flaky network; a missing binary is not that.
+require_tools() {
+  _missing=''
+  for _t in "$@"; do
+    command -v "$_t" >/dev/null 2>&1 || _missing="$_missing $_t"
+  done
+  if [ -n "$_missing" ]; then
+    echo "${0##*/}: missing required tool(s):$_missing" >&2
+    exit 1
+  fi
+}
+
 : "${TARGET:=wasm}"
 : "${PREFIX:=/opt/vendor}"                 # where built dependencies install
 export PREFIX

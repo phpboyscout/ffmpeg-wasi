@@ -11,6 +11,10 @@ HERE_LIBAV="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 : "${PROFILE:=lean}"                        # lean (default) | intermediate | full — spec 0022 (full is native-only)
 : "${FFMPEG_SRC:=/ffmpeg}"
 
+# pkg-config is here because FFmpeg's configure probes every external lib through
+# it: absent, it reports the libraries as missing rather than itself.
+require_tools git make nproc sed pkg-config "$CC"
+
 git clone https://github.com/FFmpeg/FFmpeg --depth=1 --branch "$FFMPEG_VERSION" "$FFMPEG_SRC"
 cd "$FFMPEG_SRC"
 

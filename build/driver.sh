@@ -10,6 +10,7 @@ HERE="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 : "${SRC_DIR:=$HERE/../src}"
 : "${DRIVER_SRC:=$SRC_DIR/driver.c}"
 : "${OUT:=/dist/ffmpeg-wasi.wasm}"
+require_tools "$CC" pkg-config
 mkdir -p "$(dirname -- "$OUT")"
 
 # Engine sources: the driver + operations, the I/O abstraction, and the vendored

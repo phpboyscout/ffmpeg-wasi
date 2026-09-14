@@ -585,6 +585,23 @@ build_libdav1d() {
   echo "dav1d built → $PREFIX"
 }
 
+# Scoped to what this invocation will actually reach: lean touches neither the
+# tarball fetchers nor the meson builds, so demanding their tools would fail a
+# build that never needed them. full is a superset of intermediate.
+#
+# Accumulated into one list and checked once, so the report names everything that
+# is absent. Checking in stages would hand back one missing tool per run, which is
+# the shape of failure this exists to stop.
+DEPS_TOOLS="git make nproc sed $CC"
+if [ "$PROFILE" != lean ]; then
+  DEPS_TOOLS="$DEPS_TOOLS curl tar sha256sum meson ninja pkg-config"
+fi
+if [ "$PROFILE" = full ]; then
+  DEPS_TOOLS="$DEPS_TOOLS cmake"
+fi
+# shellcheck disable=SC2086  # deliberate word-splitting: a list of tool names
+require_tools $DEPS_TOOLS
+
 if [ "$TARGET" = native ]; then
   # Native external codec libraries (spec 0028): openh264 for both variants, libx264
   # for gpl. zlib comes from the system (zlib1g-dev). The intermediate profile adds
