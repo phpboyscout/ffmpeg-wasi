@@ -72,7 +72,7 @@
 
 .build:
   stage: build
-  image: registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.0
+  image: registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.2
   # Only FFmpeg-version tags (e.g. n8.1.2-1) build artifacts; repo-meta tags like
   # 0.1.0 do not trigger an FFmpeg build. Plus engine-touching merge requests.
   extends: .engine-build-rules
@@ -164,7 +164,7 @@ build:gpl:intermediate:
 # heavy native-only encoders x265/HEVC (gpl) + SVT-AV1 (both); HW-accel deferred).
 .build-native:
   stage: build
-  image: registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.0
+  image: registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.2
   extends: .engine-build-rules
   # Same group as the wasm builds — one engine compile at a time across both
   # targets, not one per target (spec 0035 D7).

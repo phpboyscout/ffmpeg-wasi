@@ -2,7 +2,7 @@
 # Usage: docker build -f build/Dockerfile --build-arg VARIANT=lgpl \
 #          --build-arg PROFILE=lean --target artifact -o dist .
 # renovate: datasource=docker depName=registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build
-FROM registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.0 AS build
+FROM registry.gitlab.com/phpboyscout/images/ffmpeg-wasi-build:v0.1.2 AS build
 # No default: unset means "whatever build/ffmpeg-version.txt says" (spec 0035 D3).
 # A literal default here was a second copy of the version that could drift from
 # the file. Pass --build-arg FFMPEG_VERSION=nX.Y.Z only to override for a one-off
