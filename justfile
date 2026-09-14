@@ -54,20 +54,24 @@ test artifacts="dist":
 @show-claims profile="lean" variant="lgpl" target="wasm":
     PROFILE={{profile}} VARIANT={{variant}} TARGET={{target}} PRINT_COMPONENT_FLAGS=1 sh build/enable-lists.sh
 
-# Lint the build scripts.
+# Lint the build scripts, and the CI files for shell shapes that hide a failure.
 #
 # Through the image .gitlab-ci.yml pins, not whatever shellcheck is on PATH: a
 # local version that disagrees with CI's makes `just ci` predict the wrong
 # answer, which is the one thing it exists not to do. The tag is read out of the
 # pipeline rather than repeated here, because Renovate tracks it there and a
 # second copy would drift the moment it bumps.
-[doc("Lint the build scripts, with the shellcheck CI pins")]
+[doc("Lint the build scripts and CI files, with the shellcheck CI pins")]
 lint:
     #!/bin/sh
     set -eu
     image="$(sed -n 's|^[[:space:]]*name: \(koalaman/shellcheck-alpine:[^[:space:]]*\)[[:space:]]*$|\1|p' .gitlab-ci.yml | head -n 1)"
     [ -n "$image" ] || { echo "lint: found no shellcheck image in .gitlab-ci.yml" >&2; exit 1; }
     docker run --rm -v "$PWD:/mnt" -w /mnt --entrypoint shellcheck "$image" build/*.sh
+    # In the same container as the shellcheck above, so this agrees with CI down
+    # to the awk: the image ships busybox, the host may not.
+    docker run --rm -v "$PWD:/mnt" -w /mnt --entrypoint sh "$image" \
+      build/check-ci-shell.sh .gitlab-ci.yml build/engine.gitlab-ci.yml
 
 # Resolve the FFmpeg version this build targets, the way CI does before anything
 # expensive runs (spec 0035 D3).

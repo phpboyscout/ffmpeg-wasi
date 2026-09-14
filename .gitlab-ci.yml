@@ -93,6 +93,9 @@ validate:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     - shellcheck build/*.sh
+    # A failing command in an AND-OR list does not stop a job (#68). Cheap to
+    # check here, and the failure it prevents costs a whole pipeline to find.
+    - sh build/check-ci-shell.sh .gitlab-ci.yml build/engine.gitlab-ci.yml
 
 # Resolve — and on a tag, verify — the FFmpeg version, before anything expensive
 # runs (spec 0035 D3). This is a whole stage ahead of `build`, so a tag that

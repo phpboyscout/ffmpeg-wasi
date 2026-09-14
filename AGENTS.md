@@ -17,9 +17,9 @@ not a Go module dependency in either direction, so neither `go.mod` shows it and
 a change here can break afmpeg quietly.
 
 It has no phpboyscout toolkit dependencies. `just ci` runs what the pipeline
-gates on — shellcheck over `build/*.sh`, the FFmpeg version resolution, and the
-test suite — and deliberately nothing more, so a green run predicts a green
-pipeline rather than merely suggesting one.
+gates on — shellcheck over `build/*.sh`, the CI-shape check, the FFmpeg version
+resolution, and the test suite — and deliberately nothing more, so a green run
+predicts a green pipeline rather than merely suggesting one.
 
 It does not ship the `ffmpeg` command line, and will not grow one: FFmpeg 7.0+
 made the CLI multithreaded and a pure-Go WASI runtime cannot spawn threads, so
@@ -87,6 +87,16 @@ clamps them at the muxer, which was the piece missing here. #66 was the same
 shape one filter along. Upstream is one curl away and worth reading rather than
 recalling: `raw.githubusercontent.com/FFmpeg/FFmpeg/<tag>/fftools/<file>`, at the
 tag in `build/ffmpeg-version.txt`.
+
+**`a && b` in a CI job line does not fail the job.** POSIX ignores `set -e` for
+every command of an AND-OR list except the last, so `apt-get update && apt-get
+install ...` carries straight on when the update fails, and the job dies minutes
+later somewhere that names neither. That is #68: the visible failure was `git:
+not found` in `deps.sh`, four minutes and one stage removed from the apt hash
+mismatch behind it. GitLab and the `before_script` boundary both behaved exactly
+as documented — the `&&` was the whole of it. `build/check-ci-shell.sh` rejects
+the shape now, in `just lint` and in `validate`; one command per line, or
+`if ...; then ...; fi`.
 
 **Both lanes agreeing is not both lanes being right.** The parity layer compares
 what two artefacts answer for the same job, so a fault the WASM and native
