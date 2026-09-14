@@ -6,11 +6,17 @@
 #                 → size-budget over whatever was built
 #   tag nX.Y.Z-N  → the same builds → checksum + provenance + signature → release
 #
-# Releases are cut by tagging `<FFMPEG_VERSION>-<build-rev>` (e.g. n8.1.2-1).
+# Releases are cut by MERGING colophon's release merge request, which cuts the
+# `<FFMPEG_VERSION>-<build-rev>` tag (e.g. n9.0.1-6) and so starts the pipeline
+# above (afmpeg spec 0046). Nobody pushes that tag by hand; `n*` is protected.
+#
 # **build/ffmpeg-version.txt is authoritative for the FFmpeg version** (spec 0035
 # D3), not the tag: the `ffmpeg-version` job fails a tag that disagrees with it,
-# before any build starts. Bumping FFmpeg is therefore a merge request against
-# that file — and that merge request builds the new version.
+# before any build starts. colophon computes the tag FROM that same file, so
+# under normal operation that guard cannot fire — which is exactly why it is
+# worth keeping now that a tool does the tagging. Bumping FFmpeg is still a
+# merge request against that file, and that merge request still builds the new
+# version; the ordinal restarts at 1 when the prefix moves.
 #
 # The build is heavy (it compiles FFmpeg) and needs a runner with adequate
 # CPU/disk/timeout. Every build job shares one project-scoped `resource_group`
@@ -35,6 +41,17 @@ include:
   # DISCORD_RELEASE_WEBHOOK group variable, which is protected and so
   # reaches this job because `v*` is a protected tag here.
   - component: gitlab.com/phpboyscout/cicd/discord-release@main
+
+  # Releases through colophon (afmpeg spec 0046). It proposes a release merge
+  # request on main, and cuts the nX.Y.Z-N tag when that merge request is
+  # merged — which is what fires the tag pipeline below.
+  #
+  # tag_pattern is NOT the component's default: that one admits vX.Y.Z and the
+  # component shapes, and nothing this project has ever tagged. Our versions
+  # are an upstream FFmpeg release and a build ordinal (.colophon.yaml).
+  - component: gitlab.com/phpboyscout/cicd/colophon@main
+    inputs:
+      tag_pattern: '^n[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$'
   # The engine build matrix. In its own file so `changes:` can name it: a
   # merge request that rewires the build rebuilds, one that edits release,
   # signing or pages does not.
@@ -337,7 +354,7 @@ release:
       release-cli create \
         --name "ffmpeg-wasi ${CI_COMMIT_TAG}" \
         --tag-name "${CI_COMMIT_TAG}" \
-        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI. Two licence variants — **lgpl** (default; H.264 encode via openh264) and **gpl** (libx264 H.264 encode) — each in two capability profiles: **lean** (web-delivery essentials, the \`ffmpeg-wasi-<variant>.wasm\` assets) and **intermediate** (lean + every practical software codec/filter — subtitles, LGPL encoders, native codec batch, text burn-in — the \`ffmpeg-wasi-intermediate-<variant>.wasm\` assets). Plus the **native Backend-B drivers** (\`ffmpeg-wasi-driver-linux-amd64-<variant>\` lean, \`-intermediate-<variant>\`, \`-full-<variant>\`, spec 0028): our engine compiled to a native ELF with threads + SIMD for **~50× faster software encode with openh264, and ~170× with libx264** (the encoder moves this far more than the FFmpeg version does). The intermediate driver carries the full software-codec batch (Opus/MP3/Vorbis/WebP/VP8-9 + subtitles) at native speed; the **full** driver adds the heavy native-only encoders — **SVT-AV1** (AV1, both variants) and **x265/HEVC** (gpl only) — codecs impractical in WASM. Driven by afmpeg's native backend (\`native.WithNativeRelease\`) over an in-memory IPC bridge — CGO-free, signature-verified through the same manifest. Both variants encode H.264; the self-compiled openh264 carries an AVC patent caveat (see the licensing docs). The manifest is signed: \`checksums.txt.sig\` is a detached OpenPGP signature over \`checksums.txt\` from a KMS-held key (afmpeg verifies it via the org signing module against a pinned key). Pin a module by its URL + SHA-256 from \`checksums.txt\`; see \`provenance.json\` for exactly what went in." \
+        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI.\n\nWhich variant and profile to pick, what each artifact contains, the native driver speedups, the openh264 patent caveat, and how to verify \`checksums.txt.sig\` and pin a module by URL + SHA-256: [Variants \& artifacts](https://ffmpeg-wasi.phpboyscout.uk/reference/variants/).\n\nWhat changed in this release: [CHANGELOG.md](${CI_PROJECT_URL}/-/blob/${CI_COMMIT_TAG}/CHANGELOG.md)." \
         --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-gpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-gpl.wasm\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-lgpl.wasm\",\"link_type\":\"package\"}" \

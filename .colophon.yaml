@@ -1,0 +1,18 @@
+# .colophon.yaml — how this repository releases (afmpeg spec 0046).
+#
+# The version is not semver and never has been: a release names the upstream
+# FFmpeg release it is built from and which of our builds of it this is, so
+# n9.0.1-6 is the sixth build of FFmpeg n9.0.1. colophon calls that the
+# `ordinal` scheme (colophon spec 0016).
+#
+# The prefix is NOT written here. build/ffmpeg-version.txt is the single source
+# of truth for the FFmpeg version (spec 0035 D3), every pipeline and both
+# Dockerfiles read it, and build/ffmpeg-version.sh fails a tag that disagrees
+# with it. Naming the file keeps that one value in one place: colophon computes
+# the tag from the same line the guard checks it against.
+#
+# colophon reads it the way that script does — strip a # comment, strip
+# whitespace, take the first line with anything left on it.
+versioning:
+  scheme: ordinal
+  prefix_file: build/ffmpeg-version.txt

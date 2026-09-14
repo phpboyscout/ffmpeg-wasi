@@ -41,8 +41,10 @@ and its `docs/development/specs/`. There is nowhere local to look them up.
 `native` across the profile and licence variants. The naming scheme is
 load-bearing rather than cosmetic, because `internal/engine/artifact.go`
 recovers `(target, profile, variant)` from the filename instead of trusting an
-environment variable. A release is cut by pushing an `nX.Y.Z-N` tag, not by a
-commit type.
+environment variable. A release is cut by merging colophon's release merge
+request, which cuts the `nX.Y.Z-N` tag; the commit types decide WHETHER there
+is a release, and the ordinal counts builds rather than encoding what changed
+(afmpeg spec 0046).
 
 **The engine was the moving part, and it has largely stopped moving.** The wave
 of engine defects that dominated this repo — nearly all of #11 to #62, almost
