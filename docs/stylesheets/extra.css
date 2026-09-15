@@ -99,47 +99,6 @@
 .hero-description a { color: var(--fw-cream); text-decoration: underline; }
 .hero-description code { background: rgba(245, 242, 234, 0.12); color: var(--fw-cream); }
 
-/* -------------------------------------------------------- install box ---- */
-
-.install-box {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  max-width: 760px;
-  margin: 0 0 1.6rem;
-  padding: 0.7rem 0.9rem;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(245, 242, 234, 0.16);
-  font-family: var(--md-code-font-family, "JetBrains Mono", monospace);
-  font-size: 0.74rem;
-}
-.install-box::before { content: "$"; color: var(--fw-brand); opacity: 0.9; }
-
-.install-command {
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  white-space: nowrap;
-  color: var(--fw-cream);
-}
-
-.install-copy {
-  flex: 0 0 auto;
-  cursor: pointer;
-  border: 0;
-  border-radius: 6px;
-  padding: 0.3rem 0.6rem;
-  font-size: 0.78rem;
-  font-weight: 700;
-  background: var(--fw-brand);
-  color: var(--fw-cream);
-  transition: background 0.2s ease, transform 0.2s ease;
-}
-.install-copy:hover { background: var(--fw-brand-deep); transform: translateY(-1px); }
-.install-copy.copied { background: var(--fw-cream); color: var(--fw-ink); }
-
 /* ------------------------------------------------------------ buttons ---- */
 
 .hero-buttons { display: flex; flex-wrap: wrap; gap: 0.75rem; }
@@ -157,6 +116,8 @@
 .md-typeset .btn-primary:hover { background: var(--fw-brand-deep); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(201, 24, 74, 0.4); }
 .md-typeset .btn-secondary { background: transparent; color: var(--fw-cream) !important; border: 1.5px solid rgba(245, 242, 234, 0.5); }
 .md-typeset .btn-secondary:hover { background: rgba(245, 242, 234, 0.1); border-color: var(--fw-cream); transform: translateY(-2px); }
+.md-typeset .btn-tertiary { background: transparent; color: rgba(245, 242, 234, 0.75) !important; padding-left: 0.6rem; padding-right: 0.6rem; }
+.md-typeset .btn-tertiary:hover { color: var(--fw-cream) !important; text-decoration: underline !important; }
 
 /* ------------------------------------------------------- capability grid - */
 
@@ -195,10 +156,9 @@
   .hero-body { width: 100%; max-width: 100%; }
   .md-typeset .hero-title { font-size: 2.4rem !important; }
   .hero-buttons { justify-content: center; }
-  .install-box { max-width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .md-typeset .btn, .cap, .install-copy { transition: none; }
-  .md-typeset .btn:hover, .cap:hover, .install-copy:hover { transform: none; }
+  .md-typeset .btn, .cap { transition: none; }
+  .md-typeset .btn:hover, .cap:hover { transform: none; }
 }

@@ -22,13 +22,10 @@ hide:
       <a href="https://wazero.io/">wazero</a>, and the same jobs run at native
       speed when the sandbox is not the point.
     </p>
-    <div class="install-box">
-      <span class="install-command">docker build -f build/Dockerfile --build-arg VARIANT=lgpl --target artifact -o dist .</span>
-      <button class="install-copy" type="button" title="Copy to clipboard">copy</button>
-    </div>
     <div class="hero-buttons">
-      <a href="tutorials/build-and-run/" class="btn btn-primary">Build and run it</a>
-      <a href="https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases" class="btn btn-secondary">Download a release</a>
+      <a href="https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases" class="btn btn-primary">Download a release</a>
+      <a href="how-to/choose-a-variant/#pin-it-in-a-consumer" class="btn btn-secondary">Use it from Go</a>
+      <a href="tutorials/build-and-run/" class="btn btn-tertiary">Build and run it</a>
     </div>
   </div>
 </div>
