@@ -43,6 +43,7 @@ nav = [
     { "Release signing" = "explanation/signing.md" },
   ] },
   { About = [
+    { Overview = "about/index.md" },
     { Branding = "about/branding.md" },
   ] },
 ]
