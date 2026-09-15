@@ -299,7 +299,7 @@ sign:
     SIGNING_KEY_CREATED: "2026-07-24T11:43:51Z"
     # The >= below is a floor, not a ceiling — a Renovate bump above it is safe.
     # renovate: datasource=gitlab-tags depName=phpboyscout/go-tool-base
-    GTB_VERSION: v0.40.0
+    GTB_VERSION: v0.42.0
     GOPRIVATE: gitlab.com/phpboyscout/*
   before_script:
     # Install gtb from the private module registry (CI-token git auth), then
