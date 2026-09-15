@@ -31,10 +31,16 @@
   --md-typeset-a-color: #f07f9c;
 }
 
-/* Header and tabs: navy bar, magenta underline on the active tab. */
-.md-header { background-color: var(--fw-ink); }
-.md-tabs { background-color: var(--fw-ink); }
-.md-tabs__link--active { color: var(--fw-brand); }
+/* Header and tabs: an ink bar with cream text. zensical's modern stylesheet
+   draws the header as a light bar in default-fg text, so the colour has to be
+   set here alongside the background or the text vanishes on the ink. */
+.md-header, .md-tabs { background-color: var(--fw-ink); color: var(--fw-cream); }
+.md-header__button, .md-header__topic, .md-header__title, .md-tabs__link { color: inherit; }
+.md-tabs__link { opacity: 0.75; }
+.md-tabs__link--active, .md-tabs__link:hover { color: var(--fw-brand); opacity: 1; }
+.md-search__form { background-color: rgba(241, 235, 224, 0.12); }
+.md-search__input, .md-search__input::placeholder, .md-search__icon { color: var(--fw-cream); }
+.md-search__input::placeholder { opacity: 0.75; }
 .md-typeset a:hover { color: var(--fw-brand-deep); }
 
 /* ---------------------------------------------------------------- hero ---- */
@@ -106,7 +112,8 @@
 .md-typeset .btn {
   display: inline-flex;
   align-items: center;
-  padding: 0.7rem 1.5rem;
+  padding: 0.65rem 1.2rem;
+  font-size: 0.92rem;
   border-radius: 8px;
   font-weight: 700;
   text-decoration: none !important;
@@ -116,8 +123,8 @@
 .md-typeset .btn-primary:hover { background: var(--fw-brand-deep); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(201, 24, 74, 0.4); }
 .md-typeset .btn-secondary { background: transparent; color: var(--fw-cream) !important; border: 1.5px solid rgba(245, 242, 234, 0.5); }
 .md-typeset .btn-secondary:hover { background: rgba(245, 242, 234, 0.1); border-color: var(--fw-cream); transform: translateY(-2px); }
-.md-typeset .btn-tertiary { background: transparent; color: rgba(245, 242, 234, 0.75) !important; padding-left: 0.6rem; padding-right: 0.6rem; }
-.md-typeset .btn-tertiary:hover { color: var(--fw-cream) !important; text-decoration: underline !important; }
+.hero-alt { margin: 1rem 0 0; font-size: 0.9rem; color: rgba(245, 242, 234, 0.7); }
+.hero-alt a { color: var(--fw-cream); text-decoration: underline; }
 
 /* ------------------------------------------------------- capability grid - */
 
@@ -137,7 +144,7 @@
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .cap:hover { transform: translateY(-3px); box-shadow: 0 8px 22px rgba(21, 25, 51, 0.15); }
-.md-typeset .cap h3 { margin: 0 0 0.35rem; font-size: 1.05rem; font-weight: 700; color: var(--md-primary-fg-color); }
+.md-typeset .cap h3 { margin: 0 0 0.35rem; font-size: 1.05rem; font-weight: 700; color: var(--fw-ink); }
 [data-md-color-scheme="slate"] .md-typeset .cap h3 { color: var(--fw-brand); }
 .md-typeset .cap p { margin: 0; font-size: 0.9rem; line-height: 1.55; color: var(--md-default-fg-color--light); }
 .md-typeset .cap code { font-size: 0.85em; }

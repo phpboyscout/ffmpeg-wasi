@@ -25,15 +25,15 @@ hide:
     <div class="hero-buttons">
       <a href="https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases" class="btn btn-primary">Download a release</a>
       <a href="how-to/choose-a-variant/#pin-it-in-a-consumer" class="btn btn-secondary">Use it from Go</a>
-      <a href="tutorials/build-and-run/" class="btn btn-tertiary">Build and run it</a>
     </div>
+    <p class="hero-alt">Or <a href="tutorials/build-and-run/">build it from source and run it yourself</a>, if you want to see how it is made.</p>
   </div>
 </div>
 
 <div class="cap-grid">
   <div class="cap">
     <h3>Current, not EOL</h3>
-    <p>Tracks current FFmpeg (n9.0.1 today) rather than the 5.1 that every other WASI build pinned. For a library whose whole job is parsing untrusted media, the security backports are the point.</p>
+    <p>Always tracks the latest stable FFmpeg, rather than the years-old release every other WASI build pinned. For a library whose whole job is parsing untrusted media, the security backports are the point.</p>
   </div>
   <div class="cap">
     <h3>Under the threading wall</h3>
@@ -46,6 +46,14 @@ hide:
   <div class="cap">
     <h3>A native driver, same engine</h3>
     <p>The same engine and the same job spec, built for the host with real threads and SIMD. Roughly 50× (openh264) to 170× (libx264) the sandboxed software-encode speed, driven out-of-process by afmpeg.</p>
+  </div>
+  <div class="cap">
+    <h3>A job spec, not a command line</h3>
+    <p>The engine takes a typed, versioned job spec: <code>probe</code>, <code>process</code> with a full <code>filter_complex</code>, <code>frames</code> and <code>version</code>. Exactly as capable as the engine, with no half-implemented CLI to fall through.</p>
+  </div>
+  <div class="cap">
+    <h3>Signed, checksummed, accounted for</h3>
+    <p>Every release ships <code>checksums.txt</code>, a detached OpenPGP signature over it, and a <code>provenance.json</code> naming the FFmpeg version, build tag and commit. One signature certifies the whole release.</p>
   </div>
 </div>
 
@@ -67,7 +75,7 @@ no HEVC or AV1 encode from the `.wasm` module, and a native driver for linux/amd
 
 ## Status
 
-**Released.** Releases ship current FFmpeg (n9.0.1) as **lgpl** and **gpl** builds, in a
+**Released.** Releases ship the latest stable FFmpeg as **lgpl** and **gpl** builds, in a
 **lean** and an **intermediate** profile, both as portable **WASI modules** and as **native
 drivers** (spec 0028, threads + SIMD, driven by afmpeg's native backend). The native driver adds
 a third **full** profile with HEVC (x265) and AV1 (SVT-AV1) encode. The engine **transcodes**
