@@ -55,9 +55,12 @@ include:
       # The component's default image bakes an older colophon that cannot read
       # this project's versions at all — it would read every n* tag as
       # not-a-version and propose a first release over the whole history.
-      # v0.1.11 is the first to carry colophon 0.10.0, which has both the
-      # ordinal scheme and the named assets below.
-      image: registry.gitlab.com/phpboyscout/images/release-tools:v0.1.11
+      #
+      # v0.1.12 carries colophon 0.10.1: the ordinal scheme, the named assets
+      # below, and the fix for those two together. 0.10.0 had the assets
+      # feature but refused to publish at all once a manifest named any, which
+      # is what failed this project's first run.
+      image: registry.gitlab.com/phpboyscout/images/release-tools:v0.1.12
       assets: true
       # Blank, deliberately. The component always passes --assets <dist> to
       # colophon, and colophon refuses a goreleaser dist and a named `assets`
