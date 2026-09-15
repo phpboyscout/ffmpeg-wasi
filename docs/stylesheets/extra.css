@@ -19,6 +19,8 @@
   --md-accent-fg-color: var(--fw-brand);
   --md-accent-fg-color--transparent: rgba(201, 24, 74, 0.1);
 }
+/* The palette sets the link colour on body, which outranks :root. */
+[data-md-color-scheme="default"] { --md-typeset-a-color: var(--fw-brand-deep); }
 
 [data-md-color-scheme="slate"] {
   --fw-brand: #e8456f;
