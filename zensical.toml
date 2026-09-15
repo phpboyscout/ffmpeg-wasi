@@ -6,6 +6,46 @@ site_url = "https://ffmpeg-wasi.phpboyscout.uk"
 repo_url = "https://gitlab.com/phpboyscout/ffmpeg-wasi"
 repo_name = "ffmpeg-wasi"
 copyright = "Copyright &copy; 2026 Matt Cockayne"
+
+# Curated navigation, ordered by the Diataxis quadrants
+# (tutorial -> how-to -> reference -> explanation). Without this the tabs are
+# derived from the directory listing and come out alphabetical, which puts
+# About first and Explanation ahead of How-to.
+nav = [
+  { Home = "index.md" },
+  { Tutorials = [
+    { Overview = "tutorials/index.md" },
+    { "Build ffmpeg-wasi and run it" = "tutorials/build-and-run.md" },
+  ] },
+  { "How-to guides" = [
+    { Overview = "how-to/index.md" },
+    { "Choose and verify a variant" = "how-to/choose-a-variant.md" },
+    { "Build from source" = "how-to/build-from-source.md" },
+  ] },
+  { Reference = [
+    { Overview = "reference/index.md" },
+    { "The job-spec vocabulary" = "reference/job-spec.md" },
+    { "Variants and artifacts" = "reference/variants.md" },
+    { "Build options" = "reference/build-options.md" },
+    { "Codecs" = "reference/codecs.md" },
+    { "Filters" = "reference/filters.md" },
+    { "Containers, bitstream filters and protocols" = "reference/containers.md" },
+    { "Driver invocation and ABI" = "reference/driver-invocation-abi.md" },
+    { "Errors and exit codes" = "reference/errors.md" },
+    { "Limits and what is not supported" = "reference/limits.md" },
+  ] },
+  { Explanation = [
+    { Overview = "explanation/index.md" },
+    { "Why libav-direct" = "explanation/why-libav-direct.md" },
+    { "Inside the engine" = "explanation/engine-internals.md" },
+    { "The build" = "explanation/the-build.md" },
+    { "The licensing model" = "explanation/licensing.md" },
+    { "Release signing" = "explanation/signing.md" },
+  ] },
+  { About = [
+    { Branding = "about/branding.md" },
+  ] },
+]
 extra_css = ["stylesheets/extra.css"]
 
 [project.theme]
