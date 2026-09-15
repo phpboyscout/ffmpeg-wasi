@@ -8,18 +8,22 @@ hide:
 
 # Branding
 
-The visual identity of **ffmpeg-wasi** and its downloadable brand assets. All
-marks share the wider phpboyscout palette so the projects read as one family.
+The visual identity of **ffmpeg-wasi** and its downloadable brand assets.
+ffmpeg-wasi is a headline project with its own palette rather than the shared
+phpboyscout teal and amber, so it reads as itself first and as part of the
+estate second.
 
 ---
 
 ## The mark
 
-ffmpeg-wasi's logo is a **split theatrical mask** threaded with faint circuit
-tracings. The mask is the point: ffmpeg-wasi isn't FFmpeg, it's a custom
-interface built straight over the `libav*` libraries that *masquerades* as
-FFmpeg. Its two halves, amber and petrol-teal, stand for its two backends,
-WASM and native, behind one face.
+ffmpeg-wasi's logo is a **sealed jar with a film reel inside**. The jar is the
+sandbox: FFmpeg's media libraries running inside a WASI module, with nothing
+getting out and nothing getting in that the host did not put there. The reel
+is the media, and the play triangle at its hub says it does not just hold the
+media, it runs it. Crimson lid and reel, midnight ink linework, bone glass.
+
+![ffmpeg-wasi logo](../images/branding/logo_transparent.svg){ width="220" }
 
 ---
 
@@ -45,14 +49,22 @@ high-resolution displays.
 | **512 × 512** | [png](../images/branding/logo_transparent_512x512.png) | [png](../images/branding/logo_light_512x512.png) | [png](../images/branding/logo_dark_512x512.png) |
 | **1024 × 1024** | [png](../images/branding/logo_transparent_1024x1024.png) | [png](../images/branding/logo_light_1024x1024.png) | [png](../images/branding/logo_dark_1024x1024.png) |
 
+### Favicon
+
+- [favicon.svg](../images/branding/favicon.svg): a simplified single-motif glyph, not the shrunk logo, so it stays legible at 16 px.
+
 ---
 
 ## Colour palette
 
 | Usage | Name | Hex | Swatch |
 | :--- | :--- | :--- | :--- |
-| Primary | Petrol Teal | `#14534F` | <span style="display:inline-block;width:40px;height:20px;background:#14534F;border:1px solid #333;border-radius:3px;"></span> |
-| Accent | Amber | `#E8912A` | <span style="display:inline-block;width:40px;height:20px;background:#E8912A;border:1px solid #333;border-radius:3px;"></span> |
-| Light background | Cream | `#F5F2EA` | <span style="display:inline-block;width:40px;height:20px;background:#F5F2EA;border:1px solid #333;border-radius:3px;"></span> |
-| Dark detail | Charcoal | `#211E1A` | <span style="display:inline-block;width:40px;height:20px;background:#211E1A;border:1px solid #333;border-radius:3px;"></span> |
+| Primary | Crimson | `#C9184A` | <span style="display:inline-block;width:40px;height:20px;background:#C9184A;border:1px solid #333;border-radius:3px;"></span> |
+| Primary, dark surfaces | Rose | `#E8456F` | <span style="display:inline-block;width:40px;height:20px;background:#E8456F;border:1px solid #333;border-radius:3px;"></span> |
+| Ink and dark background | Midnight Ink | `#161A2D` | <span style="display:inline-block;width:40px;height:20px;background:#161A2D;border:1px solid #333;border-radius:3px;"></span> |
+| Light background | Bone | `#F1EBE0` | <span style="display:inline-block;width:40px;height:20px;background:#F1EBE0;border:1px solid #333;border-radius:3px;"></span> |
 
+Rose is crimson lifted for contrast against ink, used for links and accents on
+the dark scheme where crimson itself falls below the readable threshold.
+
+---
