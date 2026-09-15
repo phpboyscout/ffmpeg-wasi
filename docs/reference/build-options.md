@@ -1,6 +1,6 @@
 ---
 title: Build options
-description: Every knob the build takes: the Docker build arguments, the environment variables the scripts read, the pinned dependency versions, and what happens when one is wrong.
+description: "Every knob the build takes: the Docker build arguments, the environment variables the scripts read, the pinned dependency versions, and what happens when one is wrong."
 date: 2026-08-02
 tags: [reference, build]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]

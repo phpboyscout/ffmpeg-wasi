@@ -1,6 +1,6 @@
 ---
 title: Filters
-description: The libavfilter filters enabled per build profile: the vocabulary available inside the job-spec `filter` string.
+description: "The libavfilter filters enabled per build profile: the vocabulary available inside the job-spec `filter` string."
 date: 2026-07-03
 tags: [reference, filters]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]

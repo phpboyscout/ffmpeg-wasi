@@ -1,6 +1,6 @@
 ---
 title: Codecs
-description: The libavcodec decoders and encoders enabled per build profile: the codecs the engine can read and write.
+description: "The libavcodec decoders and encoders enabled per build profile: the codecs the engine can read and write."
 date: 2026-07-03
 tags: [reference, codecs]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]

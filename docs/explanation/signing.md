@@ -1,6 +1,6 @@
 ---
 title: Release signing
-description: How ffmpeg-wasi releases are signed: an AWS KMS key only the tag pipeline can wield, a detached signature over checksums.txt, what it defends, and where the public key lives.
+description: "How ffmpeg-wasi releases are signed: an AWS KMS key only the tag pipeline can wield, a detached signature over checksums.txt, what it defends, and where the public key lives."
 date: 2026-06-29
 tags: [explanation, signing, security, releases]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]

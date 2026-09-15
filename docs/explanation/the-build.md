@@ -1,6 +1,6 @@
 ---
 title: The build
-description: How libav* is cross-compiled to wasm32-wasi: the toolchain, the single-threaded config, setjmp/longjmp, and the wasi compat shims.
+description: "How libav* is cross-compiled to wasm32-wasi: the toolchain, the single-threaded config, setjmp/longjmp, and the wasi compat shims."
 date: 2026-06-28
 tags: [explanation, build]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]

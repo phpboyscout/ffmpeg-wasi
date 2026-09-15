@@ -1,6 +1,6 @@
 ---
 title: Driver invocation & ABI
-description: The contract for driving the engine binary: argv, the four ops, stdio, exit codes, the filesystem devices it expects, and the native driver's AFMPEG_NATIVE_SOCKET IPC framing.
+description: "The contract for driving the engine binary: argv, the four ops, stdio, exit codes, the filesystem devices it expects, and the native driver's AFMPEG_NATIVE_SOCKET IPC framing."
 date: 2026-07-16
 tags: [reference, api, native]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]

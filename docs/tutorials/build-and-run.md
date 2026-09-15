@@ -1,6 +1,6 @@
 ---
 title: Build ffmpeg-wasi and run it
-description: A first end-to-end pass: build the module from source and run current FFmpeg under a pure-Go runtime.
+description: "A first end-to-end pass: build the module from source and run current FFmpeg under a pure-Go runtime."
 date: 2026-06-28
 tags: [tutorial]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]

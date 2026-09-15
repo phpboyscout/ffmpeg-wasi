@@ -1,6 +1,6 @@
 ---
 title: Inside the engine
-description: A maintainer's map of src/: what each translation unit does, how a job flows through them, and what the wasm and native builds share versus split.
+description: "A maintainer's map of src/: what each translation unit does, how a job flows through them, and what the wasm and native builds share versus split."
 date: 2026-07-16
 tags: [explanation, engine, native]
 authors: [Matt Cockayne <matt@phpboyscout.uk>]

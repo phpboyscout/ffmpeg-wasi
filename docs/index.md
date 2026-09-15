@@ -1,6 +1,6 @@
 ---
 title: ffmpeg-wasi
-description: Current FFmpeg, libav-direct: a sandboxed WASI module and a native driver. Pure-Go-runnable, CGO-free.
+description: "Current FFmpeg, libav-direct: a sandboxed WASI module and a native driver. Pure-Go-runnable, CGO-free."
 ---
 
 <div class="hero" markdown>
