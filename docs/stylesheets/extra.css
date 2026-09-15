@@ -38,9 +38,12 @@
 .md-header__button, .md-header__topic, .md-header__title, .md-tabs__link { color: inherit; }
 .md-tabs__link { opacity: 0.75; }
 .md-tabs__link--active, .md-tabs__link:hover { color: var(--fw-brand); opacity: 1; }
-.md-search__form { background-color: rgba(241, 235, 224, 0.12); }
-.md-search__input, .md-search__input::placeholder, .md-search__icon { color: var(--fw-cream); }
-.md-search__input::placeholder { opacity: 0.75; }
+/* The search trigger is a button whose icon is a mask painted in default-fg,
+   so it needs its own colours on the ink bar, in both schemes. */
+.md-search__button { color: var(--fw-cream); background-color: rgba(241, 235, 224, 0.12); }
+.md-search__button:hover, .md-search__button:focus { color: var(--fw-cream); background-color: rgba(241, 235, 224, 0.22); }
+.md-search__button::before { background-color: var(--fw-cream); }
+.md-search__button::after { color: var(--fw-ink); background: rgba(241, 235, 224, 0.85); }
 .md-typeset a:hover { color: var(--fw-brand-deep); }
 
 /* ---------------------------------------------------------------- hero ---- */
