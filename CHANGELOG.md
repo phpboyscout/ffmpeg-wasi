@@ -1,5 +1,17 @@
 # Changelog
 
+## [n9.0.1-7](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-7)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-6...n9.0.1-7)
+
+### Notes
+
+- A release now offers every artefact the signature covers. n9.0.1-6 and earlier linked seventeen files while twenty-three were built, signed and uploaded — every gzipped native driver was published to the package registry and never offered on the release page. The upload now derives its list from checksums.txt, and a check refuses a release whose links and signed set disagree.
+
+### Bug Fixes
+
+- **release**: link every artefact the signature covers ([25488e5](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/25488e5d2bc73744927f4123bacb457559483c12))
+
 ## [n9.0.1-6](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-6)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-5...n9.0.1-6)
