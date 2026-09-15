@@ -128,6 +128,10 @@ validate:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     - shellcheck build/*.sh
+    # The release links exactly what the signature covers. Cheap, and in
+    # validate because a disagreement found after ninety minutes of compiles
+    # is found too late to be worth much.
+    - sh build/check-release-set.sh
     # A failing command in an AND-OR list does not stop a job (#68). Cheap to
     # check here, and the failure it prevents costs a whole pipeline to find.
     - sh build/check-ci-shell.sh .gitlab-ci.yml build/engine.gitlab-ci.yml
@@ -359,17 +363,20 @@ upload:
       # Publish every asset to the generic package registry (stable, pinnable
       # URLs). checksums.txt + provenance.json + checksums.txt.sig come from the
       # `sign` job; the modules from the build jobs.
-      for f in ffmpeg-wasi-lgpl.wasm ffmpeg-wasi-lgpl.wasm.gz \
-               ffmpeg-wasi-gpl.wasm ffmpeg-wasi-gpl.wasm.gz \
-               ffmpeg-wasi-intermediate-lgpl.wasm ffmpeg-wasi-intermediate-lgpl.wasm.gz \
-               ffmpeg-wasi-intermediate-gpl.wasm ffmpeg-wasi-intermediate-gpl.wasm.gz \
-               ffmpeg-wasi-driver-linux-amd64-lgpl ffmpeg-wasi-driver-linux-amd64-lgpl.gz \
-               ffmpeg-wasi-driver-linux-amd64-gpl ffmpeg-wasi-driver-linux-amd64-gpl.gz \
-               ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl.gz \
-               ffmpeg-wasi-driver-linux-amd64-intermediate-gpl ffmpeg-wasi-driver-linux-amd64-intermediate-gpl.gz \
-               ffmpeg-wasi-driver-linux-amd64-full-lgpl ffmpeg-wasi-driver-linux-amd64-full-lgpl.gz \
-               ffmpeg-wasi-driver-linux-amd64-full-gpl ffmpeg-wasi-driver-linux-amd64-full-gpl.gz \
-               checksums.txt checksums.txt.sig provenance.json; do
+      # The set to upload is READ from checksums.txt rather than repeated
+      # here. That file is the signed set: build/sign-release.sh puts exactly
+      # these names through sha256sum, and checksums.txt.sig certifies the
+      # result, so deriving the list makes it impossible to upload something
+      # unsigned or to miss something signed.
+      #
+      # It used to be a literal list, and n9.0.1-6 is what that cost: six
+      # gzipped native drivers were built, signed and uploaded, and then not
+      # offered on the release, because a second list had been written once
+      # and never compared with the first.
+      #
+      # checksums.txt and its signature are appended: they cannot appear in a
+      # checksum of themselves.
+      for f in $(awk '{print $2}' checksums.txt) checksums.txt checksums.txt.sig; do
         echo "uploading $f"
         curl --fail --silent --show-error \
           --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \

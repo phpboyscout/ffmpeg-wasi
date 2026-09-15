@@ -72,6 +72,10 @@ lint:
     # to the awk: the image ships busybox, the host may not.
     docker run --rm -v "$PWD:/mnt" -w /mnt --entrypoint sh "$image" \
       build/check-ci-shell.sh .gitlab-ci.yml build/engine.gitlab-ci.yml
+    # Same container again, for the same reason: this runs under CI's sh, not
+    # the host's.
+    docker run --rm -v "$PWD:/mnt" -w /mnt --entrypoint sh "$image" \
+      build/check-release-set.sh
 
 # Resolve the FFmpeg version this build targets, the way CI does before anything
 # expensive runs (spec 0035 D3).

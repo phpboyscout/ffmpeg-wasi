@@ -20,26 +20,42 @@ versioning:
 # The files a release carries. Named rather than inferred: colophon learns a
 # Go project's artefacts from goreleaser's manifest, and this project has no
 # goreleaser — its artefacts are FFmpeg cross-compiles, uploaded by the job
-# below (colophon spec 0017).
+# in .gitlab-ci.yml (colophon spec 0017).
 #
 # Every one is checked to resolve before the release is published, so a name
 # here that the upload did not put there stops the release rather than
 # publishing a link that 404s. Order is the order they appear on the release.
+#
+# THIS LIST IS THE SIGNED SET. It is every file build/sign-release.sh passes
+# to sha256sum — so checksums.txt covers it and checksums.txt.sig certifies
+# it — plus checksums.txt and its signature, which cannot checksum themselves.
+#
+# Keep it that way. n9.0.1-6 linked seventeen of the twenty-three, missing
+# every gzipped native driver: they were built, uploaded, checksummed and
+# signed, and then not offered on the release page. The omission came from
+# the release-cli arguments this list replaced and nobody had a reason to
+# look, because the count was never compared with anything.
 assets:
   - ffmpeg-wasi-lgpl.wasm
-  - ffmpeg-wasi-gpl.wasm
-  - ffmpeg-wasi-intermediate-lgpl.wasm
-  - ffmpeg-wasi-intermediate-gpl.wasm
   - ffmpeg-wasi-lgpl.wasm.gz
+  - ffmpeg-wasi-gpl.wasm
   - ffmpeg-wasi-gpl.wasm.gz
+  - ffmpeg-wasi-intermediate-lgpl.wasm
   - ffmpeg-wasi-intermediate-lgpl.wasm.gz
+  - ffmpeg-wasi-intermediate-gpl.wasm
   - ffmpeg-wasi-intermediate-gpl.wasm.gz
   - ffmpeg-wasi-driver-linux-amd64-lgpl
+  - ffmpeg-wasi-driver-linux-amd64-lgpl.gz
   - ffmpeg-wasi-driver-linux-amd64-gpl
+  - ffmpeg-wasi-driver-linux-amd64-gpl.gz
   - ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl
+  - ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl.gz
   - ffmpeg-wasi-driver-linux-amd64-intermediate-gpl
+  - ffmpeg-wasi-driver-linux-amd64-intermediate-gpl.gz
   - ffmpeg-wasi-driver-linux-amd64-full-lgpl
+  - ffmpeg-wasi-driver-linux-amd64-full-lgpl.gz
   - ffmpeg-wasi-driver-linux-amd64-full-gpl
+  - ffmpeg-wasi-driver-linux-amd64-full-gpl.gz
+  - provenance.json
   - checksums.txt
   - checksums.txt.sig
-  - provenance.json
