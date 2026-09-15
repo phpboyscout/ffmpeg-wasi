@@ -52,6 +52,21 @@ include:
   - component: gitlab.com/phpboyscout/cicd/colophon@main
     inputs:
       tag_pattern: '^n[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$'
+      # The component's default image bakes an older colophon that cannot read
+      # this project's versions at all — it would read every n* tag as
+      # not-a-version and propose a first release over the whole history.
+      # v0.1.11 is the first to carry colophon 0.10.0, which has both the
+      # ordinal scheme and the named assets below.
+      image: registry.gitlab.com/phpboyscout/images/release-tools:v0.1.11
+      assets: true
+      # Blank, deliberately. The component always passes --assets <dist> to
+      # colophon, and colophon refuses a goreleaser dist and a named `assets`
+      # list together — they are alternatives (colophon spec 0017 D2). There is
+      # no goreleaser here, so the dist is emptied and the manifest's list is
+      # the only source. Without this the first release fails with
+      # "name assets in .colophon.yaml or pass --assets, not both".
+      dist: ""
+      asset_base: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ffmpeg-wasi/$CI_COMMIT_TAG"
   # The engine build matrix. In its own file so `changes:` can name it: a
   # merge request that rewires the build rebuilds, one that edits release,
   # signing or pages does not.
@@ -307,9 +322,16 @@ sign:
       - release-v2.asc # v2 public key (dual-sign window; published via WKD 2026-07-24)
     expire_in: 1 week
 
-release:
+# Uploads every artefact to the generic package registry, and stops there.
+#
+# It used to create the release object too, with release-cli and seventeen
+# --assets-link arguments. colophon-release does that now, from the `assets`
+# list in .colophon.yaml, and checks every one of them resolves before it
+# publishes anything — which is a check this job never had (afmpeg spec 0046
+# D4, colophon spec 0017).
+upload:
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:v0.24.0
+  image: alpine:3.24.1
   rules:
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
   needs:
@@ -350,25 +372,15 @@ release:
           --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
           --upload-file "$f" "${PKG}/${f}"
       done
-    - |
-      release-cli create \
-        --name "ffmpeg-wasi ${CI_COMMIT_TAG}" \
-        --tag-name "${CI_COMMIT_TAG}" \
-        --description "FFmpeg ${CI_COMMIT_TAG%-*} for WASI.\n\nWhich variant and profile to pick, what each artifact contains, the native driver speedups, the openh264 patent caveat, and how to verify \`checksums.txt.sig\` and pin a module by URL + SHA-256: [Variants \& artifacts](https://ffmpeg-wasi.phpboyscout.uk/reference/variants/).\n\nWhat changed in this release: [CHANGELOG.md](${CI_PROJECT_URL}/-/blob/${CI_COMMIT_TAG}/CHANGELOG.md)." \
-        --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-gpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-gpl.wasm\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-lgpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-lgpl.wasm\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-gpl.wasm\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-gpl.wasm\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-lgpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-lgpl.wasm.gz\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-gpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-gpl.wasm.gz\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-lgpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-lgpl.wasm.gz\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-intermediate-gpl.wasm.gz\",\"url\":\"${PKG}/ffmpeg-wasi-intermediate-gpl.wasm.gz\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-lgpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-lgpl\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-gpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-gpl\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-intermediate-gpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-intermediate-gpl\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-full-lgpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-full-lgpl\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"ffmpeg-wasi-driver-linux-amd64-full-gpl\",\"url\":\"${PKG}/ffmpeg-wasi-driver-linux-amd64-full-gpl\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"checksums.txt\",\"url\":\"${PKG}/checksums.txt\",\"link_type\":\"other\"}" \
-        --assets-link "{\"name\":\"checksums.txt.sig\",\"url\":\"${PKG}/checksums.txt.sig\",\"link_type\":\"other\"}" \
-        --assets-link "{\"name\":\"provenance.json\",\"url\":\"${PKG}/provenance.json\",\"link_type\":\"other\"}"
+
+# colophon-release creates the release object from .colophon.yaml's `assets`
+# list, so it must not run until those files are actually in the registry.
+#
+# The component's own `needs` names goreleaser and nothing else, optionally.
+# This project has no goreleaser, so that need resolves to nothing and the job
+# would otherwise start at pipeline time — before a single artefact existed —
+# and refuse the release because none of its assets resolve.
+colophon-release:
+  needs:
+    - job: upload
+      artifacts: false

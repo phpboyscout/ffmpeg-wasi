@@ -16,3 +16,30 @@
 versioning:
   scheme: ordinal
   prefix_file: build/ffmpeg-version.txt
+
+# The files a release carries. Named rather than inferred: colophon learns a
+# Go project's artefacts from goreleaser's manifest, and this project has no
+# goreleaser — its artefacts are FFmpeg cross-compiles, uploaded by the job
+# below (colophon spec 0017).
+#
+# Every one is checked to resolve before the release is published, so a name
+# here that the upload did not put there stops the release rather than
+# publishing a link that 404s. Order is the order they appear on the release.
+assets:
+  - ffmpeg-wasi-lgpl.wasm
+  - ffmpeg-wasi-gpl.wasm
+  - ffmpeg-wasi-intermediate-lgpl.wasm
+  - ffmpeg-wasi-intermediate-gpl.wasm
+  - ffmpeg-wasi-lgpl.wasm.gz
+  - ffmpeg-wasi-gpl.wasm.gz
+  - ffmpeg-wasi-intermediate-lgpl.wasm.gz
+  - ffmpeg-wasi-intermediate-gpl.wasm.gz
+  - ffmpeg-wasi-driver-linux-amd64-lgpl
+  - ffmpeg-wasi-driver-linux-amd64-gpl
+  - ffmpeg-wasi-driver-linux-amd64-intermediate-lgpl
+  - ffmpeg-wasi-driver-linux-amd64-intermediate-gpl
+  - ffmpeg-wasi-driver-linux-amd64-full-lgpl
+  - ffmpeg-wasi-driver-linux-amd64-full-gpl
+  - checksums.txt
+  - checksums.txt.sig
+  - provenance.json
