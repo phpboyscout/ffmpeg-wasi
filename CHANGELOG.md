@@ -1,5 +1,27 @@
 # Changelog
 
+## [n9.0.1-6](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-6)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-5...n9.0.1-6)
+
+### Notes
+
+- The release path works again. The first pipeline after adopting colophon failed on the job that cuts the tag, because of a defect in the colophon version the image carried; this pins the image that fixes it. No change to how releases are named or proposed.
+
+- The release object is now created by colophon rather than by release-cli, carrying the same seventeen artefacts. Each one is verified to resolve before the release is published, which the previous job did not do — a release can no longer appear with a link to a file the upload failed to place.
+
+- Releases are now cut by merging a release merge request rather than by pushing a tag by hand, and this repository has a CHANGELOG.md for the first time — seeded with all seventeen releases back to n8.1.2-1. Versions are unchanged in shape and meaning: n9.0.1-6 is still the sixth build of FFmpeg n9.0.1, the ordinal still restarts when the FFmpeg version moves, and build/ffmpeg-version.txt is still the one place that version is written. The release description now links to the Variants & artifacts reference page instead of repeating it.
+
+### Features
+
+- **build**: a `just ci` that predicts the pipeline, and a lint that can run ([847fedf](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/847fedf693f2381c0d85336e0e4ecc3de78c5ea2))
+
+### Bug Fixes
+
+- **docs**: quote the descriptions YAML cannot read ([7fd2dba](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/7fd2dba6859a70732ba1f5ffa7e454f9fe0b2d41))
+- **build**: name the missing tool instead of retrying the clone that needed it ([058bf5c](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/058bf5cba1d5fca826a10150f33326d413e5a4de))
+- **build**: name meson's pkg-config binary by its canonical key ([73ac79e](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/73ac79e707523e7fc21044386ea1579158a0d568))
+
 ## [n9.0.1-5](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-5)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-4...n9.0.1-5)
