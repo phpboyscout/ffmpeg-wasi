@@ -14,19 +14,11 @@ filters), by [profile](variants.md). This is the container half of the picture;
 
 The build starts from `--disable-everything` and enables an explicit allowlist, so **a format not
 listed here is not present**, the muxer cannot be resolved and the job fails with
-`process: cannot resolve output format`.
-
-## How a container is chosen
-
-- **Reading.** libavformat probes the input. Set `inputs[].format` to force a demuxer by name
-  instead; required for headerless input such as `rawvideo` or raw PCM, where there is nothing to
-  probe. See [the job spec](job-spec.md#operations).
-- **Writing.** The muxer is guessed from the output path's extension. Set `outputs[].format` to
-  force one by name; required wherever the extension does not imply it (`hls`, `dash`, `segment`)
-  or where you want a different muxer than the extension suggests.
-- **Muxer options** go in `outputs[].format_options`, never in `outputs[].options` (which reaches
-  the *encoder*). Segment timing and naming, fragmentation flags and playlist settings are all
-  muxer options.
+`process: cannot resolve output format`. In one line: every build reads MP4/MOV, Matroska/WebM,
+MP3, WAV, Ogg, ADTS AAC, FLAC, image sequences, concat lists and raw video/PCM, and writes
+`mp4`, `mov`, `matroska`, `webm`, `mp3`, `wav` and `image2`; writing Ogg, AAC or FLAC, or
+streaming containers, needs the `intermediate` profile. The tables are the authority; how a
+format is picked or forced is [below them](#how-a-container-is-chosen).
 
 ## Lean (all builds)
 
@@ -79,6 +71,18 @@ the engine has no network ([why](limits.md#can-an-input-or-output-be-a-url)).
 The `full` profile adds no containers. Its additions are the heavy HEVC and AV1
 [encoders](codecs.md#full-native-only-over-intermediate); the format set is identical to
 `intermediate`.
+
+## How a container is chosen
+
+- **Reading.** libavformat probes the input. Set `inputs[].format` to force a demuxer by name
+  instead; required for headerless input such as `rawvideo` or raw PCM, where there is nothing to
+  probe. See [the job spec](job-spec.md#operations).
+- **Writing.** The muxer is guessed from the output path's extension. Set `outputs[].format` to
+  force one by name; required wherever the extension does not imply it (`hls`, `dash`, `segment`)
+  or where you want a different muxer than the extension suggests.
+- **Muxer options** go in `outputs[].format_options`, never in `outputs[].options` (which reaches
+  the *encoder*). Segment timing and naming, fragmentation flags and playlist settings are all
+  muxer options.
 
 ## Bitstream filters
 

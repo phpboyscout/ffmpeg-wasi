@@ -14,14 +14,10 @@ that is *exactly* as capable as the engine, with no leaky partial-CLI illusion. 
 is the **compatibility contract** between ffmpeg-wasi and [afmpeg](https://gitlab.com/phpboyscout/afmpeg);
 it is versioned, and afmpeg pins a known-good engine + vocabulary version.
 
-!!! note "Status"
-    **`probe`, `process`, `frames`, and `version` all run today.** `process` supports **multiple inputs, the full
-    `filter_complex`, and multiple output files**: pad labels (`[0:v]`, `[1:a]`, … →
-    `[vout]`, `[aout]`) parsed by `avfilter_graph_parse2`; each graph output pad is routed by
-    `map` to the `outputs[]` entry that names it, encoded (video pads with `video_codec`,
-    audio pads with `audio_codec`) and muxed into that file. With no `filter`, a passthrough
-    graph is generated for input 0. Shapes follow afmpeg
-    [spec 0007 §4](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
+**The short version.** A job is one JSON document with an `op` of `process`, `probe`, `frames`
+or `version`, passed to the engine as `argv[1]`; the result comes back on stdout, a failure as
+one line on stderr with exit `1` to `3` ([errors](errors.md)). The `process` shape below is the
+one most jobs use; the field table under it is the whole vocabulary.
 
 ## Operations
 
@@ -278,6 +274,15 @@ The one place we deliberately **don't** invent our own language. libavfilter shi
 graph parser; reinventing the `[0:v]scale=…[v]` mini-language would be folly, and your
 existing filtergraph knowledge transfers directly. Structured fields surround the graph
 (inputs, outputs, codecs, options); the graph itself is the standard string.
+
+!!! note "Status"
+    **`probe`, `process`, `frames`, and `version` all run today.** `process` supports **multiple inputs, the full
+    `filter_complex`, and multiple output files**: pad labels (`[0:v]`, `[1:a]`, … →
+    `[vout]`, `[aout]`) parsed by `avfilter_graph_parse2`; each graph output pad is routed by
+    `map` to the `outputs[]` entry that names it, encoded (video pads with `video_codec`,
+    audio pads with `audio_codec`) and muxed into that file. With no `filter`, a passthrough
+    graph is generated for input 0. Shapes follow afmpeg
+    [spec 0007 §4](https://gitlab.com/phpboyscout/afmpeg/-/blob/main/docs/development/specs/0007-libav-direct-engine.md).
 
 ## Transport
 

@@ -25,6 +25,17 @@ Exit `3` is deliberately distinct from `2` so a caller can tell *"upgrade ffmpeg
 *"fix the job"* without parsing the message. See
 [version negotiation](driver-invocation-abi.md#version-negotiation).
 
+> **Looking up an exit code from the `ffmpeg` command line?** This page is the ffmpeg-wasi
+> engine's, which exits `0` to `3` and never runs the `ffmpeg` CLI. The command-line tool
+> (FFmpeg n8.1.2, the version this engine is built from) returns the negative `AVERROR` from the
+> transcode or the option parser as its exit status, which the shell shows truncated to a byte:
+> `234` is `AVERROR(EINVAL)`, an invalid argument or an unrecognised option; `254` is
+> `AVERROR(ENOENT)`, a file that does not exist; `183` is `AVERROR_INVALIDDATA`, input that is
+> not what its container claims; `187` is `AVERROR_EOF`; `255` means it was killed by a signal;
+> `69` is `-abort_on` tripping; `1` is "no input or no output file given". For any other value,
+> subtract it from 256 and look the errno up in `libavutil/error.h`. Source:
+> [`fftools/ffmpeg.c` at n8.1.2, `main()`](https://github.com/FFmpeg/FFmpeg/blob/n8.1.2/fftools/ffmpeg.c#L1031-L1056).
+
 !!! note "Two `process` validation failures exited `0` up to n8.1.2-12"
     In releases **up to and including `n8.1.2-12`**, a `process` job whose output entry had no
     `path` or no video/audio/subtitle codec, and one setting both `duration` and `end`, printed
