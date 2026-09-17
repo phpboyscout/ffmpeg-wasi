@@ -287,9 +287,9 @@ sign:
     # in its own shell, so exports don't persist (gtb's aws-kms backend reads
     # this path + AWS_ROLE_ARN to assume the role via web-identity).
     AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/oidc-token
-    # v2 (prod account) is the sole signer since the 2026-07-24 rotation's
-    # dual-sign window closed. v1 lived in the old account 049815585546,
-    # being closed; afmpeg keeps its public key so older releases verify.
+    # v2, in the prod account, is the sole signer since the 2026-07-24
+    # rotation; the old account and its v1 private key are gone. afmpeg keeps
+    # the v1 PUBLIC key so releases signed before then keep verifying.
     SIGNING_KEY_ALIAS: alias/ffmpeg-wasi-release-signing-v2
     # The OpenPGP UID + creation time are FIXED so every mint reproduces the same
     # key fingerprint (4C96ECB35C7446619FF78EB1ED1344E576B7BBBF) — the one afmpeg
@@ -316,7 +316,6 @@ sign:
       - provenance.json
       - checksums.txt.sig
       - release.asc # the OpenPGP public key, for the operator to publish via WKD (0011)
-      - release-v2.asc # v2 public key (dual-sign window; published via WKD 2026-07-24)
     expire_in: 1 week
 
 # Uploads every artefact to the generic package registry, and stops there.

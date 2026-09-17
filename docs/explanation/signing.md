@@ -47,10 +47,13 @@ project, so no other project's pipeline can ever produce an ffmpeg-wasi signatur
 
 Two OpenPGP keys back the chain (the go-tool-base model):
 
-- the **signing key** (`ffmpeg-wasi-release@phpboyscout.uk`), minted from the KMS key. OpenPGP
-  fingerprint `710881C1DDAEABD138E53004A2166E59EB6060E1`. Signs every release. A second signing key
-  is currently in its rotation-overlap window, so releases made during it carry two signatures,
-  see [Rotation](#rotation-and-why-a-release-may-carry-two-signatures).
+- the **signing key** (`ffmpeg-wasi-release-v2@phpboyscout.uk`), minted from the KMS key
+  `alias/ffmpeg-wasi-release-signing-v2`. OpenPGP fingerprint
+  `4C96ECB35C7446619FF78EB1ED1344E576B7BBBF`. Signs every release since 2026-07-24. Its
+  predecessor (`ffmpeg-wasi-release@phpboyscout.uk`, `710881C1DDAEABD138E53004A2166E59EB6060E1`)
+  signed every release before n8.1.2-11 alone and shared the signature with v2 from n8.1.2-11
+  until September 2026; afmpeg still trusts it so those releases verify, see
+  [Rotation](#rotation-and-why-a-release-may-carry-two-signatures).
 - the **shared org rotation-authority key** (`release@phpboyscout.uk`,
   `2B26658409047ED08B56CEBDCF5B8DBB5D9F19C2`), an offline break-glass key that certifies the
   signing key and authorises rotation. One per org, never used in normal operation, and never a
@@ -87,28 +90,29 @@ attacker would have to compromise *both*. Stating the limit plainly is part of t
 
 ## Rotation, and why a release may carry two signatures
 
-The key alias is versioned (`alias/ffmpeg-wasi-release-signing-v1`). Rotation mints a new key,
-publishes its public half via the WKD location above, and adds it to afmpeg's pinned set alongside
-the old one for an overlap window before the old key is retired, so there is no flag-day, and a
-compromised key can be dropped promptly.
+The key alias is versioned (`alias/ffmpeg-wasi-release-signing-v2` today). Rotation mints a new
+key, publishes its public half under a **new** WKD identity, and adds it to afmpeg's pinned set
+alongside the old one; releases are signed with both for an overlap window, then the old key stops
+signing. There is no flag-day, and a compromised key can be dropped promptly.
 
-**An overlap window is currently open.** A second key
-(`alias/ffmpeg-wasi-release-signing-v2`, uid `ffmpeg-wasi-release-v2@phpboyscout.uk`, created
-2026-07-24) lives in a separate AWS account with its own signer role, and `build/sign-release.sh`
-appends its signature into the *same* armored `checksums.txt.sig`. So during the window:
+The first rotation ran from 2026-07-24 to September 2026, when the AWS account holding the v1 key
+was closed. Releases cut inside that window carry two detached signatures in the *same* armored
+`checksums.txt.sig`, because `gtb sign --append` merges the second one:
 
-- **`checksums.txt.sig` carries two detached signatures, not one.** It is still one file over the
-  same `checksums.txt`.
+- **It is still one file over the same `checksums.txt`.**
 - **Verifying with either key succeeds.** An OpenPGP verifier skips signature packets from an issuer
-  it does not know, so an afmpeg build that pins only v1 verifies the release exactly as before, and
-  one that pins both verifies with whichever it holds.
+  it does not know, so an afmpeg build that pins only v1 verifies those releases exactly as before,
+  and one that pins both verifies with whichever it holds.
 - **Neither key is preferred.** They certify identical bytes.
 
-The window closes by removing the secondary key's variables from the CI signing job, after which
-releases carry the v2 signature alone.
+Releases since the window carry the v2 signature alone. The v1 **public** key stays in afmpeg's
+trust set for as long as the releases it signed should verify, and the WKD entry for
+`ffmpeg-wasi-release@phpboyscout.uk` is never edited: an afmpeg build cross-checks its embedded
+set against the WKD set for its compiled-in identity and requires them to agree exactly, so a new
+trust set always gets a new identity.
 
-If you verify by hand, expect `gpg --verify` to report an unknown-key signature alongside the one it
-can check. That is the overlap, not a tampered manifest.
+If you verify by hand a release from the window, expect `gpg --verify` to report an unknown-key
+signature alongside the one it can check. That is the overlap, not a tampered manifest.
 
 ## The tooling is MIT
 
