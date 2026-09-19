@@ -69,7 +69,8 @@ include:
       # the only source. Without this the first release fails with
       # "name assets in .colophon.yaml or pass --assets, not both".
       dist: ""
-      asset_base: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ffmpeg-wasi/$CI_COMMIT_TAG"
+      # Must agree with the `upload` job's STORE (colophon 0025 D16).
+      asset_base: "https://pkg.phpboyscout.uk/ffmpeg-wasi/$CI_COMMIT_TAG"
   # The engine build matrix. In its own file so `changes:` can name it: a
   # merge request that rewires the build rebuilds, one that edits release,
   # signing or pages does not.
@@ -318,7 +319,7 @@ sign:
       - release.asc # the OpenPGP public key, for the operator to publish via WKD (0011)
     expire_in: 1 week
 
-# Uploads every artefact to the generic package registry, and stops there.
+# Uploads every artefact to the release store, and stops there.
 #
 # It used to create the release object too, with release-cli and seventeen
 # --assets-link arguments. colophon-release does that now, from the `assets`
@@ -344,13 +345,15 @@ upload:
     - build:native:gpl:full
     - sign
   variables:
-    PKG: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/ffmpeg-wasi/${CI_COMMIT_TAG}"
+    STORE: "${R2_RELEASE_ENDPOINT}/pbs-release-binaries/ffmpeg-wasi/${CI_COMMIT_TAG}"
   script:
     - apk add --no-cache curl
     - |
       set -e
-      # Publish every asset to the generic package registry (stable, pinnable
-      # URLs). checksums.txt + provenance.json + checksums.txt.sig come from the
+      # Publish every asset to the release store (colophon spec 0025 D19).
+      # curl signs SigV4 itself with the R2 keys; `If-None-Match: *` is the
+      # write-once covenant, a key that exists refused with 412.
+      # checksums.txt + provenance.json + checksums.txt.sig come from the
       # `sign` job; the modules from the build jobs.
       # The set to upload is READ from checksums.txt rather than repeated
       # here. That file is the signed set: build/sign-release.sh puts exactly
@@ -367,13 +370,16 @@ upload:
       # checksum of themselves.
       for f in $(awk '{print $2}' checksums.txt) checksums.txt checksums.txt.sig; do
         echo "uploading $f"
-        curl --fail --silent --show-error \
-          --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          --upload-file "$f" "${PKG}/${f}"
+        curl --fail --silent --show-error --retry 3 --retry-delay 5 \
+          --aws-sigv4 "aws:amz:auto:s3" \
+          --user "${R2_RELEASE_ACCESS_KEY_ID}:${R2_RELEASE_SECRET_ACCESS_KEY}" \
+          --header "If-None-Match: *" \
+          --header "Cache-Control: public, max-age=31536000, immutable" \
+          --upload-file "$f" "${STORE}/${f}"
       done
 
 # colophon-release creates the release object from .colophon.yaml's `assets`
-# list, so it must not run until those files are actually in the registry.
+# list, so it must not run until those files are actually in the store.
 #
 # The component's own `needs` names goreleaser and nothing else, optionally.
 # This project has no goreleaser, so that need resolves to nothing and the job

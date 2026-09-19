@@ -89,7 +89,7 @@ the URL **and** the SHA-256 so an unexpected artifact is rejected:
 
 ```go
 rt, _ := afmpeg.New(ctx, afmpeg.WithModuleURL(
-    "https://gitlab.com/api/v4/projects/83847809/packages/generic/ffmpeg-wasi/n9.0.1-3/ffmpeg-wasi-lgpl.wasm",
+    "https://pkg.phpboyscout.uk/ffmpeg-wasi/n9.0.1-3/ffmpeg-wasi-lgpl.wasm",
     afmpeg.WithSHA256("5378b7d1f60591b6a4d92182ea576c309c1c8c95135b8aa9dcb1e1a9f47b1f3c"),
 ))
 ```
