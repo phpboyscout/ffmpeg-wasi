@@ -59,3 +59,12 @@ assets:
   - provenance.json
   - checksums.txt
   - checksums.txt.sig
+
+# Announcements (colophon spec 0026): opt-in, per project. A headline project
+# (cicd 0100): every release goes to Discord and to the feed the cicd colophon
+# component configures.
+announce:
+  discord:
+    webhook: $DISCORD_RELEASE_WEBHOOK
+    when: any
+  file: {}
