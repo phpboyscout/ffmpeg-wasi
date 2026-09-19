@@ -1,6 +1,6 @@
 #!/bin/sh
 # build/sign-release.sh — assemble the release manifest and OpenPGP-sign it with
-# the org signing toolchain (gtb), so afmpeg verifies it via gitlab.com/phpboyscout/signing.
+# sigillum, so afmpeg verifies it via gitlab.com/phpboyscout/signing.
 #
 # From the built ffmpeg-wasi-*.wasm(.gz) assets in the working directory it produces:
 #   provenance.json    — what went into the build (versions, per-variant licence)
@@ -8,10 +8,10 @@
 #   checksums.txt.sig  — an ASCII-armored OpenPGP detached signature over checksums.txt
 #   release.asc        — the OpenPGP public key (for the operator to publish via WKD)
 #
-# Signing uses the dedicated ffmpeg-wasi KMS key via gtb's aws-kms backend, which
+# Signing uses the dedicated ffmpeg-wasi KMS key via sigillum's aws-kms backend, which
 # resolves credentials from the OIDC web-identity env (AWS_ROLE_ARN +
 # AWS_WEB_IDENTITY_TOKEN_FILE) — only this project's tag pipeline can sign.
-# `gtb` must be on PATH (the `sign` CI job installs it). MIT orchestration.
+# `sigillum` must be on PATH (the go-tools image carries it). MIT orchestration.
 set -eu
 
 : "${CI_COMMIT_TAG:?set CI_COMMIT_TAG, e.g. n8.1.2-4}"
@@ -71,12 +71,12 @@ sha256sum ffmpeg-wasi-lgpl.wasm ffmpeg-wasi-lgpl.wasm.gz \
 
 # 3. Mint the OpenPGP public key from KMS. Fixed name/email/created → deterministic
 #    fingerprint matching afmpeg's embedded key.
-gtb keys mint --backend aws-kms --key-id "$SIGNING_KEY_ALIAS" --kms-region "$AWS_REGION" \
+sigillum keys mint --backend aws-kms --key-id "$SIGNING_KEY_ALIAS" --kms-region "$AWS_REGION" \
   --name "$SIGNING_KEY_NAME" --email "$SIGNING_KEY_EMAIL" --created "$SIGNING_KEY_CREATED" \
   --output release.asc
 
 # 4. Detached OpenPGP signature over checksums.txt (RSA-4096 via KMS, in CI only).
-gtb sign checksums.txt --backend aws-kms --key-id "$SIGNING_KEY_ALIAS" --kms-region "$AWS_REGION" \
+sigillum sign checksums.txt --backend aws-kms --key-id "$SIGNING_KEY_ALIAS" --kms-region "$AWS_REGION" \
   --public-key release.asc --output checksums.txt.sig
 
 echo "signed checksums.txt -> checksums.txt.sig (${SIGNING_KEY_EMAIL})"
