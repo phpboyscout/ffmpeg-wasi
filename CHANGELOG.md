@@ -1,5 +1,17 @@
 # Changelog
 
+## [n9.0.1-8](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-8)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-7...n9.0.1-8)
+
+### Notes
+
+- Releases are signed by sigillum from the CI image rather than by a gtb installed during the release job; the key, the fingerprint and the signature format are unchanged.
+
+### Bug Fixes
+
+- **release**: sign with sigillum from the image, not a gtb installed per release ([43d60cb](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/43d60cbc8a947b7d07e900f2e4d6f6b556de4c56))
+
 ## [n9.0.1-7](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-7)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-6...n9.0.1-7)
