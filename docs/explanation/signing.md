@@ -30,8 +30,8 @@ can verify it. The signature self-identifies the signing key by its fingerprint.
 
 The signing key is an **asymmetric AWS KMS key** (RSA-4096, `SIGN_VERIFY`). Its **private half
 never leaves KMS**. There is no key file, and no human ever holds it. The tag-gated `sign` CI
-job assumes an IAM role via **GitLab OIDC**, then runs **`gtb`** (the org signing CLI): `gtb keys
-mint` derives the OpenPGP public key from the KMS key, and `gtb sign` produces the detached
+job assumes an IAM role via **GitLab OIDC**, then runs **`sigillum`** (the org signing CLI):
+`sigillum keys mint` derives the OpenPGP public key from the KMS key, and `sigillum sign` produces the detached
 signature; KMS performs every private-key operation. The role's trust policy is pinned to *this
 project's* release tags (`project_path:phpboyscout/ffmpeg-wasi:ref_type:tag:ref:n*`). So:
 
