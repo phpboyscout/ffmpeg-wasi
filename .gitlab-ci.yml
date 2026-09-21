@@ -165,7 +165,7 @@ ffmpeg-version:
 # to an already long pipeline for no benefit (0036 D8).
 test:
   stage: test
-  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.3.0
+  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.4.0
   rules: *engine-test-rules
   interruptible: true
   # Same optional needs as size-budget: run against whatever the pipeline built.
