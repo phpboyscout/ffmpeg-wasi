@@ -138,7 +138,7 @@ validate:
 # cheap must never queue behind a compile.
 ffmpeg-version:
   stage: validate
-  image: alpine:3.24.1
+  image: alpine:3.24.2
   interruptible: true
   rules:
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
@@ -210,7 +210,7 @@ test:
 # are calibrated from a real build; flip allow_failure off to enforce.
 size-budget:
   stage: sign
-  image: alpine:3.24.1
+  image: alpine:3.24.2
   # Runs on engine merge requests too (spec 0035 D4), which is where a size
   # regression is worth seeing — the lean wasm module is at 93% of its 6 MB
   # ceiling on n9.0.1, and that is the number most likely to break the n9 bump.
@@ -316,7 +316,7 @@ sign:
 # D4, colophon spec 0017).
 upload:
   stage: release
-  image: alpine:3.24.1
+  image: alpine:3.24.2
   rules:
     - if: '$CI_COMMIT_TAG =~ /^n[0-9]/'
   needs:
