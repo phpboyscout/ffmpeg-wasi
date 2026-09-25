@@ -165,7 +165,7 @@ ffmpeg-version:
 # to an already long pipeline for no benefit (0036 D8).
 test:
   stage: test
-  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.4.0
+  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.5.0
   rules: *engine-test-rules
   interruptible: true
   # Same optional needs as size-budget: run against whatever the pipeline built.
@@ -253,7 +253,7 @@ sign:
   stage: sign
   # go-tools v0.4.0 carries sigillum, which build/sign-release.sh calls; nothing
   # is installed at job time (cicd spec 0097 D5).
-  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.4.0
+  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.5.0
   # Tag-only, unconditionally, and its `needs` stay mandatory (spec 0035 D5). A
   # merge request must never assume the signing role, mint a signature or publish.
   # The `optional: true` relaxation on size-budget must not spread here.
