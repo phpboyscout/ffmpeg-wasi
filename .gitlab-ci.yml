@@ -55,7 +55,7 @@ include:
       # below, and the fix for those two together. 0.10.0 had the assets
       # feature but refused to publish at all once a manifest named any, which
       # is what failed this project's first run.
-      image: registry.gitlab.com/phpboyscout/images/release-tools:v0.1.14
+      image: registry.gitlab.com/phpboyscout/images/release-tools:v0.1.15
       assets: true
       # Blank, deliberately. The component always passes --assets <dist> to
       # colophon, and colophon refuses a goreleaser dist and a named `assets`
