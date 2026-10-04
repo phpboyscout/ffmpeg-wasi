@@ -66,6 +66,10 @@ include:
       dist: ""
       # Must agree with the `upload` job's STORE (colophon 0025 D16).
       asset_base: "https://pkg.phpboyscout.uk/ffmpeg-wasi/$CI_COMMIT_TAG"
+  - component: gitlab.com/phpboyscout/cicd/go-core-currency@main
+    inputs:
+      feed: https://phpboyscout.uk/projects.json
+      stage: release
   # The engine build matrix. In its own file so `changes:` can name it: a
   # merge request that rewires the build rebuilds, one that edits release,
   # signing or pages does not.
