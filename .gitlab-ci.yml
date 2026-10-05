@@ -69,6 +69,7 @@ include:
   - component: gitlab.com/phpboyscout/cicd/go-core-currency@main
     inputs:
       feed: https://phpboyscout.uk/projects.json
+      first_party: gitlab.com/phpboyscout/
       stage: release
   # The engine build matrix. In its own file so `changes:` can name it: a
   # merge request that rewires the build rebuilds, one that edits release,
