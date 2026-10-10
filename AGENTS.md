@@ -17,8 +17,8 @@ not a Go module dependency in either direction, so neither `go.mod` shows it and
 a change here can break afmpeg quietly.
 
 It has no phpboyscout toolkit dependencies. `just ci` runs what the pipeline
-gates on — shellcheck over `build/*.sh`, the CI-shape check, the FFmpeg version
-resolution, and the test suite — and deliberately nothing more, so a green run
+gates on (shellcheck over `build/*.sh`, the CI-shape check, the FFmpeg version
+resolution, and the test suite) and deliberately nothing more, so a green run
 predicts a green pipeline rather than merely suggesting one.
 
 It does not ship the `ffmpeg` command line, and will not grow one: FFmpeg 7.0+
@@ -47,10 +47,10 @@ is a release, and the ordinal counts builds rather than encoding what changed
 (afmpeg spec 0046).
 
 **The engine was the moving part, and it has largely stopped moving.** The wave
-of engine defects that dominated this repo — nearly all of #11 to #62, almost
-all raised in a single three-day burst — is closed: forty-two of them at once in
+of engine defects that dominated this repo (nearly all of #11 to #62, almost
+all raised in a single three-day burst) is closed: forty-two of them at once in
 !99, the rest since. One issue is open, #63, and it is labelled
-`phase::deferred` — a discarded return value with no reachable failure.
+`phase::deferred`: a discarded return value with no reachable failure.
 
 So the issue list is no longer an inventory of what is broken; it is a record of
 what was. A new symptom is more likely to be genuinely new than to be one of
@@ -82,7 +82,7 @@ on its own behalf in `fftools/` is absent unless somebody ported it. The symptom
 is always the same sentence: "the identical job through the ffmpeg CLI works."
 
 Before theorising about the layer that failed, run the CLI on the offending
-media and read its stderr, because it may not be fixing anything either — merely
+media and read its stderr, because it may not be fixing anything either, merely
 surviving. A session went into decode-side timestamp work on #65 premised on a
 reconstruction the CLI does not do: it emits the same backward timestamps and
 clamps them at the muxer, which was the piece missing here. #66 was the same
@@ -96,7 +96,7 @@ install ...` carries straight on when the update fails, and the job dies minutes
 later somewhere that names neither. That is #68: the visible failure was `git:
 not found` in `deps.sh`, four minutes and one stage removed from the apt hash
 mismatch behind it. GitLab and the `before_script` boundary both behaved exactly
-as documented — the `&&` was the whole of it. `build/check-ci-shell.sh` rejects
+as documented; the `&&` was the whole of it. `build/check-ci-shell.sh` rejects
 the shape now, in `just lint` and in `validate`; one command per line, or
 `if ...; then ...; fi`.
 
@@ -138,7 +138,7 @@ survived it.
 - The build matrix lives in `build/engine.gitlab-ci.yml`, included by
   `.gitlab-ci.yml`. It is a separate file so `changes:` can name it: editing the
   release, signing or pages jobs must not rebuild ten FFmpeg artifacts. Keep the
-  name ending in `.gitlab-ci.yml` — Renovate's gitlabci manager matches on that,
+  name ending in `.gitlab-ci.yml`: Renovate's gitlabci manager matches on that,
   and it is what keeps the build images tracked.
 - The build matrix is serialised behind one project-scoped `resource_group`, a
   deliberate trade for the shared runners explained at the top of
