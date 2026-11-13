@@ -1,6 +1,6 @@
 module gitlab.com/phpboyscout/ffmpeg-wasi
 
-go 1.27.3
+go 1.27.4
 
 require github.com/tetratelabs/wazero v1.12.0
 
