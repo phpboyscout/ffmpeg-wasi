@@ -3,6 +3,7 @@ package conformance
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,6 +39,52 @@ import (
 const lutFixture = "LUT_3D_SIZE 2\n" +
 	"0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n"
 
+// requireLandlock marks a runner known to have Landlock, where a driver that is
+// not confined is a red gate rather than a skip (spec 0043 D3). CI sets it.
+var requireLandlock = os.Getenv("FFMPEG_WASI_REQUIRE_LANDLOCK") == "1"
+
+// reportedSandbox is the confinement state a driver reports with the bridge
+// serving I/O, which is the only mode that installs the sandbox.
+func reportedSandbox(t *testing.T, a engine.Artifact) string {
+	t.Helper()
+
+	h, sock, err := ipchost.Listen(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatalf("%s: starting the host: %v", a, err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	caps, err := engine.Native{Path: a.Path, Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}.
+		Run(context.Background(), "--capabilities")
+	if err != nil {
+		t.Fatalf("%s: querying capabilities: %v", a, err)
+	}
+
+	var got struct {
+		Sandbox string `json:"sandbox"`
+	}
+	if err := json.Unmarshal([]byte(caps.Stdout), &got); err != nil {
+		t.Fatalf("%s: parsing --capabilities: %v", a, err)
+	}
+
+	return got.Sandbox
+}
+
+// cannotProveContainment ends a subtest on a host where the driver runs
+// unconfined. A host read there is the documented fallback (0043 OQ1), not an
+// escape, so calling it one would blame the build for the runner.
+func cannotProveContainment(t *testing.T, a engine.Artifact, state string) {
+	t.Helper()
+
+	msg := fmt.Sprintf("%s: the driver reports sandbox %q on this host, so containment "+
+		"cannot be proven here", a, state)
+	if requireLandlock {
+		t.Fatal(msg + ", yet FFMPEG_WASI_REQUIRE_LANDLOCK=1 says this runner has Landlock")
+	}
+
+	t.Skip(msg)
+}
+
 func sandboxArtifacts(t *testing.T, a engine.Artifact) {
 	t.Helper()
 
@@ -71,6 +118,10 @@ func TestTheSandboxDeniesAFilterTheHostFilesystem(t *testing.T) {
 		t.Run(a.String(), func(t *testing.T) {
 			t.Parallel()
 			sandboxArtifacts(t, a)
+
+			if state := reportedSandbox(t, a); state != "landlock" {
+				cannotProveContainment(t, a, state)
+			}
 
 			// The LUT lives on the host, NOT in the served directory. Nothing the
 			// caller gave the engine names it.
@@ -151,39 +202,28 @@ func TestTheSandboxStateIsReported(t *testing.T) {
 		t.Run(a.String(), func(t *testing.T) {
 			t.Parallel()
 
-			served := t.TempDir()
-			h, sock, err := ipchost.Listen(served, t.TempDir())
-			if err != nil {
-				t.Fatalf("%s: starting the host: %v", a, err)
-			}
-			t.Cleanup(func() { _ = h.Close() })
-
-			caps, err := engine.Native{Path: a.Path, Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}.
-				Run(context.Background(), "--capabilities")
-			if err != nil {
-				t.Fatalf("%s: querying capabilities: %v", a, err)
-			}
-
-			var got struct {
-				Sandbox string `json:"sandbox"`
-			}
-			if err := json.Unmarshal([]byte(caps.Stdout), &got); err != nil {
-				t.Fatalf("%s: parsing --capabilities: %v", a, err)
-			}
+			state := reportedSandbox(t, a)
 
 			// "unavailable" is a legitimate answer on a kernel without Landlock, and
 			// is why the driver runs rather than refusing to start (0043 OQ1). What is
 			// not legitimate is the field being absent or empty, which is the state a
 			// host cannot distinguish from an old driver that never had a sandbox.
-			switch got.Sandbox {
-			case "landlock", "unavailable":
+			// On a runner known to have Landlock, D3's gate wants nothing less.
+			switch state {
+			case "landlock":
+			case "unavailable":
+				if requireLandlock {
+					t.Errorf("%s: --capabilities reports sandbox \"unavailable\" on a runner "+
+						"FFMPEG_WASI_REQUIRE_LANDLOCK=1 says has Landlock, so this build "+
+						"lost its confinement or the runner lost Landlock", a)
+				}
 			case "":
 				t.Errorf("%s: --capabilities reports no sandbox state at all, so a host "+
 					"requiring confinement cannot tell this driver from one that never had "+
 					"any (ffmpeg-wasi#13)", a)
 			default:
 				t.Errorf("%s: --capabilities reports sandbox %q with the bridge active; "+
-					"want landlock, or unavailable on a kernel without it", a, got.Sandbox)
+					"want landlock, or unavailable on a kernel without it", a, state)
 			}
 		})
 	}
