@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -37,6 +38,104 @@ import (
 // something failed.
 const lutFixture = "LUT_3D_SIZE 2\n" +
 	"0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n"
+
+// requireLandlockEnv makes an unconfined driver a failure instead of a skip. The
+// CI test job sets it, so the runner it is pinned to must have Landlock.
+const requireLandlockEnv = "FFMPEG_WASI_REQUIRE_LANDLOCK"
+
+// landlockRequired reports whether requireLandlockEnv is set true. A value that
+// is not a boolean is fatal rather than false, so a typo cannot turn the gate off.
+func landlockRequired(t *testing.T) bool {
+	t.Helper()
+
+	v, ok := os.LookupEnv(requireLandlockEnv)
+	if !ok || v == "" {
+		return false
+	}
+	required, err := strconv.ParseBool(v)
+	if err != nil {
+		t.Fatalf("%s=%q is not a boolean", requireLandlockEnv, v)
+	}
+	return required
+}
+
+// sandboxVerdict is what a sandbox test makes of the state a driver reports.
+type sandboxVerdict int
+
+const (
+	// confined: the floor is installed, so containment can be tested.
+	confined sandboxVerdict = iota
+	// unconfinedHere: no Landlock on this host, the designed fallback (0043 OQ1).
+	unconfinedHere
+	// unconfinedOnARequiringRunner: no Landlock where the job says there is.
+	unconfinedOnARequiringRunner
+	// unreported: a state a host requiring confinement cannot act on.
+	unreported
+)
+
+func judgeSandboxState(state string, required bool) sandboxVerdict {
+	switch state {
+	case "landlock":
+		return confined
+	case "unavailable":
+		if required {
+			return unconfinedOnARequiringRunner
+		}
+		return unconfinedHere
+	default:
+		return unreported
+	}
+}
+
+// sandboxState is the driver's --capabilities sandbox field, asked with the
+// bridge serving, which is the only mode that installs the floor.
+func sandboxState(t *testing.T, a engine.Artifact) string {
+	t.Helper()
+
+	h, sock, err := ipchost.Listen(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatalf("%s: starting the host: %v", a, err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	caps, err := engine.Native{Path: a.Path, Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}.
+		Run(context.Background(), "--capabilities")
+	if err != nil {
+		t.Fatalf("%s: querying capabilities: %v", a, err)
+	}
+
+	var got struct {
+		Sandbox string `json:"sandbox"`
+	}
+	if err := json.Unmarshal([]byte(caps.Stdout), &got); err != nil {
+		t.Fatalf("%s: parsing --capabilities: %v", a, err)
+	}
+
+	t.Logf("%s: --capabilities reports sandbox %q", a, got.Sandbox)
+	return got.Sandbox
+}
+
+// requireConfinement stops a test whose claim needs the floor installed. Without
+// Landlock the driver runs unconfined by design (0043 OQ1), so a denial test
+// there measures the runner, not the sandbox.
+func requireConfinement(t *testing.T, a engine.Artifact) {
+	t.Helper()
+
+	state := sandboxState(t, a)
+	const why = "the driver runs unconfined here, so a denial cannot be tested"
+	switch judgeSandboxState(state, landlockRequired(t)) {
+	case confined:
+	case unconfinedHere:
+		t.Skipf("%s: this host has no Landlock and %s. Set %s=1 to make this a failure.",
+			a, why, requireLandlockEnv)
+	case unconfinedOnARequiringRunner:
+		t.Fatalf("%s: this host has no Landlock and %s, yet %s says this runner has it.",
+			a, why, requireLandlockEnv)
+	case unreported:
+		t.Fatalf("%s: --capabilities reports sandbox %q, so containment cannot be "+
+			"established (ffmpeg-wasi#13)", a, state)
+	}
+}
 
 func sandboxArtifacts(t *testing.T, a engine.Artifact) {
 	t.Helper()
@@ -71,6 +170,7 @@ func TestTheSandboxDeniesAFilterTheHostFilesystem(t *testing.T) {
 		t.Run(a.String(), func(t *testing.T) {
 			t.Parallel()
 			sandboxArtifacts(t, a)
+			requireConfinement(t, a)
 
 			// The LUT lives on the host, NOT in the served directory. Nothing the
 			// caller gave the engine names it.
@@ -151,39 +251,24 @@ func TestTheSandboxStateIsReported(t *testing.T) {
 		t.Run(a.String(), func(t *testing.T) {
 			t.Parallel()
 
-			served := t.TempDir()
-			h, sock, err := ipchost.Listen(served, t.TempDir())
-			if err != nil {
-				t.Fatalf("%s: starting the host: %v", a, err)
-			}
-			t.Cleanup(func() { _ = h.Close() })
-
-			caps, err := engine.Native{Path: a.Path, Env: []string{"AFMPEG_NATIVE_SOCKET=" + sock}}.
-				Run(context.Background(), "--capabilities")
-			if err != nil {
-				t.Fatalf("%s: querying capabilities: %v", a, err)
-			}
-
-			var got struct {
-				Sandbox string `json:"sandbox"`
-			}
-			if err := json.Unmarshal([]byte(caps.Stdout), &got); err != nil {
-				t.Fatalf("%s: parsing --capabilities: %v", a, err)
-			}
+			state := sandboxState(t, a)
 
 			// "unavailable" is a legitimate answer on a kernel without Landlock, and
-			// is why the driver runs rather than refusing to start (0043 OQ1). What is
-			// not legitimate is the field being absent or empty, which is the state a
-			// host cannot distinguish from an old driver that never had a sandbox.
-			switch got.Sandbox {
-			case "landlock", "unavailable":
-			case "":
-				t.Errorf("%s: --capabilities reports no sandbox state at all, so a host "+
-					"requiring confinement cannot tell this driver from one that never had "+
-					"any (ffmpeg-wasi#13)", a)
-			default:
+			// is why the driver runs rather than refusing to start (0043 OQ1), but not
+			// on a runner that requires it: that is D3's CI assertion, and it holds
+			// for the lean builds the lut3d canary cannot reach. An empty field is
+			// never legitimate: a host cannot tell it from an old driver with no
+			// sandbox at all.
+			switch judgeSandboxState(state, landlockRequired(t)) {
+			case confined, unconfinedHere:
+			case unconfinedOnARequiringRunner:
+				t.Errorf("%s: --capabilities reports sandbox \"unavailable\" on a runner %s "+
+					"says has Landlock, so this build lost its confinement or the runner "+
+					"lost Landlock", a, requireLandlockEnv)
+			case unreported:
 				t.Errorf("%s: --capabilities reports sandbox %q with the bridge active; "+
-					"want landlock, or unavailable on a kernel without it", a, got.Sandbox)
+					"want landlock, or unavailable on a kernel without it (ffmpeg-wasi#13)",
+					a, state)
 			}
 		})
 	}
