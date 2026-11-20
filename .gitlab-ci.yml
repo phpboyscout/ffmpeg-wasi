@@ -171,9 +171,17 @@ ffmpeg-version:
 # ten parallel FFmpeg *compiles* exhausting the runners (0035 D7). This job
 # compiles no C and runs in minutes, so serialising it behind the builds would add
 # to an already long pipeline for no benefit (0036 D8).
+#
+# Pinned by a `landlock` tag because the containment canary needs a kernel with
+# Landlock and a runtime that allows its syscalls, and neither the hosted fleet
+# nor `amd64` guarantees that: on a host without it the driver runs unconfined by
+# design (0043 OQ1) and proves nothing. Tag a runner only once it has been
+# checked. The variable makes an unconfined driver a red gate here (0043 D3).
 test:
   stage: test
   image: registry.gitlab.com/phpboyscout/images/go-tools:v0.5.9
+  tags:
+    - landlock
   rules: *engine-test-rules
   interruptible: true
   # Same optional needs as size-budget: run against whatever the pipeline built.
@@ -204,6 +212,7 @@ test:
     # anything whose name it cannot parse, so pointing at the whole directory is
     # safe and needs no staging step.
     FFMPEG_WASI_ARTIFACTS: "$CI_PROJECT_DIR"
+    FFMPEG_WASI_REQUIRE_LANDLOCK: "1"
   before_script:
     # Artifact restore does not always preserve the executable bit on the native
     # drivers, and a driver that cannot be exec'd would look like a missing
