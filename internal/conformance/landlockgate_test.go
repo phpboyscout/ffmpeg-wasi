@@ -33,13 +33,16 @@ func TestJudgeSandboxState(t *testing.T) {
 func TestTheRunnerOffersLandlock(t *testing.T) {
 	t.Parallel()
 
+	// Read the requirement first, so a malformed value fails on a Landlock host too.
+	required := landlockRequired(t)
+
 	abi, err := landlockABI()
 	if err == nil {
 		t.Logf("this host offers Landlock ABI v%d", abi)
 		return
 	}
 
-	if landlockRequired(t) {
+	if required {
 		t.Fatalf("this host offers no Landlock (%v), yet %s says this runner has it",
 			err, requireLandlockEnv)
 	}
