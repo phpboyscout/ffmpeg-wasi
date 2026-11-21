@@ -56,7 +56,7 @@ component's options, and use [the job-spec vocabulary](job-spec.md) for how a jo
   [limits](limits.md#what-is-deliberately-left-out-of-the-codec-and-filter-sets).
 
 The narrative pages on [codecs](codecs.md), [filters](filters.md) and [containers](containers.md)
-explain what each batch is for. The tables below are the exact sets.
+explain what each batch is for. The tables below list every component each build is checked to carry.
 
 ## The component sets
 
