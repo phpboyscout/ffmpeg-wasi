@@ -74,9 +74,14 @@
 //       subtitle encoder gains options at all (it was opened with NULL). An
 //       output's `options` keeps its v9 meaning — every encoder that output
 //       opens — so a v9 spec runs unchanged.
+//  11 — constant frame rate (afmpeg spec 0025 §4.2): outputs[].frame_rate, a
+//       rate string av_parse_video_rate accepts ("25", "30000/1001",
+//       "ntsc"). It puts fps ahead of each video sink and aresample=async=1
+//       ahead of each audio sink of that output; refused on a copied video
+//       stream or an output with no encoded video. Absent behaves as v10.
 // A spec whose "version" exceeds this is rejected in main() rather than having
 // its unknown fields silently dropped. Absent "version" == 0 (pre-gate).
-#define AFMPEG_VOCAB_VERSION 10
+#define AFMPEG_VOCAB_VERSION 11
 
 // EXIT_VERSION_TOO_NEW signals a job spec newer than this engine supports —
 // distinct from a malformed spec (2) so a caller can tell "upgrade the engine"

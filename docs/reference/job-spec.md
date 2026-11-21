@@ -59,6 +59,7 @@ one most jobs use; the field table under it is the whole vocabulary.
 | `outputs[].bitstream_filters` | *(v2)* Per copied stream, keyed by its `map` entry: a bitstream-filter name/chain (e.g. `{"0:v":"h264_mp4toannexb"}`), or `"none"` to force-disable. Absent → the muxer auto-inserts any container-required filter. |
 | `outputs[].duration` / `outputs[].end` | *(v3)* Stop the output after `duration` seconds (`-t`) or at position `end` (`-to`). **Mutually exclusive.** On the default zero-based timeline the two coincide; under `copy_ts`, `end` is an absolute source position. |
 | `outputs[].copy_ts` | *(v3)* `true` preserves source timestamps. Default `false` zero-bases the output; a fast-seeked clip starts at the keyframe actually landed on, an accurate one at the requested start. |
+| `outputs[].frame_rate` | *(v11)* Hold the output at a constant frame rate: a string in any form FFmpeg's `fps` filter accepts (`"25"`, `"30000/1001"`, `"ntsc"`). The engine links `fps` ahead of every video pad mapped to this output, dropping and duplicating frames to the rate, and `aresample=async=1` ahead of every audio pad, which pads or trims the audio to keep it in sync. The result is what writing `fps=<rate>` and `aresample=async=1` into `filter` yourself produces. Copied and subtitle streams are untouched. Refused with exit `2` when the value is not a string, when the output sets no `video_codec` or sets it to `"copy"`, when the output maps no encoded video pad, and when the rate does not parse or is not positive. An empty string or `null` sets nothing. |
 
 A job is bounded: **32 inputs, 8 outputs, 32 graph input pads, 16 graph output pads, 32 stream
 copies and 16 subtitle streams**, all per job rather than per output. Crossing one fails the job,
@@ -313,6 +314,7 @@ spec in merge order, so a new field never has to be guessed at by an older engin
 | 8 | Subtitle streams (afmpeg spec 0019): `outputs[].subtitle_codec` (an encoder name or `"copy"`) + `N:s` subtitle map specifiers , to extract, convert or copy subtitle tracks (the subtitle transcode lane). |
 | 9 | Progress side-channel (afmpeg spec 0031 phase B / spec 0032): top-level `"progress":true` on a `process` job emits NDJSON `{frame,out_time_us,total_size,duration_us}` records to `/dev/afmpeg-progress` as it muxes. Opt-in and additive Absent or `false` behaves exactly as v8. |
 | 10 | Per-encoder option maps (afmpeg spec 0045): `outputs[].video_options` / `audio_options` / `subtitle_options`, each reaching only its own encoder and winning over `outputs[].options` on a key collision. The subtitle encoder becomes configurable at all : it was opened with a NULL dictionary, so options addressed to it were dropped before libav saw them and the strict check could not fire. `options` keeps its v9 meaning, so a v9 spec runs unchanged. |
+| 11 | Constant frame rate (afmpeg spec 0025): `outputs[].frame_rate`, which puts `fps` ahead of an output's video pads and `aresample=async=1` ahead of its audio pads. Absent or empty behaves exactly as v10. |
 
 **The gate (two sides):**
 

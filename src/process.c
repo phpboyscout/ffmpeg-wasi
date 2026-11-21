@@ -23,6 +23,7 @@
 #include <libavutil/avstring.h>
 #include <libavutil/mem.h>
 #include <libavutil/opt.h>
+#include <libavutil/parseutils.h>
 #include <libavcodec/avcodec.h>
 #include <libavcodec/bsf.h>
 #include <libavformat/avformat.h>
@@ -94,6 +95,9 @@ typedef struct {
     double duration;  // -t seconds (0 = unset); mutually exclusive with end
     double end;       // -to seconds (0 = unset)
     int copy_ts;      // preserve source PTS (default 0 = zero-base the output)
+    // Constant output frame rate (spec 0025 §4.2). {0, 0} leaves the graph as
+    // the job wrote it.
+    AVRational frame_rate;
 
     // Metadata (spec 0020): container `metadata` tags, a `chapters` passthrough
     // directive ("copy" / an input index), and `stream_metadata` — a per-map-key
@@ -528,6 +532,23 @@ static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int 
     return 0;
 }
 
+// add_sync_filter makes the filter a frame_rate output gets ahead of each sink:
+// fps holds the video at a constant rate by dropping and duplicating frames, and
+// aresample=async=1 stretches or pads the audio to hold it in sync (spec 0025
+// §4.2). The rate is formatted from the parsed rational, never the caller's
+// string, so the option list cannot be extended through it.
+static int add_sync_filter(Ctx *c, enum AVMediaType type, AVRational rate, AVFilterContext **out) {
+    char name[32], args[64];
+    snprintf(name, sizeof(name), "sync%d", c->n_gout);
+    if (type == AVMEDIA_TYPE_VIDEO)
+        snprintf(args, sizeof(args), "fps=%d/%d", rate.num, rate.den);
+    else
+        snprintf(args, sizeof(args), "async=1");
+    const AVFilter *f = avfilter_get_by_name(type == AVMEDIA_TYPE_VIDEO ? "fps" : "aresample");
+    if (!f) return AVERROR_FILTER_NOT_FOUND;
+    return avfilter_graph_create_filter(out, f, name, args, NULL, c->graph);
+}
+
 // add_buffersink wires a buffersink onto one graph output pad, routed to the
 // output file that maps it and constrained to a format that output's encoder
 // supports.
@@ -627,9 +648,37 @@ static int add_buffersink(Ctx *c, AVFilterInOut *pad) {
     if (ret < 0) return ret;
     ret = avfilter_init_str(go->sink, NULL);
     if (ret < 0) return ret;
-    ret = avfilter_link(pad->filter_ctx, pad->pad_idx, go->sink, 0);
+
+    AVFilterContext *tail = pad->filter_ctx;
+    unsigned tail_pad = pad->pad_idx;
+    if (out->frame_rate.num && (type == AVMEDIA_TYPE_VIDEO || type == AVMEDIA_TYPE_AUDIO)) {
+        AVFilterContext *sync = NULL;
+        if ((ret = add_sync_filter(c, type, out->frame_rate, &sync)) < 0) return ret;
+        if ((ret = avfilter_link(tail, tail_pad, sync, 0)) < 0) return ret;
+        tail = sync;
+        tail_pad = 0;
+    }
+    ret = avfilter_link(tail, tail_pad, go->sink, 0);
     if (ret < 0) return ret;
     c->n_gout++;
+    return 0;
+}
+
+// require_video_for_frame_rate refuses an output that sets frame_rate but maps no
+// encoded video pad, which parse_frame_rate cannot see: only the graph says what
+// a mapped pad carries (spec 0025 §4.2).
+static int require_video_for_frame_rate(const Ctx *c) {
+    for (int oi = 0; oi < c->n_out; oi++) {
+        if (!c->out[oi].frame_rate.num) continue;
+        int has_video = 0;
+        for (int i = 0; i < c->n_gout; i++)
+            if (c->gout[i].out_idx == oi && c->gout[i].type == AVMEDIA_TYPE_VIDEO) has_video = 1;
+        if (!has_video) {
+            fprintf(stderr, "ffmpeg-wasi: process: `frame_rate` on %s, but it maps no encoded video stream to apply it to\n",
+                    c->out[oi].path);
+            return AVERROR(EINVAL);
+        }
+    }
     return 0;
 }
 
@@ -1107,6 +1156,33 @@ static int opts_from_json(AVDictionary **out, const cJSON *obj, const char *what
     return 0;
 }
 
+// parse_frame_rate reads outputs[].frame_rate. A copied stream is not decoded,
+// so it cannot change rate, and an output with no video encoder has nothing to
+// apply one to; both are refused rather than ignored (spec 0025 §4.2).
+static int parse_frame_rate(Out *o, const cJSON *fr) {
+    if (!fr || cJSON_IsNull(fr)) return 0;
+    const char *rate = cJSON_GetStringValue(fr);
+    if (!rate) {
+        fprintf(stderr, "ffmpeg-wasi: process: `frame_rate` on %s must be a string, such as \"25\" or \"30000/1001\"\n", o->path);
+        return -1;
+    }
+    if (!*rate) return 0;
+    if (av_parse_video_rate(&o->frame_rate, rate) < 0 || o->frame_rate.num <= 0 || o->frame_rate.den <= 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: `frame_rate` \"%s\" on %s is not a positive frame rate\n", rate, o->path);
+        return -1;
+    }
+    if (!o->vcodec) {
+        fprintf(stderr, "ffmpeg-wasi: process: `frame_rate` on %s needs a video_codec to apply it to\n", o->path);
+        return -1;
+    }
+    if (strcmp(o->vcodec, COPY_CODEC) == 0) {
+        fprintf(stderr, "ffmpeg-wasi: process: `frame_rate` on %s cannot apply to a copied video stream; "
+                        "a copy is not decoded, so its rate cannot change\n", o->path);
+        return -1;
+    }
+    return 0;
+}
+
 // parse_output reads one `outputs[]` entry into an Out + allocates its muxer.
 static int parse_output(Out *o, const cJSON *spec) {
     for (int i = 0; i < MAX_MUX_STREAMS; i++) o->last_dts[i] = AV_NOPTS_VALUE;
@@ -1145,6 +1221,7 @@ static int parse_output(Out *o, const cJSON *spec) {
         return 2;
     }
     o->copy_ts = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(spec, "copy_ts"));
+    if (parse_frame_rate(o, cJSON_GetObjectItemCaseSensitive(spec, "frame_rate")) < 0) return 2;
     // Metadata (spec 0020): container tags, a chapters passthrough directive, and
     // the per-stream metadata object. Parsed here, applied before write_header.
     o->metadata = cJSON_GetObjectItemCaseSensitive(spec, "metadata");
@@ -2170,6 +2247,8 @@ int op_process(const cJSON *spec) {
             if ((rc = open_encoder(&c, &c.gout[i])) < 0) goto end;
         }
     }
+
+    if ((rc = require_video_for_frame_rate(&c)) < 0) { malformed = 1; goto end; }
 
     // Copy output streams (params + optional bitstream filter), added to their
     // muxers before write_header alongside any encoded streams.
