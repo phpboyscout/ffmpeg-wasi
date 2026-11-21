@@ -76,6 +76,10 @@ lint:
     # the host's.
     docker run --rm -v "$PWD:/mnt" -w /mnt --entrypoint sh "$image" \
       build/check-release-set.sh
+    # The build-contents page is generated from the allowlist; a stale one
+    # documents components a build does not have.
+    docker run --rm -v "$PWD:/mnt" -w /mnt --entrypoint sh "$image" \
+      build/build-contents.sh --check
 
 # Resolve the FFmpeg version this build targets, the way CI does before anything
 # expensive runs (spec 0035 D3).

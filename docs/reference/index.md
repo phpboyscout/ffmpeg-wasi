@@ -23,6 +23,8 @@ Information-oriented, accurate facts.
 
 ## What a build contains
 
+- **[What each build contains](build-contents.md)**: the FFmpeg version, every component each
+  profile and variant enables, and where FFmpeg's own documentation for that version lives.
 - **[Codecs](codecs.md)**: the decoders and encoders enabled per profile.
 - **[Filters](filters.md)**: the libavfilter vocabulary available inside the `filter` string.
 - **[Containers, bitstream filters & protocols](containers.md)**: the demuxers and muxers per

@@ -138,6 +138,9 @@ validate:
     # A failing command in an AND-OR list does not stop a job (#68). Cheap to
     # check here, and the failure it prevents costs a whole pipeline to find.
     - sh build/check-ci-shell.sh .gitlab-ci.yml build/engine.gitlab-ci.yml
+    # docs/reference/build-contents.md is generated from the allowlist (#70), so
+    # an allowlist change that does not regenerate it fails here.
+    - sh build/build-contents.sh --check
 
 # Resolve — and on a tag, verify — the FFmpeg version, before anything expensive
 # runs (spec 0035 D3). This is a whole stage ahead of `build`, so a tag that

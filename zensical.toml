@@ -27,6 +27,7 @@ nav = [
     { "The job-spec vocabulary" = "reference/job-spec.md" },
     { "Variants and artifacts" = "reference/variants.md" },
     { "Build options" = "reference/build-options.md" },
+    { "What each build contains" = "reference/build-contents.md" },
     { "Codecs" = "reference/codecs.md" },
     { "Filters" = "reference/filters.md" },
     { "Containers, bitstream filters and protocols" = "reference/containers.md" },
