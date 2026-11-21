@@ -9,9 +9,11 @@ authors: [Matt Cockayne <matt@phpboyscout.uk>]
 # What each build contains
 
 Every ffmpeg-wasi build compiles one FFmpeg release, named below, from `--disable-everything` plus an
-explicit allowlist. A component in the tables below is enabled in the builds marked `yes`, and a
-component not listed is absent from every build. The tables are generated from that allowlist,
-`build/enable-lists.sh`, which is also what the conformance suite checks each built artefact against.
+explicit allowlist. The tables below are generated from that allowlist, `build/enable-lists.sh`, and a
+component is in every build marked `yes`: the conformance suite fails any built artefact that lacks
+one. FFmpeg's configure can also switch on what a listed component depends on, such as a parser or a
+bitstream filter, so a build may carry a little more than the tables show. Rely only on what is
+listed.
 
 For a question about a component's options, such as the bitrates an audio encoder accepts, read
 [FFmpeg's own documentation for that release](#ffmpegs-own-documentation): ffmpeg-wasi passes a job's
@@ -62,6 +64,9 @@ explain what each batch is for. The tables below are the exact sets.
 
 Every build is FFmpeg **n9.0.1**, from `build/ffmpeg-version.txt`.
 The `full` profile is built only as a native driver; the others are built as both.
+
+The allowlist names `boxblur`, `cropdetect`, but upstream builds them only under
+`--enable-gpl`, so they are blank in the `lgpl` columns.
 
 ### Decoders
 
@@ -231,7 +236,7 @@ The `full` profile is built only as a native driver; the others are built as bot
 | `atrim` | yes | yes | yes | yes | yes | yes |
 | `blackdetect` |  |  | yes | yes | yes | yes |
 | `blend` |  |  | yes | yes | yes | yes |
-| `boxblur` |  |  | yes | yes | yes | yes |
+| `boxblur` |  |  |  | yes |  | yes |
 | `bwdif` |  |  | yes | yes | yes | yes |
 | `channelmap` |  |  | yes | yes | yes | yes |
 | `channelsplit` |  |  | yes | yes | yes | yes |
@@ -242,7 +247,7 @@ The `full` profile is built only as a native driver; the others are built as bot
 | `compand` |  |  | yes | yes | yes | yes |
 | `concat` | yes | yes | yes | yes | yes | yes |
 | `crop` | yes | yes | yes | yes | yes | yes |
-| `cropdetect` |  |  | yes | yes | yes | yes |
+| `cropdetect` |  |  |  | yes |  | yes |
 | `curves` |  |  | yes | yes | yes | yes |
 | `drawbox` |  |  | yes | yes | yes | yes |
 | `drawgrid` |  |  | yes | yes | yes | yes |

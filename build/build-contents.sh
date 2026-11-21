@@ -42,6 +42,12 @@ table() { # kind heading
   : >"$tmp_all"
   for b in $BUILDS; do
     components "$1" "$(cat "$WORK/${b%/*}-${b#*/}")" | sort -u >"$WORK/$1.${b%/*}-${b#*/}"
+    # Upstream builds these only under --enable-gpl, whatever the allowlist asks.
+    # busybox grep drops every line given an empty pattern file, hence the -s.
+    if [ "${b#*/}" = lgpl ] && [ -s "$WORK/gpl-only.$1" ]; then
+      grep -vxF -f "$WORK/gpl-only.$1" "$WORK/$1.${b%/*}-${b#*/}" >"$WORK/kept" || true
+      mv "$WORK/kept" "$WORK/$1.${b%/*}-${b#*/}"
+    fi
     cat "$WORK/$1.${b%/*}-${b#*/}" >>"$tmp_all"
   done
 
@@ -59,6 +65,11 @@ generate() {
   printf '%s\n\n' "$BEGIN"
   printf 'Every build is FFmpeg **%s**, from `build/ffmpeg-version.txt`.\n' "$version"
   printf 'The `full` profile is built only as a native driver; the others are built as both.\n'
+  gated="$(printf '%s\n' "$gpl_only" | tr ' ' '\n' | sed 's/^[^=]*=//' | grep -v '^$' | sort | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g')"
+  if [ -n "$gated" ]; then
+    printf '\nThe allowlist names %s, but upstream builds them only under\n' "$gated"
+    printf '`--enable-gpl`, so they are blank in the `lgpl` columns.\n'
+  fi
   table decoder Decoders
   table encoder Encoders
   table demuxer Demuxers
@@ -71,6 +82,11 @@ generate() {
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+gpl_only="$(TARGET=native PRINT_GPL_ONLY_COMPONENTS=1 sh "$HERE/build/enable-lists.sh")"
+for kind in decoder encoder demuxer muxer filter bsf protocol; do
+  printf '%s\n' "$gpl_only" | tr ' ' '\n' | sed -n "s/^$kind=//p" >"$WORK/gpl-only.$kind"
+done
 for b in $BUILDS; do
   claims "${b%/*}" "${b#*/}" >"$WORK/${b%/*}-${b#*/}"
   case "$b" in full/*) continue ;; esac
