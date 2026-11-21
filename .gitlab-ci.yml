@@ -176,6 +176,10 @@ test:
   image: registry.gitlab.com/phpboyscout/images/go-tools:v0.5.11
   rules: *engine-test-rules
   interruptible: true
+  # The sandbox tests need Landlock to prove containment, and a GitLab SaaS
+  # runner ran them without it (ffmpeg-wasi#72). Tag a runner landlock only
+  # once its kernel and container runtime have been checked for it.
+  tags: [landlock]
   # Same optional needs as size-budget: run against whatever the pipeline built.
   # A missing artifact is a skipped subtest, never a failure.
   needs:
@@ -204,6 +208,8 @@ test:
     # anything whose name it cannot parse, so pointing at the whole directory is
     # safe and needs no staging step.
     FFMPEG_WASI_ARTIFACTS: "$CI_PROJECT_DIR"
+    # Makes a host without Landlock fail the sandbox tests instead of skipping.
+    FFMPEG_WASI_REQUIRE_LANDLOCK: "1"
   before_script:
     # Artifact restore does not always preserve the executable bit on the native
     # drivers, and a driver that cannot be exec'd would look like a missing
