@@ -1,5 +1,17 @@
 # Changelog
 
+## [n9.0.1-9](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-9)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-8...n9.0.1-9)
+
+### Notes
+
+- Releases are announced to the estate's release feed and to Discord.
+
+### Bug Fixes
+
+- **docs**: don't mark gpl-gated filters present in the lgpl builds ([dd9add9](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/dd9add979870132a84260f9e82acef860ebc0a07))
+
 ## [n9.0.1-8](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-8)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-7...n9.0.1-8)
