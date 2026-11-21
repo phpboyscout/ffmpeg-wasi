@@ -494,11 +494,11 @@ static int add_buffersrc(Ctx *c, AVFilterInOut *pad, enum AVMediaType type, int 
                  fr.num, fr.den ? fr.den : 1);
     } else {
         bufsrc = avfilter_get_by_name("abuffer");
-        AVChannelLayout chl;
+        AVChannelLayout chl = {0}; // av_channel_layout_copy uninits its destination first
         if (g->dec->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC)
             av_channel_layout_default(&chl, g->dec->ch_layout.nb_channels);
-        else
-            av_channel_layout_copy(&chl, &g->dec->ch_layout);
+        else if ((ret = av_channel_layout_copy(&chl, &g->dec->ch_layout)) < 0)
+            return ret;
         char lay[64];
         av_channel_layout_describe(&chl, lay, sizeof(lay));
         av_channel_layout_uninit(&chl);
