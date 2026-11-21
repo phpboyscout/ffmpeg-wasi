@@ -30,12 +30,8 @@ import (
 // driver is invoked, and granting the job spec's paths would be the
 // classification table D5 rejects.
 
-// lutFixture writes a 3D LUT that maps every colour to solid green.
-//
-// Content, not an exit code: a job that reads THIS file produces green pixels,
-// and one that reads a different file does not. That is what makes the pair
-// below a proof about which filesystem was consulted rather than about whether
-// something failed.
+// lutFixture is a valid 3D LUT, so a lut3d that can open it succeeds. The pair
+// below judges exit codes only: lut3d fails to initialise when the open is denied.
 const lutFixture = "LUT_3D_SIZE 2\n" +
 	"0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n0 1 0\n"
 
