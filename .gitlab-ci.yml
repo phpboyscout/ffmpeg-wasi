@@ -141,6 +141,9 @@ validate:
     # docs/reference/build-contents.md is generated from the allowlist (#70), so
     # an allowlist change that does not regenerate it fails here.
     - sh build/build-contents.sh --check
+    # The docs' engine-output examples are hand-copied, so a vocabulary bump
+    # leaves them behind unless this says so (#76).
+    - sh build/check-vocab-examples.sh
 
 # Resolve — and on a tag, verify — the FFmpeg version, before anything expensive
 # runs (spec 0035 D3). This is a whole stage ahead of `build`, so a tag that
