@@ -1,5 +1,17 @@
 # Changelog
 
+## [n9.0.1-11](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-11)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-10...n9.0.1-11)
+
+### Notes
+
+- `probe` and `frames` results now carry the top-level `sandbox` field that `process` results already did, naming the confinement that job ran under.
+
+### Features
+
+- **driver**: report the sandbox state in probe and frames results ([556d737](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/556d7373c3697125a87796ac2dbbfc72af4f8b9f))
+
 ## [n9.0.1-10](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-10)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-9...n9.0.1-10)
