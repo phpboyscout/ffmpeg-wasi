@@ -293,6 +293,15 @@ variable. Results (the probe JSON, or the process status) come back on stdout; e
 with a non-zero exit code. Only the media named *inside* the spec crosses afmpeg's filesystem
 bridge.
 
+Every successful `process`, `probe` and `frames` result also carries a top-level **`sandbox`**
+string, the confinement that job ran under. It matches what `--capabilities` reports for the same
+invocation. A native driver says `"landlock"` when it installed its Landlock floor, `"unavailable"`
+when it is serving over the bridge but the host cannot install the floor, so the job ran unconfined,
+and `"disabled"` when it is run on plain files or `AFMPEG_NO_SANDBOX=1` switched the floor off. A
+WASM module always says `"unavailable"`: its confinement is the WASI runtime's, which it cannot see
+from inside. `probe` and `frames` results gained the field after `n9.0.1-10`. The job spec and the
+vocabulary are unchanged, so a host that ignores the field is unaffected.
+
 The full host contract is [Driver invocation & ABI](driver-invocation-abi.md), and the failure
 messages are in [errors & exit codes](errors.md).
 

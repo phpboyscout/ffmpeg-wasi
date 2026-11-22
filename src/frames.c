@@ -31,6 +31,7 @@
 
 #include "frames.h"
 #include "nativeio.h"
+#include "sandbox.h"
 #include "specopts.h"
 
 // A runaway interval over a long input needs a bound; `count` caps output but is
@@ -475,6 +476,8 @@ int op_frames(const cJSON *spec) {
 
     Frames f = {0};
     f.result = cJSON_CreateObject();
+    // As every job result does (spec 0043 D3, afmpeg spec 0047 D2).
+    cJSON_AddStringToObject(f.result, "sandbox", sandbox_state());
     f.jframes = cJSON_AddArrayToObject(f.result, "frames");
 
     int rc = open_video(&f, cJSON_GetArrayItem(inputs, 0));

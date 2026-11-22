@@ -380,6 +380,8 @@ static int op_probe(const cJSON *spec) {
     }
 
     cJSON *out = cJSON_CreateObject();
+    // As every job result does (spec 0043 D3, afmpeg spec 0047 D2).
+    cJSON_AddStringToObject(out, "sandbox", sandbox_state());
     cJSON *out_inputs = cJSON_AddArrayToObject(out, "inputs");
 
     const cJSON *in = NULL;

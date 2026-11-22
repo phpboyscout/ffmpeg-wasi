@@ -142,6 +142,8 @@ type Capabilities struct {
 	BSFs          []string `json:"bsfs"`
 	Protocols     []string `json:"protocols"`
 	Parsers       []string `json:"parsers"`
+	// Sandbox is the confinement the driver installed for this invocation (spec 0043).
+	Sandbox string `json:"sandbox"`
 }
 
 // ByKind indexes the component lists by the configure flag kind that claims
