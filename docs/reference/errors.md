@@ -53,6 +53,7 @@ These come from `src/driver.c`, before any op runs.
 
 | Message | Exit | Cause | Fix |
 |---|---:|---|---|
+| `AFMPEG_NATIVE_SOCKET is set but empty: …` | `2` | native driver only: the variable is in the environment with no value, which names no socket and does not mean plain files either. Checked before anything else, `--capabilities` included | set it to the bridge's socket path, or unset it to run on plain files |
 | `invalid job spec JSON` | `2` | `argv[1]` did not parse as JSON | the spec is passed as **one** argument, quote it as a single shell word |
 | `unknown op <name>` | `2` | `"op"` is absent or not one of `probe`/`process`/`frames`/`version` | use one of the four [operations](job-spec.md#operations) |
 | `job spec vocabulary version N newer than this engine supports (M); upgrade ffmpeg-wasi` | `3` | the spec's `version` field exceeds the engine's `AFMPEG_VOCAB_VERSION` | load a newer module, or emit a lower vocabulary version |

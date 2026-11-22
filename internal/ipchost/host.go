@@ -147,10 +147,15 @@ func Listen(root, sockDir string) (*Host, string, error) {
 		return nil, "", fmt.Errorf("ipchost: listening on %s: %w", path, err)
 	}
 
+	return Serve(root, ln), path, nil
+}
+
+// Serve starts a host serving root on a listener the caller already holds, for
+// an address Listen cannot make, such as an abstract socket.
+func Serve(root string, ln net.Listener) *Host {
 	h := &Host{root: root, ln: ln}
 	go h.accept()
-
-	return h, path, nil
+	return h
 }
 
 // Close stops the host. Sessions in flight end when their connections close.

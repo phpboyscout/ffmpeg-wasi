@@ -418,6 +418,16 @@ static int op_version(void) {
 }
 
 int main(int argc, char **argv) {
+    // A set-but-empty socket once turned the bridge on with no floor under it
+    // (ffmpeg-wasi#78), so it is refused before anything reads it.
+#ifdef AFMPEG_NATIVE
+    if (afio_bridge_socket_is_empty()) {
+        fprintf(stderr, "ffmpeg-wasi: AFMPEG_NATIVE_SOCKET is set but empty: "
+                        "name the bridge's socket, or unset it to use plain files\n");
+        return 2;
+    }
+#endif
+
     // After argv parsing, before any job: the dynamic loader has finished, so the
     // floor costs nothing that is still needed, and nothing a job spec can name
     // has been opened yet (afmpeg spec 0043 D2).

@@ -13,6 +13,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// afio_bridge_socket is AFMPEG_NATIVE_SOCKET when it names a socket, else NULL.
+// The bridge and the sandbox both decide "is the bridge on" through it, because
+// reading the variable separately once let them disagree (ffmpeg-wasi#78).
+const char *afio_bridge_socket(void);
+
+// afio_bridge_socket_is_empty is true when AFMPEG_NATIVE_SOCKET is set but empty,
+// which is neither a socket nor unset and is refused before any job runs.
+int afio_bridge_socket_is_empty(void);
+
 struct AVFormatContext;
 struct AVInputFormat;
 struct AVDictionary;

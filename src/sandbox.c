@@ -25,6 +25,7 @@
 #endif
 
 #include "sandbox.h"
+#include "nativeio.h"
 
 #ifndef AFMPEG_NATIVE
 
@@ -90,8 +91,7 @@ static void grant(int ruleset, const char *path, __u64 allowed) {
 
 void sandbox_install(void) {
     // Nothing to contain when the caller gave us host paths on purpose.
-    const char *sock = getenv("AFMPEG_NATIVE_SOCKET");
-    if (!sock || !*sock) { state = "disabled"; return; }
+    if (!afio_bridge_socket()) { state = "disabled"; return; }
 
     // Explicitly disableable, for a deployment with its own confinement that does
     // not want a second one (spec 0043 D2).

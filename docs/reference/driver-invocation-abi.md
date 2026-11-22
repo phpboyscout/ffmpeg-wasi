@@ -85,7 +85,7 @@ Four ops, dispatched on the spec's `"op"` string. Their field vocabulary is the
 |---|---|
 | `0` | success |
 | `1` | **a processing failure** during `process`/`frames`: an input would not open, an encoder would not start, a filtergraph would not configure. The libav error is rendered on stderr |
-| `2` | **malformed request**: invalid job-spec JSON, an unknown `op`, or a spec whose shape is wrong (e.g. `probe` without an `inputs` array) |
+| `2` | **malformed request**: invalid job-spec JSON, an unknown `op`, or a spec whose shape is wrong (e.g. `probe` without an `inputs` array). The native driver also exits `2` when `AFMPEG_NATIVE_SOCKET` is set but empty |
 | `3` | **vocabulary too new**: the spec's `version` exceeds what this engine supports (`version-too-new`); the distinct code lets a caller tell "upgrade the engine" from "fix the spec" |
 
 `process` and `frames` collapse every runtime failure to `1`; the specific cause is the stderr line.
@@ -152,7 +152,8 @@ The native driver replaces WASI file I/O with a **seekable AVIO-over-IPC** bridg
 so it too touches no host disk: the host serves the caller's filesystem over a Unix socket.
 
 - **Activation**: the driver speaks IPC only when the environment variable **`AFMPEG_NATIVE_SOCKET`**
-  names a Unix socket path. Absent it, the native build behaves like a plain program.
+  names a Unix socket path. Absent it, the native build behaves like a plain program. Set but
+  empty, it is refused: the driver exits `2` before running anything, naming the variable.
 - **One connection per opened file**: the driver's custom `AVIOContext` dials the socket each time
   libav opens a media path.
 - **Protocol version**: the connection opens with a single version byte (**`1`**), which the host

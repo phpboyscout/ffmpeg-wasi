@@ -3,6 +3,7 @@
 #include "nativeio.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <libavformat/avformat.h>
 #include <libavformat/avio.h>
@@ -42,8 +43,17 @@ static int concat_name_is_safe(const char *name) {
     return strchr(name, '\n') == NULL && strchr(name, '\r') == NULL;
 }
 
+const char *afio_bridge_socket(void) {
+    const char *sock = getenv("AFMPEG_NATIVE_SOCKET");
+    return sock && *sock ? sock : NULL;
+}
+
+int afio_bridge_socket_is_empty(void) {
+    const char *sock = getenv("AFMPEG_NATIVE_SOCKET");
+    return sock && !*sock;
+}
+
 #ifdef AFMPEG_NATIVE
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -191,7 +201,7 @@ static void put64(uint8_t *b, uint64_t v) { for (int i = 0; i < 8; i++) b[i] = (
 static uint32_t get32(const uint8_t *b) { uint32_t v = 0; for (int i = 0; i < 4; i++) v |= (uint32_t)b[i] << (8 * i); return v; }
 static uint64_t get64(const uint8_t *b) { uint64_t v = 0; for (int i = 0; i < 8; i++) v |= (uint64_t)b[i] << (8 * i); return v; }
 
-static int afio_active(void) { return getenv("AFMPEG_NATIVE_SOCKET") != NULL; }
+static int afio_active(void) { return afio_bridge_socket() != NULL; }
 
 // afio_dial connects, sends the version + Open frame, and returns the fd on a 0
 // status (or -1). mode is 'r' or 'w'.
@@ -203,7 +213,7 @@ static int afio_dial(const char *name, char mode) {
 
 static int afio_dial_at(const char *name, char mode, uint8_t announce) {
     afio_announce = announce;
-    const char *sock = getenv("AFMPEG_NATIVE_SOCKET");
+    const char *sock = afio_bridge_socket();
     if (!sock || !name) return -1;
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -277,7 +287,7 @@ static int afio_dial_at(const char *name, char mode, uint8_t announce) {
 // Open has its own path because it keeps the connection for the file's lifetime;
 // these two answer and end, so the caller reads the reply and closes.
 static int afio_session(const char *a, const char *b, char frame) {
-    const char *sock = getenv("AFMPEG_NATIVE_SOCKET");
+    const char *sock = afio_bridge_socket();
     if (!sock || !a) return -1;
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
