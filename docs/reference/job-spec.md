@@ -201,7 +201,7 @@ dimensions/sample rate) as JSON on stdout. No outputs are written. For example, 
 WAV yields:
 
 ```json
-{"inputs":[{"path":"tone.wav","format":"wav","duration_sec":0.5,
+{"sandbox":"disabled","inputs":[{"path":"tone.wav","format":"wav","duration_sec":0.5,
   "streams":[{"index":0,"type":"audio","codec":"pcm_s16le","sample_rate":8000,"channels":1}]}]}
 ```
 
@@ -238,7 +238,7 @@ the `select='gt(scene,T)'` or `thumbnail` filter (which need the **intermediate*
 frame is optionally scaled, encoded, and written; the engine owns the naming and reports each:
 
 ```json
-{"frames":[{"path":"out/frame_000.png","index":0,"timestamp":12.5}],"count":1}
+{"sandbox":"disabled","frames":[{"path":"out/frame_000.png","index":0,"timestamp":12.5}],"count":1}
 ```
 
 `select` is a one-of (zero or multiple is rejected). `codec` defaults to `png`; `png` and `mjpeg`

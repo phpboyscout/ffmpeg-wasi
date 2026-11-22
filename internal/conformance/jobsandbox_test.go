@@ -96,8 +96,9 @@ func TestEveryJobResultReportsItsSandbox(t *testing.T) {
 		})
 	}
 
-	// Over the bridge is the mode that installs the floor, and so the one where
-	// "landlock" is the answer to expect.
+	// Over the bridge is the mode that installs the floor. Whether it reads
+	// "landlock" or "unavailable" depends on the kernel, and sandbox_test.go pins
+	// that; here the result only has to agree with --capabilities.
 	for _, a := range nativeArtifacts(t) {
 		t.Run(a.String()+"/bridge", func(t *testing.T) {
 			t.Parallel()
