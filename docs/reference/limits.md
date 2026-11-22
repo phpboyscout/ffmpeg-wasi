@@ -164,10 +164,25 @@ people ask about specifically:
 The WASM module confines a codec bug to the guest's linear memory; a memory-safety failure while
 parsing untrusted media cannot reach the host. Two things it does not do:
 
-- **The native driver is not sandboxed.** It is an ordinary host process; the IPC bridge keeps its
-  *file I/O* inside the caller's filesystem, but a codec bug runs with the host process's
-  privileges. That is the security-posture side of the speed trade, and the reason WASM stays the
-  default.
+- **The native driver is confined only on the filesystem, only over the bridge, and not
+  completely there.** Serving over the IPC bridge, it installs a Landlock floor that denies opening,
+  executing, creating, removing, renaming and linking files anywhere, except reading
+  `/dev/urandom`. So a filter option that names a file, or a codec bug that tries to open one,
+  cannot read or write host disk. The floor does not cover:
+    - **truncation, before Linux 6.2.** Truncating a file is denied only where the kernel speaks
+      Landlock ABI 3; on older kernels a codec bug can still truncate any file the process's user
+      can write, and the driver still reports `"landlock"`.
+    - **metadata.** `stat`, `access`, `chmod`, `chown`, timestamps and extended attributes are
+      outside it on every kernel, as is anything done through a file descriptor that was already
+      open.
+    - **everything that is not the filesystem**, the network included.
+
+  The floor is absent when the driver is run on plain files or with `AFMPEG_NO_SANDBOX=1`
+  (`"disabled"`), and when the kernel cannot provide Landlock or the process cannot enter it, for
+  instance under a container seccomp profile that refuses its syscalls (`"unavailable"`). The
+  driver then runs unconfined rather than refusing to start. `--capabilities` and a successful
+  job's result say which, in their `sandbox` field. That is the security-posture side of the
+  speed trade, and the reason WASM stays the default.
 - **Neither target bounds resource use.** There is no time limit, memory ceiling or output-size cap
   in the engine. A pathological input can consume as much CPU and memory as the host allows; that
   budget is the host's to enforce.
