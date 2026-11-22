@@ -221,6 +221,27 @@ test:
   script:
     - go test ./... -v
 
+# The conformance suite again, with the native driver under valgrind memcheck
+# (ffmpeg-wasi#75), because an uninitialised read in src/ only fails the plain
+# suite when the stack happens to hold the wrong bytes. Same rules as the build
+# it needs, so the driver is always there: a run with no driver would skip every
+# test and pass. One lean lgpl driver is enough, since every profile and variant
+# links the same src/; it takes about ten minutes. Untagged, so the Landlock
+# tests skip here: the landlock-tagged test job owns them, and this job is for
+# memory errors on the paths that run anywhere.
+memcheck:
+  stage: test
+  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.5.12
+  extends: .engine-build-rules
+  interruptible: true
+  needs:
+    - job: build:native:lgpl
+  before_script:
+    - apk add --no-cache valgrind
+    - chmod +x ffmpeg-wasi-driver-linux-amd64-lgpl
+  script:
+    - sh build/memcheck.sh "$CI_PROJECT_DIR"
+
 # Size-budget gate (spec 0022): print each artifact's size vs its budget in
 # build/size-budget.txt and flag a profile that ballooned past its ceiling. Advisory
 # (allow_failure) — it reports without blocking a release, until the seeded budgets

@@ -40,6 +40,13 @@ test artifacts="dist":
       go test ./... -v
     fi
 
+# Run the conformance suite with every native driver under valgrind memcheck, so
+# an uninitialised read fails every time (ffmpeg-wasi#75). Needs valgrind on PATH
+# and a native driver in `artifacts`; roughly ten minutes per driver.
+[doc("Run the conformance suite with native drivers under valgrind")]
+memcheck artifacts="dist":
+    sh build/memcheck.sh "{{artifacts}}"
+
 # Print what a built artifact actually carries, by component kind. The same
 # ground truth `just test` asserts the build's allowlist against.
 [doc("Print what a built artifact actually carries, by component kind")]

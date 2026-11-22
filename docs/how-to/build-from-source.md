@@ -167,6 +167,23 @@ opposite of the job this suite exists to do.
     capability half needs `--capabilities`, which no release before that carries at all. Build the
     artifacts you want to check.
 
+### Under valgrind
+
+An uninitialised read in the engine fails the plain suite only when the stack happens to hold the
+wrong bytes, so it can pass a hundred runs and abort the next. To make it fail every time, run the
+suite with each native driver under valgrind's memcheck:
+
+```sh
+just memcheck dist
+```
+
+It needs `valgrind` on `PATH` and at least one native driver in the directory, and refuses to run
+without one rather than skipping everything. A memcheck error makes the job exit `99`, and the
+test that ran it fails with valgrind's report, even a test that expected the job to fail. It
+checks uninitialised reads and invalid accesses; leaks are not checked. Expect about ten minutes per driver; the per-job deadline is
+raised to twenty minutes to absorb the slowdown. CI runs it against the lean lgpl driver whenever
+`src/` or `build/` changes.
+
 To see one side of the capability check on its own:
 
 ```sh

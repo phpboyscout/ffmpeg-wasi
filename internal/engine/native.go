@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 )
 
@@ -34,10 +36,30 @@ type Native struct {
 	Env []string
 }
 
+// NativeWrapperEnv names a command line every native run is prefixed with, such
+// as "valgrind --error-exitcode=99", so the whole suite can run under a checker
+// without each test knowing (ffmpeg-wasi#75). It is split on whitespace.
+const NativeWrapperEnv = "FFMPEG_WASI_NATIVE_WRAPPER"
+
+// WrapperErrorExit is the exit a wrapper reports its own finding with, as
+// build/memcheck.sh passes valgrind --error-exitcode. No driver exit uses it, so
+// Run makes it an error: a test expecting a failure must not read it as one.
+const WrapperErrorExit = 99
+
+// NativeWrapper returns the command line NativeWrapperEnv names, or nil.
+func NativeWrapper() []string {
+	w := strings.Fields(os.Getenv(NativeWrapperEnv))
+	if len(w) == 0 {
+		return nil
+	}
+	return w
+}
+
 // Run executes the driver and collects its streams. As with WASM, a non-zero
 // exit is an outcome rather than an error.
 func (n Native) Run(ctx context.Context, args ...string) (Result, error) {
-	cmd := exec.CommandContext(ctx, n.Path, args...)
+	argv := append(NativeWrapper(), n.Path)
+	cmd := exec.CommandContext(ctx, argv[0], append(argv[1:], args...)...)
 	cmd.Dir = n.Dir
 	if len(n.Env) > 0 {
 		// Append rather than replace: the driver still needs the parent's
@@ -56,6 +78,10 @@ func (n Native) Run(ctx context.Context, args ...string) (Result, error) {
 	case err == nil:
 	case errors.As(err, &exitErr):
 		res.ExitCode = exitErr.ExitCode()
+		if res.ExitCode == WrapperErrorExit && NativeWrapper() != nil {
+			return Result{}, fmt.Errorf("%s reported an error running %s: %s",
+				NativeWrapperEnv, n.Path, strings.TrimSpace(stderr.String()))
+		}
 	default:
 		return Result{}, err
 	}

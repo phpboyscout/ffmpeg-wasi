@@ -93,8 +93,15 @@ func mediaWorkspace(t *testing.T, a engine.Artifact) *engine.Workspace {
 // nothing useful about why.
 //
 // Generous against the real numbers: the slowest legitimate invocation here is a
-// WASM module compile plus a two-second encode, well under two seconds.
-const jobTimeout = 60 * time.Second
+// WASM module compile plus a two-second encode, well under two seconds. Under a
+// native wrapper such as valgrind, which runs the driver 20-50x slower, it scales
+// so the deadline still means a hang rather than the checker's overhead.
+var jobTimeout = func() time.Duration {
+	if engine.NativeWrapper() != nil {
+		return 20 * time.Minute
+	}
+	return 60 * time.Second
+}()
 
 // runJob invokes a job spec and fails unless it succeeded. stderr is NOT required
 // to be empty: libav writes advisory warnings there on wholly successful jobs
