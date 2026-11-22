@@ -87,6 +87,10 @@ lint:
     # documents components a build does not have.
     docker run --rm -v "$PWD:/mnt" -w /mnt --entrypoint sh "$image" \
       build/build-contents.sh --check
+    # The docs' engine-output examples are hand-copied; a vocabulary bump leaves
+    # them behind.
+    docker run --rm -v "$PWD:/mnt" -w /mnt --entrypoint sh "$image" \
+      build/check-vocab-examples.sh
 
 # Resolve the FFmpeg version this build targets, the way CI does before anything
 # expensive runs (spec 0035 D3).

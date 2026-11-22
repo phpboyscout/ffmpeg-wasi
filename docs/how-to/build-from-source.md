@@ -94,7 +94,7 @@ codecs/muxers/filters) confirming it links and runs:
 
 ```
 ffmpeg-wasi engine
-vocab_version: 9
+vocab_version: 11
 ffmpeg: n9.0.1
 libavcodec 4070502  libavformat 4066406  libavfilter 724582
 encoders:
