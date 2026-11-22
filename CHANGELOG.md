@@ -1,5 +1,23 @@
 # Changelog
 
+## [n9.0.1-10](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-10)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-9...n9.0.1-10)
+
+### Notes
+
+- Outputs take a `frame_rate` (vocabulary v11), which holds the video at a constant rate with `fps` and keeps the audio in sync with `aresample=async=1`, without writing either into the filter graph.
+
+- Fixes an intermittent `free(): invalid pointer` abort on audio jobs, caused by an uninitialised channel layout.
+
+### Features
+
+- **process**: hold an output at a constant frame rate ([e510431](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/e510431dd47cbd1841bad342a198ec6392dab18c))
+
+### Bug Fixes
+
+- **process**: zero the channel layout add_buffersrc copies into ([0314e13](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/0314e134773b23518cf9f2b3412a6fe051695754))
+
 ## [n9.0.1-9](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-9)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-8...n9.0.1-9)
