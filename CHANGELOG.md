@@ -1,5 +1,17 @@
 # Changelog
 
+## [n9.0.1-12](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-12)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-11...n9.0.1-12)
+
+### Notes
+
+- The native driver now refuses `AFMPEG_NATIVE_SOCKET` set to an empty value, exiting 2 before it runs anything. Releases from `n8.1.2-7` treated an empty value as an active bridge, and releases from `n9.0.1-2` also ran it without the Landlock floor. Set the variable to the bridge's socket path, or unset it to use plain files. afmpeg always sets it to a socket it created, so afmpeg callers are not affected.
+
+### Bug Fixes
+
+- **driver**: refuse an empty AFMPEG_NATIVE_SOCKET before any job runs ([e16020f](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/commit/e16020fc3d61783444c453b754c75af8b809798d))
+
 ## [n9.0.1-11](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/releases/n9.0.1-11)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/ffmpeg-wasi/-/compare/n9.0.1-10...n9.0.1-11)
